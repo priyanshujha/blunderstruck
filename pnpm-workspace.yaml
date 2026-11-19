@@ -1,0 +1,6 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+# Dependencies allowed to run install scripts. esbuild (via vitest/tsx) fetches its binary.
+allowBuilds:
+  esbuild: true
