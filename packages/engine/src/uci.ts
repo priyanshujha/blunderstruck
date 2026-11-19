@@ -1,5 +1,6 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import type { Readable, Writable } from "node:stream";
 import type { Score } from "@blunderstruck/contracts";
 
 export interface EngineOptions {
@@ -10,7 +11,10 @@ export interface EngineOptions {
 }
 
 export interface EvalResult {
-  /** From the side to move's point of view, as UCI reports it. */
+  /**
+   * From the side to move's point of view, as UCI reports it. `{ mate: 0 }` means the side
+   * to move is already checkmated; `{ cp: 0 }` at depth 0 is stalemate.
+   */
   score: Score;
   depth: number;
   bestMove?: string;
@@ -22,16 +26,18 @@ export class UciEngine {
   private onLine: ((line: string) => void) | undefined;
   private exited = false;
 
-  private constructor(private readonly proc: ChildProcessWithoutNullStreams) {
+  private constructor(private readonly proc: ChildProcessByStdio<Writable, Readable, null>) {
     createInterface({ input: proc.stdout }).on("line", (line) => this.onLine?.(line.trim()));
     proc.on("exit", () => {
       this.exited = true;
     });
+    // A write to a dead engine must surface as the pending call's rejection, not crash the process.
+    proc.stdin.on("error", () => {});
   }
 
   static async start(opts: EngineOptions = {}): Promise<UciEngine> {
     const path = opts.path ?? process.env.STOCKFISH_PATH ?? "stockfish";
-    const proc = spawn(path, [], { stdio: ["pipe", "pipe", "pipe"] });
+    const proc = spawn(path, [], { stdio: ["pipe", "pipe", "ignore"] });
     await new Promise<void>((resolve, reject) => {
       proc.once("spawn", resolve);
       proc.once("error", (err) =>
@@ -49,7 +55,16 @@ export class UciEngine {
     return engine;
   }
 
-  /** Fixed depth, so the same position always gets the same answer on one thread. */
+  /**
+   * Clears the hash table. Search results depend on what the engine has already searched, so
+   * call this before each game: then one thread at a fixed depth gives the same answers for
+   * the same game every time.
+   */
+  async newGame(): Promise<void> {
+    this.send("ucinewgame");
+    await this.until("isready", (l) => l === "readyok");
+  }
+
   async evaluate(fen: string, depth: number): Promise<EvalResult> {
     let score: Score = { cp: 0 };
     let seenDepth = 0;
@@ -57,7 +72,8 @@ export class UciEngine {
     this.send(`position fen ${fen}`);
     await this.until(`go depth ${depth}`, (l) => {
       if (l.startsWith("info ") && !l.includes(" upperbound") && !l.includes(" lowerbound")) {
-        const m = / depth (\d+) .*? score (cp|mate) (-?\d+)/.exec(l);
+        // "info depth 0 score mate 0" (checkmated) has nothing between depth and score.
+        const m = /\bdepth (\d+)\b.*?\bscore (cp|mate) (-?\d+)/.exec(l);
         if (m) {
           seenDepth = Number(m[1]);
           score = m[2] === "cp" ? { cp: Number(m[3]) } : { mate: Number(m[3]) };

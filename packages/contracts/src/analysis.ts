@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { Color } from "./game";
 
-/** Engine score from White's point of view. `mate: 3` = White mates in 3, `mate: -2` = Black mates in 2. */
+/**
+ * Engine score from White's point of view. `mate: 3` = White mates in 3, `mate: -2` = Black
+ * mates in 2. A position that is already checkmate is stored as `mate: 1` (Black is mated) or
+ * `mate: -1` (White is mated); stored scores never use `mate: 0`.
+ */
 export const Score = z.union([
   z.object({ cp: z.number().int() }),
   z.object({ mate: z.number().int() }),
@@ -22,10 +26,11 @@ export const JUDGMENT_THRESHOLDS = { inaccuracy: 5, mistake: 10, blunder: 15 } a
 export const ANALYSIS_VERSION = 1;
 
 export const AnalyzedMove = z.object({
-  /** 1-based half-move number. */
+  /** Half-move number from move 1 of a standard game: White's 1st move is 1, Black's 1st is 2. */
   ply: z.number().int().positive(),
   color: Color,
   san: z.string(),
+  /** Standard UCI, same notation as `bestUci`: castling is the king's two-square move. */
   uci: z.string(),
   fenBefore: z.string(),
   fenAfter: z.string(),

@@ -100,10 +100,15 @@ describe("fetchChesscomGames", () => {
     expect(two.map((g) => g.id)).toEqual(["chesscom:nov-new", "chesscom:nov-old"]);
     expect(calls.some((u) => u.endsWith("2025/10"))).toBe(false);
 
+    calls.length = 0;
     const recent = await fetchChesscomGames("Alice", {
       since: new Date("2025-11-10T00:00:00Z"),
       fetchImpl,
     });
     expect(recent.map((g) => g.id)).toEqual(["chesscom:nov-new"]);
+    // October ended before `since`, so its archive is never requested.
+    expect(calls.filter((u) => !u.endsWith("/archives"))).toEqual([
+      "https://api.chess.com/pub/player/alice/games/2025/11",
+    ]);
   });
 });

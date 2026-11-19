@@ -14,6 +14,8 @@ import type { EvalResult } from "./uci";
 export interface Evaluator {
   name: string;
   evaluate(fen: string, depth: number): Promise<EvalResult>;
+  /** Forget earlier searches, so a game's analysis does not depend on what ran before it. */
+  newGame?(): Promise<void>;
 }
 
 export interface AnalyzeOptions {
@@ -34,6 +36,7 @@ export async function analyzeGame(
   const depth = opts.depth ?? 12;
   const plies = pliesFromPgn(game.pgn);
   const moves: AnalyzedMove[] = [];
+  await engine.newGame?.();
 
   let before: { score: Score; best?: string } | undefined;
   for (const p of plies) {
