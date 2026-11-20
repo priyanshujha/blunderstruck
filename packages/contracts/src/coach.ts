@@ -400,6 +400,9 @@ export const ReportDraft = WeeklyReport.omit({ summary: true, wording: true }).e
 export type ReportDraft = z.infer<typeof ReportDraft>;
 
 const fixed2 = (n: number) => n.toFixed(2);
+const countFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0, useGrouping: true });
+/** Counts with en-US digit grouping ("1,500"), whatever the machine's locale. */
+const count = (n: number) => countFormat.format(n);
 
 /** Token values for one focus item, from this period's numbers. Rates have two decimals. */
 export function focusTokenValues(
@@ -408,14 +411,14 @@ export function focusTokenValues(
 ): Record<(typeof FOCUS_TOKENS)[number], string> {
   const stat = report.current.stats.find((s) => s.patternId === item.patternId);
   return {
-    games: String(stat?.games ?? report.current.games),
-    gamesAffected: String(stat?.gamesAffected ?? 0),
-    occurrences: String(stat?.occurrences ?? 0),
+    games: count(stat?.games ?? report.current.games),
+    gamesAffected: count(stat?.gamesAffected ?? 0),
+    occurrences: count(stat?.occurrences ?? 0),
     rate: fixed2(stat?.per100Moves ?? 0),
     baselineRate: fixed2(item.baseline.per100Moves),
     target: fixed2(item.target),
-    weeksRecurred: String(item.reason.weeksRecurred),
-    weeksCounted: String(item.reason.weeksCounted),
+    weeksRecurred: count(item.reason.weeksRecurred),
+    weeksCounted: count(item.reason.weeksCounted),
   };
 }
 
@@ -425,9 +428,9 @@ export function summaryTokenValues(report: {
   focus: readonly unknown[];
 }): Record<(typeof SUMMARY_TOKENS)[number], string> {
   return {
-    games: String(report.current.games),
+    games: count(report.current.games),
     mistakeRate: fixed2(report.current.mistakesPer100Moves),
-    focusCount: String(report.focus.length),
+    focusCount: count(report.focus.length),
   };
 }
 

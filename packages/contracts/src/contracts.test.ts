@@ -311,6 +311,22 @@ describe("report contracts", () => {
     expect(Object.keys(summary).sort()).toEqual([...SUMMARY_TOKENS].sort());
     expect(summary).toEqual({ games: "30", mistakeRate: "4.26", focusCount: "1" });
     expect(renderText(report.summary, summary)).toBe("30 games, 1 thing to work on.");
+
+    const big = {
+      ...report,
+      current: {
+        ...report.current,
+        games: 1500,
+        stats: [{ ...stat("hung-piece", 1.2), games: 1500, gamesAffected: 1234, occurrences: 2048 }],
+      },
+    } as WeeklyReport;
+    expect(focusTokenValues(choice as FocusChoice, big)).toMatchObject({
+      games: "1,500",
+      gamesAffected: "1,234",
+      occurrences: "2,048",
+      rate: "1.20",
+    });
+    expect(summaryTokenValues(big)).toMatchObject({ games: "1,500", mistakeRate: "4.26" });
   });
 
   it("parses every export line kind", () => {
