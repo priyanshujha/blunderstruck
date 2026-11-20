@@ -72,7 +72,7 @@ describe("runReport: first report", () => {
     expect(r.weeks).toHaveLength(6);
     expect(r.weeks[5]!.games).toBe(0);
     expect(r.weeks.reduce((s, w) => s + w.games, 0)).toBe(30);
-    const analysed = await h.store.analysedIds([...period, ...older].map((g) => g.id), { analysisVersion: r.settings.analysisVersion, depth: 12 });
+    const analysed = await h.store.analysedIds([...period, ...older].map((g) => g.id), { analysisVersion: r.settings.analysisVersion, depth: 12, checkDepth: 0 });
     expect(older.filter((g) => analysed.has(g.id))).toEqual([]);
     expect(analysed.size).toBe(30);
     expect(h.evaluator.positions).toBe(30 * 5);
@@ -207,10 +207,10 @@ describe("runReport: later runs", () => {
     const { h, first } = await firstRun();
     await runReport(h.deps(), opts({ asOf: WEEK_LATER }));
     expect(unfinished).toHaveBeenCalledTimes(1);
-    expect(unfinished.mock.calls[0]!.slice(1)).toEqual([first.track, { depth: 12, includeSampleOnly: true }]);
+    expect(unfinished.mock.calls[0]!.slice(1)).toEqual([first.track, { depth: 12, checkDepth: 0, includeSampleOnly: true }]);
     unfinished.mockClear();
     await runReport(h.deps(), opts({ asOf: WEEK_LATER, sampleOnly: true }));
-    expect(unfinished.mock.calls[0]!.slice(1)).toEqual([first.track, { depth: 12, includeSampleOnly: false }]);
+    expect(unfinished.mock.calls[0]!.slice(1)).toEqual([first.track, { depth: 12, checkDepth: 0, includeSampleOnly: false }]);
   });
 });
 

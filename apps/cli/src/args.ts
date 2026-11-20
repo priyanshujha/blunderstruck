@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { ConfigError } from "@blunderstruck/coach";
 import { Platform, RatingBand, ReportTimeClass } from "@blunderstruck/contracts";
 import { DEFAULT_DEPTH } from "@blunderstruck/progress";
-import type { ReportOptions } from "@blunderstruck/report";
+import { DEFAULT_CHECK_DEPTH, type ReportOptions } from "@blunderstruck/report";
 
 /** The deepest search any command accepts. */
 export const MAX_DEPTH = 30;
@@ -63,6 +63,7 @@ export function parseReportArgs(args: string[]): ReportArgs {
       options: {
         "time-class": { type: "string" },
         depth: { type: "string" },
+        "check-depth": { type: "string" },
         db: { type: "string" },
         provider: { type: "string" },
         env: { type: "string" },
@@ -88,6 +89,8 @@ export function parseReportArgs(args: string[]): ReportArgs {
       platform: platform.data,
       username,
       depth: intOption("depth", values.depth, DEFAULT_DEPTH, 1, MAX_DEPTH),
+      // 0 turns the deeper check off.
+      checkDepth: intOption("check-depth", values["check-depth"], DEFAULT_CHECK_DEPTH, 0, MAX_DEPTH),
       force: values.now === true,
       sampleOnly: values["sample-only"] === true,
       ...(timeClass ? { timeClass } : {}),

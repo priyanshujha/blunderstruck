@@ -14,7 +14,17 @@ import {
 import { writeReport } from "@blunderstruck/coach";
 import { FETCH_MAX, MIN_REPORT_GAMES, SAMPLE_GAMES, selectGames } from "@blunderstruck/progress";
 import type { Store } from "@blunderstruck/store";
-import { analyseGames, currentSettings, engineNameWithoutStarting, lazyEngine } from "./analyse";
+import {
+  analyseGames,
+  analysisKey,
+  checkDepthOfSettings,
+  checkGames,
+  currentSettings,
+  DEFAULT_CHECK_DEPTH,
+  doneIds,
+  engineNameWithoutStarting,
+  lazyEngine,
+} from "./analyse";
 import { buildDraft, carryWording, pendingFor, reportGames, storeWeekRows } from "./assemble";
 import { completeReport, completeUnfinished } from "./complete";
 import {
@@ -36,7 +46,12 @@ export interface ReportDeps {
   provider?: CoachProvider;
   now: () => Date;
   onProgress?: (e: {
-    phase: "sample" | "full";
+    /**
+     * "sample": the first look at the sample. "check": checking flagged moves more deeply, every
+     * game already having its first look. "full": analysing the remaining games (and checking
+     * them, when the check is on).
+     */
+    phase: "sample" | "check" | "full";
     done: number;
     total: number;
     etaSeconds: number | null;
@@ -52,7 +67,10 @@ export interface ReportOptions {
   platform: Platform;
   username: string;
   timeClass?: ReportTimeClass;
+  /** First-look depth. */
   depth: number;
+  /** Depth of the deeper check of flagged moves; 0 turns it off. Default `DEFAULT_CHECK_DEPTH`. */
+  checkDepth?: number;
   band?: RatingBand;
   asOf?: string;
   force: boolean;
@@ -66,7 +84,7 @@ export interface ReportOutcome {
   newGames: number;
   /** How many more games a new report needs. */
   needed: number;
-  /** Games still waiting for analysis. */
+  /** Games still waiting for analysis or for their check. */
   pending: number;
   /** The player's other tracks on this platform, when there are any (the run used `report.track`). */
   otherTracks?: Track[];
@@ -81,6 +99,10 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
   const asOf = iso(opts.asOf ?? deps.now());
   if (opts.maxGames !== undefined && !(Number.isInteger(opts.maxGames) && opts.maxGames >= 1)) {
     throw new ReportInputError(`--max-games must be a whole number of at least 1, got ${opts.maxGames}`);
+  }
+  const checkDepth = opts.checkDepth ?? DEFAULT_CHECK_DEPTH;
+  if (!(Number.isInteger(checkDepth) && checkDepth >= 0)) {
+    throw new ReportInputError(`--check-depth must be a whole number of at least 0, got ${opts.checkDepth}`);
   }
   const engine = lazyEngine(deps.startEngine);
   // Later steps reuse this run's engine instead of starting another; it is quit once, below.
@@ -101,7 +123,11 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
     if (chosen && !chosen.isNew) {
       checkAsOf(await store.reports(chosen.track), asOf);
       // Every unfinished report first, oldest first; --sample-only only spares sample-only ones.
-      resumed = await completeUnfinished(shared, chosen.track, { depth: opts.depth, includeSampleOnly: !opts.sampleOnly });
+      resumed = await completeUnfinished(shared, chosen.track, {
+        depth: opts.depth,
+        checkDepth,
+        includeSampleOnly: !opts.sampleOnly,
+      });
       reports = await store.reports(chosen.track);
     }
 
@@ -153,12 +179,19 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
       if (!previous) return false;
       const p = previous.settings;
       if (name === undefined) {
-        return p.analysisVersion !== ANALYSIS_VERSION || p.patternsVersion !== PATTERNS_VERSION || p.engine.depth !== opts.depth;
+        return (
+          p.analysisVersion !== ANALYSIS_VERSION ||
+          p.patternsVersion !== PATTERNS_VERSION ||
+          p.engine.depth !== opts.depth ||
+          checkDepthOfSettings(p) !== checkDepth
+        );
       }
-      return settingsKey(p) !== settingsKey(currentSettings(opts.depth, name));
+      return settingsKey(p) !== settingsKey(currentSettings(opts.depth, name, checkDepth));
     };
+    const keyFor = (name: string | undefined) => ({ analysisVersion: ANALYSIS_VERSION, depth: opts.depth, checkDepth, engineName: name });
+    // Pass 1 takes first looks only; a game with one, checked or not, needs nothing from it.
     const planPass1 = async (name: string | undefined) => {
-      const games = await reportGames({ ...base, key: { analysisVersion: ANALYSIS_VERSION, depth: opts.depth, engineName: name } });
+      const games = await reportGames({ ...base, key: keyFor(name), firstLook: true });
       const pending = new Set(games.pending.map((g) => g.id));
       const settingsChanged = changedFrom(name);
       const todo = new Map(games.sample.filter((g) => pending.has(g.id)).map((g) => [g.id, g]));
@@ -170,7 +203,20 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
       return { games, settingsChanged, todo: [...todo.values()].sort(byPlayedAtThenId) };
     };
 
-    // Plan without the engine first, so a run with everything analysed never starts it.
+    /**
+     * Under --sample-only with the check on, the games pass 1 leaves at their first look: every
+     * game the report needs that has one and is not yet checked for the player. They are checked
+     * before the report is stored, so a final report never rests on unchecked moves.
+     */
+    const toCheck = async (name: string) => {
+      if (!opts.sampleOnly || checkDepth === 0) return [];
+      const key = keyFor(name);
+      const target = await reportGames({ ...base, key });
+      const looked = await doneIds(store, track!.username, target.pending, key, true);
+      return target.pending.filter((g) => looked.has(g.id));
+    };
+
+    // Plan without the engine first, so a run with everything analysed (and checked) never starts it.
     let pass = await planPass1(undefined);
     let engineName: string | undefined;
     if (pass.todo.length === 0) {
@@ -178,10 +224,13 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
       const done = [...pass.games.capped, ...pass.games.comparison, ...pass.games.weeksOutside]
         .map((g) => g.id)
         .filter((id) => !pendingIds.has(id));
-      engineName = (await engineNameWithoutStarting(store, done, opts.depth)).name;
-      if (engineName !== undefined) pass = await planPass1(engineName);
+      const known = (await engineNameWithoutStarting(store, done, opts.depth, checkDepth)).name;
+      if (known !== undefined) {
+        pass = await planPass1(known);
+        if (pass.todo.length === 0 && (await toCheck(known)).length === 0) engineName = known;
+      }
     }
-    if (engineName === undefined || pass.todo.length > 0) {
+    if (engineName === undefined) {
       const e = await engine.get();
       engineName = e.name;
       pass = await planPass1(engineName);
@@ -197,7 +246,27 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
       });
     }
 
-    const settings = currentSettings(opts.depth, engineName);
+    const settings = currentSettings(opts.depth, engineName, checkDepth);
+    const checking = await toCheck(engineName);
+    if (checking.length > 0) {
+      const e = await engine.get();
+      deps.onProgress?.({ phase: "check", done: 0, total: checking.length, etaSeconds: null });
+      await checkGames({
+        store,
+        engine: e,
+        username: track.username,
+        games: checking,
+        depth: opts.depth,
+        checkDepth,
+        now: deps.now,
+        signal: deps.signal,
+        onEach: (done, all, secondsPerGame) =>
+          deps.onProgress?.({ phase: "check", done, total: all, etaSeconds: secondsPerGame * (all - done) }),
+      });
+    }
+    // The first revision reads first looks while anything still waits for its check.
+    const firstLook =
+      checkDepth > 0 && !opts.sampleOnly && (await reportGames({ ...base, key: analysisKey(settings) })).pending.length > 0;
     const lostRace = async (): Promise<ReportOutcome> => {
       const latest = await store.latestReport(track!);
       return {
@@ -218,6 +287,7 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
       history: reports,
       sampleOnly: opts.sampleOnly,
       notes: pass.settingsChanged ? ["settings-changed"] : [],
+      firstLook,
     });
     const { draft, pending, carriedFrom } = built;
     const written = await writeReport(draft, deps.provider, undefined, { onModelError: deps.onWarning });
@@ -228,7 +298,7 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
 
     let final = report;
     if (!opts.sampleOnly && pending.length > 0) {
-      const done = await completeReport(shared, track, { depth: opts.depth, periodEnd: report.periodEnd });
+      const done = await completeReport(shared, track, { depth: opts.depth, checkDepth, periodEnd: report.periodEnd });
       if (!done) return lostRace();
       final = done;
     }

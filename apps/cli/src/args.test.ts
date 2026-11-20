@@ -37,7 +37,7 @@ describe("intOption", () => {
 describe("parseReportArgs", () => {
   it("applies defaults", () => {
     expect(parseReportArgs(["lichess", "someone"])).toEqual({
-      opts: { platform: "lichess", username: "someone", depth: 12, force: false, sampleOnly: false },
+      opts: { platform: "lichess", username: "someone", depth: 12, checkDepth: 18, force: false, sampleOnly: false },
       json: false,
       all: false,
     });
@@ -51,6 +51,8 @@ describe("parseReportArgs", () => {
       "blitz",
       "--depth",
       "14",
+      "--check-depth",
+      "22",
       "--db",
       "/tmp/x.db",
       "--provider",
@@ -74,6 +76,7 @@ describe("parseReportArgs", () => {
         username: "someone",
         timeClass: "blitz",
         depth: 14,
+        checkDepth: 22,
         band: "club",
         asOf: "2026-11-01T00:00:00Z",
         force: true,
@@ -116,6 +119,18 @@ describe("parseReportArgs", () => {
     configError(() => parseReportArgs(["lichess", "someone", "--depth", "0"]));
     configError(() => parseReportArgs(["lichess", "someone", "--max-games", "0"]));
     configError(() => parseReportArgs(["lichess", "someone", "--max-games", "0x10"]));
+  });
+
+  it("--check-depth takes 0 (no check) to the deepest depth, digits only", () => {
+    expect(parseReportArgs(["lichess", "someone", "--check-depth", "0"]).opts.checkDepth).toBe(0);
+    expect(parseReportArgs(["lichess", "someone", `--check-depth=${MAX_DEPTH}`]).opts.checkDepth).toBe(MAX_DEPTH);
+    configError(() => parseReportArgs(["lichess", "someone", "--check-depth", "-1"]));
+    for (const bad of ["1e3", "+3", "1.5", "0x10", "", String(MAX_DEPTH + 1)]) {
+      configError(
+        () => parseReportArgs(["lichess", "someone", "--check-depth", bad]),
+        new RegExp(`--check-depth must be a whole number from 0 to ${MAX_DEPTH}`),
+      );
+    }
   });
 
   it("refuses values outside their lists", () => {

@@ -24,8 +24,8 @@ import {
 import { UciEngine, analyzeGame } from "@blunderstruck/engine";
 import { fetchGames } from "@blunderstruck/ingest";
 import { summarize, toPlayerGame, type PlayerGame } from "@blunderstruck/patterns";
-import { MAX_LOOKBACK_DAYS, MIN_REPORT_GAMES } from "@blunderstruck/progress";
-import { ReportInputError, runReport } from "@blunderstruck/report";
+import { DEFAULT_DEPTH, MAX_LOOKBACK_DAYS, MIN_REPORT_GAMES } from "@blunderstruck/progress";
+import { DEFAULT_CHECK_DEPTH, ReportInputError, runReport } from "@blunderstruck/report";
 import { exportStore, importStore, openSqliteStore } from "@blunderstruck/store";
 import { defaultCachePath, loadCache, mergeCache, needsEngine, planCache, saveCache } from "./analysis-cache";
 import {
@@ -62,15 +62,19 @@ const USAGE = `blunderstruck <command>
       --all          also print every pattern and the repeated opening mistakes
       --json         print the full pattern summary as JSON on stdout (progress on stderr)
 
-  report <lichess|chesscom> <username> [--time-class <class>] [--depth 12] [--db <path>]
-         [--provider anthropic|gemini|none] [--env <path>] [--band <band>]
+  report <lichess|chesscom> <username> [--time-class <class>] [--depth 12] [--check-depth 18]
+         [--db <path>] [--provider anthropic|gemini|none] [--env <path>] [--band <band>]
          [--as-of <ISO date>] [--now] [--sample-only] [--max-games N] [--json] [--all]
       Fetch the games played since the last report, analyse them, and print what to work on
       and how the previous focus items moved. Games and reports are kept in a local database.
-      A large period is analysed as a sample first; the rest follows in the same run and can
-      be stopped with Ctrl-C at any time (run report again to continue).
+      A first look at a sample comes first; then the moves it flags are checked more deeply
+      and the rest of a large period is analysed, in the same run. That part can be stopped
+      with Ctrl-C at any time (run report again to continue).
       --time-class   bullet, blitz, rapid or classical (default: the track used before, or
                      the class with the most recent rated games)
+      --depth        search depth of the first look at every move (default ${DEFAULT_DEPTH})
+      --check-depth  search depth of the deeper check of flagged moves (default
+                     ${DEFAULT_CHECK_DEPTH}; 0 turns the check off)
       --db           database file (default: $BLUNDERSTRUCK_DB, else ~/.blunderstruck/blunderstruck.db)
       --provider     model used for the wording; none prints numbers with template text
       --env          read settings from this file (default: ./.env when present); variables
@@ -78,7 +82,7 @@ const USAGE = `blunderstruck <command>
       --band         rating band to coach for: ${RatingBand.options.join(", ")}
       --as-of        end the period at this time instead of now
       --now          make a new report even with fewer than ${MIN_REPORT_GAMES} new games
-      --sample-only  stop after the sample; a later run finishes the analysis
+      --sample-only  stop after the sample (checked more deeply); a later run finishes the rest
       --max-games N  analyse at most N of the period's games
       --json         print the stored report as JSON on stdout (messages on stderr)
       --all          also print the week-by-week table and every pattern's trend
@@ -243,6 +247,24 @@ function minutes(seconds: number): string {
   return `about ${Math.max(1, Math.ceil(seconds / 60))} min`;
 }
 
+/** The progress line for one event of the report's passes. */
+function progressText(
+  phase: "sample" | "check" | "full",
+  done: number,
+  total: number,
+  etaSeconds: number | null,
+  checking: boolean,
+): string {
+  const eta = etaSeconds !== null && done < total ? `, ${minutes(etaSeconds)} left` : "";
+  if (phase === "check") return `Checking flagged moves more deeply: ${done} of ${games(total)}${eta}`;
+  if (phase === "full" && checking) return `Analysing and checking the remaining games: ${done} of ${games(total)}${eta}`;
+  const what = phase === "sample" ? "Analysing the sample" : "Analysing the remaining games";
+  return `${what}: ${done} of ${total}${eta}`;
+}
+
+/** What a final report's games went through. */
+const done = (r: WeeklyReport) => ((r.settings.checkDepth ?? 0) > 0 ? "analysed and checked more deeply" : "analysed");
+
 const day = (iso: string) => iso.slice(0, 10);
 const games = (n: number) => `${n} game${n === 1 ? "" : "s"}`;
 
@@ -274,6 +296,7 @@ async function reportCmd(args: string[]) {
   };
   const shown = (r: WeeklyReport) => shownKey === `${r.periodEnd}#${r.revision}`;
 
+  const checking = (a.opts.checkDepth ?? DEFAULT_CHECK_DEPTH) > 0;
   let warnedNoKey = false;
   let provisionalShown = false;
   let secondsPerGame: number | undefined;
@@ -311,9 +334,7 @@ async function reportCmd(args: string[]) {
         onProgress: ({ phase, done, total, etaSeconds }) => {
           counts = { done, total };
           if (phase === "sample" && total > done && etaSeconds !== null) secondsPerGame = etaSeconds / (total - done);
-          const what = phase === "sample" ? "Analysing the sample" : "Analysing the remaining games";
-          const eta = etaSeconds !== null && done < total ? `, ${minutes(etaSeconds)} left` : "";
-          progress.update(`${what}: ${done} of ${total}${eta}`, done === total);
+          progress.update(progressText(phase, done, total, etaSeconds, checking), done === total);
         },
         onWarning: (message) => note(`Coach wording fell back to templates: ${message}`),
         onReport: (report, { pending }) => {
@@ -327,17 +348,24 @@ async function reportCmd(args: string[]) {
             provisionalShown = true;
             counts = { done: 0, total: pending };
             if (a.opts.sampleOnly) {
-              note(`${games(pending)} not analysed yet (--sample-only); run report again without it to finish.`);
+              const covers = `This report covers ${report.coverage.analysed} of ${games(report.coverage.total)}` +
+                (checking ? ", each checked more deeply" : "");
+              note(`${covers}; ${games(pending)} not analysed yet (--sample-only). Run report again without it to finish.`);
+            } else if (checking) {
+              note(
+                `This is a first look. Next: checking flagged moves more deeply in ${games(pending)}. ` +
+                  "Stop any time; run report again to continue.",
+              );
             } else {
               const eta = secondsPerGame === undefined ? "" : ` (${minutes(secondsPerGame * pending)})`;
               note(`Analysing the remaining ${games(pending)}${eta}. Stop any time; run report again to continue.`);
             }
           } else if (provisionalShown) {
-            show(report, `Updated report (all ${games(report.coverage.total)} analysed):`);
+            show(report, `Updated report (all ${games(report.coverage.total)} ${done(report)}):`);
           } else {
             note(
               `Finished the earlier report for the period ending ${day(report.periodEnd)} first ` +
-                `(all ${games(report.coverage.total)} analysed).`,
+                `(all ${games(report.coverage.total)} ${done(report)}).`,
             );
           }
         },

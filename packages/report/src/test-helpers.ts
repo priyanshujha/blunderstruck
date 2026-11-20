@@ -47,17 +47,45 @@ export const games = (count: number, fromDays: number, toDays: number, opts: Par
     game(fromDays + ((toDays - fromDays) * (i + 0.5)) / count, { thrown: i % 2 === 0, ...opts }),
   );
 
-/** Scores the start position as clearly winning for White and everything else as level. */
-export function stubEvaluator(name = "stub-engine"): Evaluator & { positions: number } {
-  const e = {
+export type StubEvaluator = Evaluator & {
+  positions: number;
+  /** Positions evaluated at each depth. */
+  byDepth: Map<number, number>;
+  /** Every `(fen, depth)` evaluated, in order. */
+  log: { fen: string; depth: number }[];
+  newGames: number;
+};
+
+/**
+ * Scores the start position as clearly winning for White and everything else as level, so the
+ * player's first move (1. e4) of every generated game loses the win and is checked again.
+ */
+export function stubEvaluator(name = "stub-engine"): StubEvaluator {
+  const e: StubEvaluator = {
     name,
     positions: 0,
+    byDepth: new Map(),
+    log: [],
+    newGames: 0,
+    async newGame() {
+      e.newGames++;
+    },
     async evaluate(fen: string, depth: number) {
       e.positions++;
+      e.byDepth.set(depth, (e.byDepth.get(depth) ?? 0) + 1);
+      e.log.push({ fen, depth });
       return { score: { cp: fen.startsWith(START_BOARD) ? 600 : 0 }, depth };
     },
   };
   return e;
+}
+
+/** Forget what the stub engine has counted so far. */
+export function resetCounts(e: StubEvaluator): void {
+  e.positions = 0;
+  e.byDepth.clear();
+  e.log.length = 0;
+  e.newGames = 0;
 }
 
 /** A provider whose every call fails, so the report falls back to template text; calls are counted. */
@@ -79,7 +107,7 @@ export interface Harness {
   available: GameRecord[];
   starts: number;
   quits: number;
-  evaluator: Evaluator & { positions: number };
+  evaluator: StubEvaluator;
   fetch: ReturnType<typeof vi.fn>;
   reported: { report: WeeklyReport; pending: number }[];
   deps(over?: Partial<ReportDeps>): ReportDeps;
@@ -117,6 +145,8 @@ export const opts = (over: Partial<ReportOptions> = {}): ReportOptions => ({
   platform: "lichess",
   username: PLAYER,
   depth: 12,
+  // The deeper check is off unless a test turns it on, so these runs are those of unchecked reports.
+  checkDepth: 0,
   force: false,
   sampleOnly: false,
   asOf: AS_OF,

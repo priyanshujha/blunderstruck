@@ -273,7 +273,7 @@ describe("completeReport: resume rules", () => {
     // The remaining games were analysed elsewhere, at the report's settings.
     const pre = stubEvaluator();
     const byId = await h.store.gamesById(r0.gameIds);
-    const done = await h.store.analysedIds(r0.gameIds, { analysisVersion: r0.settings.analysisVersion, depth: 12 });
+    const done = await h.store.analysedIds(r0.gameIds, { analysisVersion: r0.settings.analysisVersion, depth: 12, checkDepth: 0 });
     for (const g of byId.values()) if (!done.has(g.id)) await h.store.putAnalysis(await analyzeGame(pre, g, { depth: 12 }));
 
     const r1 = (await completeReport(h.deps(), TRACK))!;
@@ -535,7 +535,7 @@ describe("games before the track's first period", () => {
     expect(h.evaluator.positions).toBe(12 * POSITIONS_PER_GAME);
     const analysed = await h.store.analysedIds(
       older.map((g) => g.id),
-      { analysisVersion: first.settings.analysisVersion, depth: 12 },
+      { analysisVersion: first.settings.analysisVersion, depth: 12, checkDepth: 0 },
     );
     expect(analysed.size).toBe(0);
     expect(next.weeks.reduce((n, w) => n + w.games, 0)).toBe(42);

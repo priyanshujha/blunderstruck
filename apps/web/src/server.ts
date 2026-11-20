@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
-import { type Platform, type ReportTimeClass, type Track, type WeeklyReport, settingsKey, trackKey } from "@blunderstruck/contracts";
+import { type Platform, type ReportTimeClass, type Track, type WeeklyReport, perspective, settingsKey, trackKey } from "@blunderstruck/contracts";
 import { SchemaVersionError, type Store, openSqliteStore } from "@blunderstruck/store";
 import { STYLE_HASH, renderMessage, renderPage } from "./render";
 
@@ -60,15 +60,30 @@ function findReport(reports: readonly WeeklyReport[], segment: string): WeeklyRe
   return Number.isNaN(t) ? undefined : reports.find((r) => Date.parse(r.periodEnd) === t);
 }
 
-/** Games of the report still waiting for analysis at the report's own settings. */
+/**
+ * Games of the report still waiting at the report's own settings: not analysed, or, when the
+ * settings ask for a deeper check, not checked for the player's colour.
+ */
 async function pendingGames(store: Store, r: WeeklyReport): Promise<number> {
   if (r.coverage.complete) return 0;
-  const done = await store.analysedIds(r.gameIds, {
+  const checkDepth = r.settings.checkDepth ?? 0;
+  const key = {
     analysisVersion: r.settings.analysisVersion,
     depth: r.settings.engine.depth,
+    checkDepth,
     engineName: r.settings.engine.name,
-  });
-  return r.gameIds.filter((id) => !done.has(id)).length;
+  };
+  if (checkDepth === 0) {
+    const done = await store.analysedIds(r.gameIds, key);
+    return r.gameIds.filter((id) => !done.has(id)).length;
+  }
+  const [analyses, games] = await Promise.all([store.getAnalyses(r.gameIds, key), store.gamesById(r.gameIds)]);
+  return r.gameIds.filter((id) => {
+    const a = analyses.get(id);
+    const g = games.get(id);
+    const color = g ? perspective(g, r.player)?.color : undefined;
+    return !(a?.check && color && a.check.colors.includes(color));
+  }).length;
 }
 
 /** Same as `handler`, with the command-line details the pages repeat back. */

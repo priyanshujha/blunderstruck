@@ -33,7 +33,7 @@ import {
   type WeekFindings,
 } from "@blunderstruck/progress";
 import type { AnalysisKey, Store } from "@blunderstruck/store";
-import { analysisKey } from "./analyse";
+import { analysisKey, checkDepthOfSettings, doneIds, reportAnalyses } from "./analyse";
 import { byPlayedAtThenId, iso, latestRevisions } from "./periods";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -51,7 +51,11 @@ export interface ReportGames {
   comparison: GameRecord[];
   /** Track games of the six weeks that are not in the period. */
   weeksOutside: GameRecord[];
-  /** Every game the report needs that has no analysis at its settings, `(playedAt, id)` order. */
+  /**
+   * Every game the report needs that is not done at its settings, `(playedAt, id)` order: not
+   * analysed, or, with a deeper check, not checked for the player's colour. With `firstLook`,
+   * only games with no first look at all.
+   */
   pending: GameRecord[];
 }
 
@@ -60,9 +64,17 @@ export function comparisonWindow(periodStart: string): { start: string; end: str
   return { start: iso(ms(periodStart) - COMPARISON_DAYS * DAY_MS), end: iso(periodStart) };
 }
 
-/** The games a period's numbers use: all of them, or the `selectGames` cut to `total`. */
-function cappedOf(period: GameRecord[], total: number, periodEnd: string): GameRecord[] {
-  return total < period.length ? selectGames(period, total, periodEnd) : period;
+/**
+ * The games a period's numbers use: all of them, else the ids the report recorded as kept
+ * (`cappedGameIds`), else (a report stored before that field) the `selectGames` cut to `total`.
+ */
+function cappedOf(period: GameRecord[], total: number, periodEnd: string, keptIds?: readonly string[]): GameRecord[] {
+  if (total >= period.length) return period;
+  if (keptIds) {
+    const kept = new Set(keptIds);
+    return period.filter((g) => kept.has(g.id));
+  }
+  return selectGames(period, total, periodEnd);
 }
 
 /** A period's games found in the store, `(playedAt, id)` order. */
@@ -86,7 +98,9 @@ async function cutFrom(store: Store, reports: readonly WeeklyReport[], periodEnd
   const cut = new Set<string>();
   for (const r of reports) {
     if (ms(r.periodEnd) === ms(periodEnd) || r.coverage.total >= r.gameIds.length) continue;
-    const kept = new Set(cappedOf(await periodGames(store, r.gameIds), r.coverage.total, r.periodEnd).map((g) => g.id));
+    const kept = r.cappedGameIds
+      ? new Set(r.cappedGameIds)
+      : new Set(cappedOf(await periodGames(store, r.gameIds), r.coverage.total, r.periodEnd).map((g) => g.id));
     for (const id of r.gameIds) if (!kept.has(id)) cut.add(id);
   }
   return cut;
@@ -110,10 +124,14 @@ export async function reportGames(input: {
   total: number;
   /** Which analyses count as done. */
   key: AnalysisKey;
+  /** Count a game as done once it has a first look, checked or not. */
+  firstLook?: boolean;
+  /** The ids this report kept under `--max-games`, when it recorded them. */
+  cappedIds?: readonly string[];
 }): Promise<ReportGames> {
   const { store, track, periodStart, periodEnd } = input;
   const period = await periodGames(store, input.periodIds);
-  const capped = cappedOf(period, input.total, periodEnd);
+  const capped = cappedOf(period, input.total, periodEnd, input.cappedIds);
   const sample = selectGames(capped, SAMPLE_GAMES, periodEnd);
   const inPeriod = new Set(input.periodIds);
   const stored = latestRevisions(await store.reports(track));
@@ -141,7 +159,7 @@ export async function reportGames(input: {
 
   const needed = new Map<string, GameRecord>();
   for (const g of [...capped, ...comparison, ...weeksOutside]) needed.set(g.id, g);
-  const done = await store.analysedIds([...needed.keys()], input.key);
+  const done = await doneIds(store, track.username, [...needed.values()], input.key, input.firstLook);
   const pending = [...needed.values()].filter((g) => !done.has(g.id)).sort(byPlayedAtThenId);
   return { period, capped, sample, comparison, weeksOutside, pending };
 }
@@ -237,6 +255,13 @@ export interface DraftInput {
   sampleOnly: boolean;
   /** Notes decided by the caller ("settings-changed"); "few-games" and "sample-only" are set here. */
   notes: readonly ReportNote[];
+  /**
+   * Build from first looks although `settings` ask for a deeper check: the first pass's
+   * provisional revision. It is never complete and counts no game as checked.
+   */
+  firstLook?: boolean;
+  /** The ids this report kept under `--max-games`, when an earlier revision recorded them. */
+  cappedIds?: readonly string[];
 }
 
 export interface Draft {
@@ -262,12 +287,14 @@ export interface Draft {
 export async function buildDraft(input: DraftInput): Promise<Draft> {
   const { store, track, settings, periodStart, periodEnd } = input;
   const end = iso(periodEnd);
-  const games = await reportGames({ ...input, key: analysisKey(settings) });
+  const key = analysisKey(settings);
+  const checking = checkDepthOfSettings(settings) > 0;
+  const firstLook = checking && input.firstLook === true;
+  // `pending` is always measured at the full settings; only the numbers read first looks.
+  const games = await reportGames({ ...input, key, firstLook: false });
   const all = [...games.capped, ...games.comparison, ...games.weeksOutside];
-  const analyses = await store.getAnalyses(
-    all.map((g) => g.id),
-    analysisKey(settings),
-  );
+  // With a check, every number, finding and example rests on the checked values.
+  const analyses = await reportAnalyses(store, track.username, all, key, firstLook);
 
   const history = input.history.filter((r) => ms(r.periodEnd) < ms(end));
   const previous = [...history].sort((a, b) => ms(a.periodEnd) - ms(b.periodEnd) || a.revision - b.revision).at(-1);
@@ -299,6 +326,24 @@ export async function buildDraft(input: DraftInput): Promise<Draft> {
     const a = analyses.get(g.id);
     if (a) periodAnalyses.set(g.id, a);
   }
+  // Blind spots and example stories read the six weeks: every analysed game of the player in them.
+  const windowGames: PlayerGame[] = [];
+  for (const g of weekGamesPool) {
+    const a = analyses.get(g.id);
+    const pg = a ? toPlayerGame(g, a, track.username) : null;
+    if (pg) windowGames.push(pg);
+  }
+  const windowStart = weekBuckets(end).at(-1)!.start;
+  // A later revision of this period keeps the examples of the revision before it, where still findings.
+  const earlierRevision = input.history
+    .filter((r) => ms(r.periodEnd) === ms(end) && r.revision < input.revision)
+    .sort((a, b) => a.revision - b.revision)
+    .at(-1);
+  const keepExamples = earlierRevision
+    ? Object.fromEntries(
+        earlierRevision.focus.map((f) => [f.patternId, f.examples.map((x) => ({ gameId: x.gameId, ply: x.ply }))]),
+      )
+    : undefined;
   const decided = chooseFocus({
     current: currentSummary,
     comparison,
@@ -307,6 +352,13 @@ export async function buildDraft(input: DraftInput): Promise<Draft> {
     history,
     periodEnd: end,
     analyses: periodAnalyses,
+    window: {
+      games: windowGames,
+      findings: summarize(track.username, windowGames).findings,
+      start: iso(windowStart),
+      end,
+    },
+    ...(keepExamples ? { keepExamples } : {}),
   });
 
   const few = games.capped.length < MIN_REPORT_GAMES;
@@ -338,9 +390,11 @@ export async function buildDraft(input: DraftInput): Promise<Draft> {
       sampled: games.sample.length,
       analysed,
       total: games.capped.length,
-      complete: games.pending.length === 0,
+      complete: games.pending.length === 0 && !firstLook,
       sampleOnly,
+      ...(checking ? { checked: firstLook ? 0 : analysed } : {}),
     },
+    ...(games.capped.length < games.period.length ? { cappedGameIds: games.capped.map((g) => g.id) } : {}),
     current,
     comparison,
     weeks: weekRows,
@@ -400,7 +454,7 @@ export async function storeWeekRows(store: Store, report: WeeklyReport): Promise
   for (const w of report.weeks) await store.putPeriodStats(tk, sk, w);
 }
 
-/** Games a stored report still needs analysed at its own settings. */
+/** Games a stored report still needs analysed, or checked, at its own settings. */
 export async function pendingFor(store: Store, report: WeeklyReport): Promise<GameRecord[]> {
   const games = await reportGames({
     store,
@@ -411,6 +465,7 @@ export async function pendingFor(store: Store, report: WeeklyReport): Promise<Ga
     periodIds: report.gameIds,
     total: report.coverage.total,
     key: analysisKey(report.settings),
+    ...(report.cappedGameIds ? { cappedIds: report.cappedGameIds } : {}),
   });
   return games.pending;
 }
