@@ -37,5 +37,7 @@ export {
   toPlayerGame,
 } from "./game";
 export { findPatterns } from "./find";
+export { moveDetail, storyOf } from "./story";
 export { openingStats, patternStats, rankTop, summarize } from "./aggregate";
 export { DETECTORS } from "./detectors";
+export { blindSpots, chooseBlindSpots, phaseTrait, traitsOf, type BlindSpotResult, type TraitedMove } from "./blind-spots";

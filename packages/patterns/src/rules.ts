@@ -1,4 +1,4 @@
-import { type AnalyzedMove, JUDGMENT_THRESHOLDS, MAX_FOCUS_ITEMS } from "@blunderstruck/contracts";
+import { type AnalyzedMove, JUDGMENT_THRESHOLDS, MAX_BLIND_SPOTS, MAX_FOCUS_ITEMS } from "@blunderstruck/contracts";
 
 /*
  * Every threshold the detectors use, in one place. Win% is the mover's win probability, 0-100,
@@ -47,6 +47,27 @@ export const TOP_MIN_GAMES = 2;
 
 /** At most this many top habits: the product-wide limit on things to work on at once. */
 export const TOP_MAX = MAX_FOCUS_ITEMS;
+
+/*
+ * Blind spots (blind-spots.ts). These choose which properties of a pattern's occurrences are
+ * shown; they do not change what is counted, so they need no `PATTERNS_VERSION` bump. Shares
+ * are fractions compared with integers only (`den * count >= num * of`).
+ */
+
+/** Blind spots: a property needs at least this many of the pattern's occurrences... */
+export const BLIND_SPOT_MIN_COUNT = 4;
+/** ...in at least this many games... */
+export const BLIND_SPOT_MIN_GAMES = 3;
+/** ...at least this share of the pattern's occurrences... */
+export const BLIND_SPOT_MIN_SHARE = { num: 1, den: 4 } as const;
+/** ...and at least this many times its share among the player's countable mistakes in the same games. */
+export const BLIND_SPOT_MIN_LIFT = { num: 3, den: 2 } as const;
+/** At most this many blind spots per pattern. */
+export const BLIND_SPOT_MAX = MAX_BLIND_SPOTS;
+/** A child property is attached to its selected parent with at least this many occurrences... */
+export const BLIND_SPOT_REFINEMENT_MIN = 3;
+/** ...and at least this share of the parent's. */
+export const BLIND_SPOT_REFINEMENT_MIN_SHARE = { num: 1, den: 3 } as const;
 
 /** `time-trouble`: the threshold is this share of the expected game time (base + 40 increments)... */
 export const TIME_TROUBLE_SHARE = 0.1;
