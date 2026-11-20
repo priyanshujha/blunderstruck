@@ -133,6 +133,9 @@ describe("buildPrompt", () => {
     expect(parsed.summary).not.toMatch(/\b(one|two|both|pair|couple)\b/i);
     expect(system).toMatch(/illustrative only: never reuse them/);
     expect(system).toContain("Do not restate them");
+    expect(system).toContain("The summary, title and why describe the player's record, so they hold no counts at all");
+    expect(system).toContain("The drill is advice, so study quantities are fine there");
+    expect(system).toContain('never write "{gamesAffected} of" or "0 of" for it');
     expect(system).toContain("weeksCounted of three or more and weeksRecurred is more than half of weeksCounted");
     expect(example).not.toMatch(/\{(weeksRecurred|weeksCounted|rate|target)\}/);
   });

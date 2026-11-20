@@ -146,6 +146,73 @@ function findCount(text: string): { kind: "digits" | "words"; match: string } | 
   return undefined;
 }
 
+/*
+ * Extra rules for the record fields (summary, title, why), which describe what the player did.
+ */
+
+/** Number words other than "one". */
+const NUMBER_WORD_NOT_ONE =
+  "(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|twice|thrice|dozen|half|hundred)";
+/** Nouns a number word may size in a record field: material, moves and squares are chess, not statistics. */
+const BOARD_NOUN = "(?:pawns?|knights?|bishops?|rooks?|queens?|kings?|minor\\s+pieces|moves?|squares?|ranks?|files?|plies)";
+/**
+ * Any number word but "one", unless right before a board noun: "went from three to two",
+ * "below two", "nine such moments" are rates or tallies; "two rooks", "three moves deep" are chess.
+ * "hundred moves" is the unit of a rate and passes as a board noun.
+ */
+const RECORD_NUMBER_WORD = new RegExp(`\\b${NUMBER_WORD_NOT_ONE}\\b(?![\\s-]+${BOARD_NOUN}\\b)`, "i");
+/** A fraction of the record: "a third of your games", "a quarter of your games", "half the games". */
+const FRACTION_OF_RECORD = new RegExp(
+  `\\b(?:half|thirds?|quarters?|fifths?)\\b${words(3)}(?:${RECORD_PLURAL}|${RECORD_SINGULAR})\\b`,
+  "i",
+);
+
+/** Counts in a record field, after the shared checks. Tokens must already be removed. */
+function findRecordCount(text: string): { kind: "digits" | "words"; match: string } | undefined {
+  const shared = findCount(text);
+  if (shared) return shared;
+  const m = FRACTION_OF_RECORD.exec(text) ?? RECORD_NUMBER_WORD.exec(text);
+  return m ? { kind: "words", match: m[0] } : undefined;
+}
+
+/*
+ * The drill is advice about what to do next, so numbers there are study quantities ("three
+ * times a week", "one game a day", "5 puzzles") and pass freely. Only the forms that state a
+ * statistic about the player are rejected.
+ */
+
+/** Any number, in digits or words ("one" included). */
+const ANY_NUMBER = `(?:\\d+|one|${NUMBER_WORD_NOT_ONE})`;
+const DRILL_STATISTICS: readonly RegExp[] = [
+  /** A percentage. */
+  /%|\bper\s*cent\b|\bpercent\b/i,
+  /** A ratio ("9/31"). */
+  BARE_RATIO,
+  /** A rate: "per hundred", "per 100", "in every hundred moves". */
+  /\b(?:per|every|each)\s+(?:hundred|100)\b/i,
+  /** A decimal: "4.25", "1,5". Move numbers ("1.e4") have no digit after the dot. */
+  /\b\d+[.,]\d+\b/,
+  /** A decimal in words. */
+  WORDED_DECIMAL,
+  /** "N of M games", "N out of M games", "N in M games", "twice in a dozen outings". */
+  new RegExp(`\\b${ANY_NUMBER}\\s+(?:out\\s+of|of|in)\\s+(?:(?:your|the|my|last|recent|a)\\s+)*${ANY_NUMBER}\\b${words(2)}${RECORD_PLURAL}\\b`, "i"),
+  /** "nine of your recent rated games": a count above one taken from the player's own games. */
+  new RegExp(`\\b(?:\\d+|${NUMBER_WORD_NOT_ONE})\\s+of\\s+your\\b${words(3)}${RECORD_PLURAL}\\b`, "i"),
+  /** A count tied to what the player did: "you hung 3 queens", "made 4 mistakes", "lost two rooks". */
+  new RegExp(`\\b(?:hung|lost|blundered|missed|dropped|made|gave\\s+away|threw\\s+away)\\s+(?:[\\w']+\\s+)?${ANY_NUMBER}\\b`, "i"),
+  /** A digit outside ASCII, which would not read as notation. */
+  /[^\P{Nd}0-9]/u,
+];
+
+/** The first statistic found in a drill, or undefined. Tokens must already be removed. */
+function findDrillStatistic(text: string): string | undefined {
+  for (const re of DRILL_STATISTICS) {
+    const m = re.exec(text);
+    if (m) return m[0];
+  }
+  return undefined;
+}
+
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** The `WORDING_SCHEMA` shape, checked by hand: every field present, a non-empty string, nothing extra. */
@@ -190,10 +257,16 @@ function unfence(text: string): string {
   return m ? m[1]! : text;
 }
 
-/** Errors for one field's text: length, tokens and bare counts. */
-function checkField(where: string, text: string, max: number, allowed: readonly string[]): string[] {
+type FieldKind = "record" | "drill";
+
+/**
+ * Errors for one field's text: length, tokens and counts. A record field (summary, title, why)
+ * may hold no counts at all; a drill may size practice but not state a statistic.
+ */
+function checkField(where: string, text: string, max: number, allowed: readonly string[], kind: FieldKind): string[] {
   const errors: string[] = [];
-  if (text.length > max) errors.push(`${where} is ${text.length} characters; the limit is ${max}`);
+  const tooLong = text.length > max;
+  if (tooLong) errors.push(`${where} is ${text.length} characters; the limit is ${max}`);
   for (const m of text.matchAll(/\{([^{}]*)\}/g)) {
     if (!allowed.includes(m[1]!)) {
       errors.push(`${where} uses {${m[1]}}, which is not an allowed token (allowed: ${allowed.map((t) => `{${t}}`).join(", ")})`);
@@ -201,10 +274,23 @@ function checkField(where: string, text: string, max: number, allowed: readonly 
   }
   const rest = text.replace(/\{[^{}]*\}/g, "");
   if (/[{}]/.test(rest)) errors.push(`${where} has an unmatched brace; braces are only for tokens`);
-  const count = findCount(rest);
+  // An over-long field is already rejected; scanning it for counts would only cost time.
+  if (tooLong) return errors;
+  if (kind === "drill") {
+    const stat = findDrillStatistic(rest);
+    if (stat) {
+      errors.push(
+        `${where} states a statistic ("${stat}"); a drill may size practice ("three times a week", "5 puzzles") but must not report results, so drop it`,
+      );
+    }
+    return errors;
+  }
+  const count = findRecordCount(rest);
   if (count) {
     const how = count.kind === "digits" ? "writes a number" : "writes a count in words";
-    errors.push(`${where} ${how} ("${count.match}"); use a token such as {gamesAffected} instead of any count`);
+    errors.push(
+      `${where} ${how} ("${count.match}"); this field describes the player's record, which the report prints itself, so drop the count, or move it into the drill as a study quantity`,
+    );
   }
   return errors;
 }
@@ -232,13 +318,13 @@ export function parseWording(text: string, draft: ReportDraft, only?: string[]):
       `focus must hold exactly these patternIds in this order: [${expected.join(", ")}]; got [${got.join(", ")}]`,
     );
   }
-  errors.push(...checkField("summary", value.summary, LIMITS.summary, SUMMARY_TOKENS));
+  errors.push(...checkField("summary", value.summary, LIMITS.summary, SUMMARY_TOKENS, "record"));
   value.focus.forEach((f, i) => {
     const at = `focus[${i}] (${f.patternId})`;
     const weeksCounted = draft.focus.find((c) => c.patternId === f.patternId)?.reason.weeksCounted ?? 0;
     const allowed = weeksCounted >= MIN_WEEKS_FOR_PERSISTENCE ? FOCUS_TOKENS : FOCUS_TOKENS_WITHOUT_WEEKS;
     for (const [field, text] of [["title", f.title], ["why", f.why], ["drill", f.drill]] as const) {
-      errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], allowed));
+      errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], allowed, field === "drill" ? "drill" : "record"));
       if (allowed !== FOCUS_TOKENS && /\{weeks(?:Recurred|Counted)\}/.test(text)) {
         errors.push(`${at}.${field} cites weeks, but too few weeks were counted for this item; leave persistence out`);
       }

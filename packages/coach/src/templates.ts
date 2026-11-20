@@ -16,10 +16,12 @@ interface PatternText {
   title: string;
   /** Short noun phrase for the summary, e.g. "pieces left hanging". */
   noun: string;
-  /** The first sentence of `why`: what happened, in the player's numbers (tokens only). */
+  /** The first sentence of `why`: what happened. `WHERE` becomes the games phrase ("in {gamesAffected} of your {games} games"). */
   what: string;
-  /** The second sentence of `why`: why it matters. */
+  /** The second sentence of `why`: why it matters. Reads right for one game or many. */
   matters: string;
+  /** The first sentence of `why` when it did not happen at all this period. `THESE` becomes "these {games} games". */
+  quiet: string;
   drill: Record<DrillLevel, string>;
 }
 
@@ -31,8 +33,9 @@ const TEXT: Record<PatternId, PatternText> = {
   "missed-mate": {
     title: "Checkmates left on the board",
     noun: "missed mates",
-    what: "You had a quick checkmate and played something else in {gamesAffected} of your {games} games.",
+    what: "You had a quick checkmate and played something else WHERE.",
     matters: "A mate on the board ends the game; letting it go gives the opponent another chance.",
+    quiet: "No quick mate slipped away in THESE.",
     drill: {
       plain:
         "Every time the other king looks short of room, stop and try every check before any other move. A few mate-in-one puzzles a day make this a habit.",
@@ -45,8 +48,9 @@ const TEXT: Record<PatternId, PatternText> = {
   "allowed-mate": {
     title: "Quick mates against you",
     noun: "quick mates allowed",
-    what: "A move let the other side force checkmate within a couple of moves in {gamesAffected} of your {games} games.",
+    what: "A move let the other side force checkmate within a couple of moves WHERE.",
     matters: "Nothing else on the board matters if the king falls first.",
+    quiet: "No quick mate got through against you in THESE.",
     drill: {
       plain:
         "Before every move, look at your own king and ask: after my move, can they check me, and what happens then? If a check looks dangerous, deal with it first.",
@@ -59,8 +63,9 @@ const TEXT: Record<PatternId, PatternText> = {
   "hung-piece": {
     title: "Pieces left out in the open",
     noun: "pieces left hanging",
-    what: "A piece was left where it could simply be taken in {gamesAffected} of your {games} games.",
+    what: "A piece was left where it could simply be taken WHERE.",
     matters: "A free piece is often the whole game, and it is the easiest loss to stop.",
+    quiet: "No piece was left hanging in THESE.",
     drill: {
       plain:
         "Before you let go of a piece, ask: after this move, can anything of mine be taken for free? Look at every piece, not only the one you moved.",
@@ -73,8 +78,9 @@ const TEXT: Record<PatternId, PatternText> = {
   "allowed-tactic": {
     title: "Shots left open for the opponent",
     noun: "tactics allowed",
-    what: "A move left the other side a winning tactic, such as a fork, in {gamesAffected} of your {games} games.",
-    matters: "Each one hands over material without the opponent having to work for it.",
+    what: "A move left the other side a winning tactic, such as a fork, WHERE.",
+    matters: "A tactic like that hands over material without the opponent having to work for it.",
+    quiet: "No tactic was left open for the opponent in THESE.",
     drill: {
       plain:
         "After choosing a move, pretend you are your opponent: what is their best check, capture or attack now? If you find one that hurts, choose again.",
@@ -87,8 +93,9 @@ const TEXT: Record<PatternId, PatternText> = {
   "missed-capture": {
     title: "Free material left on the board",
     noun: "missed captures",
-    what: "You could have won material with a capture and played something else in {gamesAffected} of your {games} games.",
+    what: "You could have won material with a capture and played something else WHERE.",
     matters: "Free material is the simplest advantage there is, and it was already sitting there.",
+    quiet: "No free material was left on the board in THESE.",
     drill: {
       plain:
         "Before every move, look at each of your opponent's pieces and ask: is it guarded? If one is not, see if you can take it safely.",
@@ -101,8 +108,9 @@ const TEXT: Record<PatternId, PatternText> = {
   "missed-tactic": {
     title: "Tactics that went unplayed",
     noun: "missed tactics",
-    what: "You had a winning tactic and did not play it in {gamesAffected} of your {games} games.",
-    matters: "Those were games you could have decided on the spot.",
+    what: "You had a winning tactic and did not play it WHERE.",
+    matters: "A shot like that can decide a game on the spot.",
+    quiet: "No winning tactic went unplayed in THESE.",
     drill: {
       plain:
         "When the other side has pieces bunched together or one left unguarded, stop and look for a move that attacks two things at once. A few fork puzzles a day help.",
@@ -115,8 +123,9 @@ const TEXT: Record<PatternId, PatternText> = {
   "thrown-win": {
     title: "Wins that got away",
     noun: "thrown wins",
-    what: "You reached a winning position and did not win in {gamesAffected} of your {games} games.",
-    matters: "The hard part was already done, so these are the cheapest points to win back.",
+    what: "You reached a winning position and did not win WHERE.",
+    matters: "The hard part was already done, so this is the cheapest kind of point to win back.",
+    quiet: "No winning position got away in THESE.",
     drill: {
       plain:
         "Once you are well ahead, play safe: trade pieces, guard your king and check every move for free captures. Slow and sure wins the game.",
@@ -129,8 +138,9 @@ const TEXT: Record<PatternId, PatternText> = {
   "time-trouble": {
     title: "When the clock gets short",
     noun: "mistakes in time trouble",
-    what: "Mistakes came with the clock nearly empty in {gamesAffected} of your {games} games.",
-    matters: "The position was often fine; the clock made the decision.",
+    what: "Mistakes came with the clock nearly empty WHERE.",
+    matters: "The position was not the problem; the clock made the decision.",
+    quiet: "The clock did not cost you in THESE.",
     drill: {
       plain:
         "Spend less time on the first few moves so you have time later. When your clock gets low, keep it simple: protect your pieces and make safe moves.",
@@ -143,8 +153,9 @@ const TEXT: Record<PatternId, PatternText> = {
   "opening-trouble": {
     title: "The same opening hole, again",
     noun: "repeated opening mistakes",
-    what: "The same early position went wrong more than once, in {gamesAffected} of your {games} games.",
+    what: "An early position you have met before went wrong again WHERE.",
     matters: "Fix the position once and it stays fixed in every game that reaches it.",
+    quiet: "The old opening hole stayed shut in THESE.",
     drill: {
       plain:
         "Look up the position from your example games and learn one good move for it. Play it a few times against a friend or a computer until it feels normal.",
@@ -159,8 +170,9 @@ const TEXT: Record<PatternId, PatternText> = {
 const FALLBACK: PatternText = {
   title: "A recurring mistake",
   noun: "recurring mistakes",
-  what: "This mistake turned up in {gamesAffected} of your {games} games.",
+  what: "This mistake turned up WHERE.",
   matters: "It costs more than it looks.",
+  quiet: "This mistake stayed away in THESE.",
   drill: {
     plain: "Before every move, check what your move leaves open and what your opponent can do next.",
     club: "Before every move, list checks, captures and threats for both sides, then choose.",
@@ -172,13 +184,29 @@ function textFor(patternId: string): PatternText {
   return (TEXT as Record<string, PatternText>)[patternId] ?? FALLBACK;
 }
 
+/** "in {gamesAffected} of your {games} games", in the right grammar for one game, some or all. */
+function where(affected: number, games: number): string {
+  if (games <= 1) return "in your only game this period";
+  if (affected >= games) return "in each of your {games} games";
+  if (affected === 1) return "in a single game out of {games}";
+  return "in {gamesAffected} of your {games} games";
+}
+
 /**
- * What happened and why it matters, in two sentences. No weeks, rate or target: the report
- * prints those lines itself, right under the wording.
+ * What happened and why it matters, in two sentences, read from this period's stat for the
+ * pattern. A kept item that stayed away gets a quiet-period line instead. No weeks, rate or
+ * target: the report prints those lines itself, right under the wording.
  */
-function why(item: FocusChoice): string {
+function why(item: FocusChoice, draft: ReportDraft): string {
   const t = textFor(item.patternId);
-  return `${t.what} ${t.matters}`;
+  const stat = draft.current.stats.find((s) => s.patternId === item.patternId);
+  const games = stat?.games ?? draft.current.games;
+  const affected = stat?.gamesAffected ?? 0;
+  if (affected === 0) {
+    const these = games === 0 ? "this period" : games === 1 ? "this game" : "these {games} games";
+    return `${t.quiet.replace("THESE", these)} Keep the habit going so it stays that way.`;
+  }
+  return `${t.what.replace("WHERE", where(affected, games))} ${t.matters}`;
 }
 
 function summary(draft: ReportDraft): string {
@@ -195,7 +223,7 @@ function summary(draft: ReportDraft): string {
       parts.push(`One habit stands out: ${textFor(draft.focus[0]!.patternId).noun}.`);
     } else {
       const [a, b] = draft.focus.map((f) => textFor(f.patternId).noun);
-      parts.push(`Two habits stand out: ${a} and ${b}.`);
+      parts.push(`The habits that stand out: ${a} and ${b}.`);
     }
   }
   const improved = draft.progress.filter((p) => p.verdict === "improved").map((p) => textFor(p.patternId).noun);
@@ -212,7 +240,7 @@ export function templateWording(draft: ReportDraft): WordingText {
     summary: summary(draft),
     focus: draft.focus.map((item) => {
       const t = textFor(item.patternId);
-      return { patternId: item.patternId, title: t.title, why: why(item), drill: t.drill[level] };
+      return { patternId: item.patternId, title: t.title, why: why(item, draft), drill: t.drill[level] };
     }),
   };
 }
