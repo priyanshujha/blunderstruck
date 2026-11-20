@@ -309,12 +309,14 @@ describe("buildPrompt", () => {
     expect(odd).toContain('"overall": "about 1 in 10 of the mistakes overall"');
     expect(user).not.toContain("other mistakes");
     expect(buildPrompt(d).system).not.toContain("other mistakes");
+    // F1 here has no inGame (older data): it is labelled as what the move allowed, and nothing more.
     expect(a.examples[0]).toEqual({
       played: "Qd2 (your queen d1-d2)",
-      punish: "Ne4+ (their knight f6-e4, check), Ke1 (your king f2-e1), Nxd2 (their knight e4-d2, takes your queen), Kxd2 (your king e1-d2, takes their knight)",
-      opponentFoundIt: true,
-      hits: "your king f2, your queen d2",
-      lost: "your queen d2",
+      allowed: {
+        line: "Ne4+ (their knight f6-e4, check), Ke1 (your king f2-e1), Nxd2 (their knight e4-d2, takes your queen), Kxd2 (your king e1-d2, takes their knight)",
+        hits: "your king f2, your queen d2",
+        wouldCost: "your queen d2, for nothing",
+      },
       better: "Re1 (your rook h1-e1)",
       betterReason: { kind: "covers-square", says: "it covers e4, so the punishing move no longer works there" },
       fact: "allowed-tactic evidence text",
@@ -343,14 +345,95 @@ describe("buildPrompt", () => {
     expect(items.properties.steps).toMatchObject({ type: "array", items: { required: ["blindSpot", "text"] } });
   });
 
-  it("labels a piece the opponent did not win as couldHaveLost, and says how to word it", () => {
+  /*
+   * After 1.Qc1 the engine answers Ne2+ Kh1 Nxc1, winning the queen; the game went 1...Ne2+
+   * 2.Kh1 Rad8 and the queen was never taken. In a second game the same mistake was followed
+   * by Qd2 Rxd2: a different move took the queen.
+   */
+  const QC1 = mv("Qc1", "d2c1", "queen", "white");
+  const ALLOWED = [mv("Ne2+", "f4e2", "knight", "black"), mv("Kh1", "g1h1", "king", "white"), mv("Nxc1", "e2c1", "knight", "black", { captured: "queen" })];
+  const qc1Story = (inGame: ExampleStory["inGame"]): ExampleStory => ({
+    played: QC1,
+    punish: ALLOWED,
+    replyFound: true,
+    better: [mv("Qe3", "d2e3", "queen", "white")],
+    targets: [
+      { square: "g1", piece: "king", color: "white" },
+      { square: "c1", piece: "queen", color: "white" },
+    ],
+    lost: { square: "c1", piece: "queen", color: "white" },
+    lostFor: "knight",
+    ...(inGame ? { inGame } : {}),
+    gain: -6,
+    winPctBefore: 60,
+    winPctAfter: 10,
+    depth: 18,
+  });
+  const withStory = (story: ExampleStory) => {
     const d = storiedDraft("x", WORKED);
-    d.focus[0]!.examples[0]!.story = { ...F1_STORY, replyFound: false };
-    const { system, user } = buildPrompt(d);
-    const data = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(user)![1]!);
-    expect(data.focus[0].examples[0]).toMatchObject({ opponentFoundIt: false, couldHaveLost: "your queen d2" });
-    expect(data.focus[0].examples[0].lost).toBeUndefined();
-    expect(system).toContain("When it is false they missed it, and the piece is given as couldHaveLost instead of lost");
-    expect(system).toBe(buildPrompt(storiedDraft("y", WORKED)).system);
+    d.focus[0]!.examples = [{ ...d.focus[0]!.examples[0]!, played: "Qc1", story }];
+    return d;
+  };
+  const exampleOf = (d: ReportDraft) => JSON.parse(/```json\n([\s\S]*?)\n```/.exec(buildPrompt(d).user)![1]!).focus[0].examples[0];
+
+  it("tells what the move allowed apart from what the game did, when nothing was lost", () => {
+    const d = withStory(
+      qc1Story({ moves: [mv("Ne2+", "f4e2", "knight", "black"), mv("Kh1", "g1h1", "king", "white"), mv("Rad8", "a8d8", "rook", "black")], net: 0, ended: false }),
+    );
+    const ex = exampleOf(d);
+    expect(ex.allowed).toEqual({
+      line: "Ne2+ (their knight f4-e2, check), Kh1 (your king g1-h1), Nxc1 (their knight e2-c1, takes your queen)",
+      hits: "your king g1, your queen c1",
+      wouldCost: "your queen c1, for their knight",
+    });
+    expect(ex.inGame).toEqual({
+      moves: "Ne2+ (their knight f4-e2, check), Kh1 (your king g1-h1), Rad8 (their rook a8-d8)",
+      lost: "nothing",
+      material: "level",
+    });
+    expect(JSON.stringify(ex)).not.toMatch(/opponentFoundIt|"lost": "your/);
+    // The moves the game went on with may be named, as may the engine's line.
+    const answer = (why: string) =>
+      JSON.stringify({
+        summary: "Over {games} games you made {mistakesPerGame} mistakes a game.",
+        focus: [
+          { patternId: "allowed-tactic", title: "Checks", why, drill: "Look at their checks.", steps: WORKED.a.map((b) => ({ blindSpot: b.id, text: "Look at their checks first." })) },
+          { patternId: "missed-tactic", title: "Checks", why: "A check went unplayed.", drill: "Look at your checks.", steps: [{ blindSpot: "best-check", text: "Look at your checks first." }] },
+        ],
+      });
+    expect(parseWording(answer("Qc1 allowed Ne2+ and Nxc1; they played Rad8 instead and you got away with it."), d)).toMatchObject({ ok: true });
+    expect(parseWording(answer("After Qc1 they played Rd7."), d).ok).toBe(false);
+  });
+
+  it("says which piece was really lost when a different move took it", () => {
+    const d = withStory(
+      qc1Story({
+        moves: [mv("Ne2+", "f4e2", "knight", "black"), mv("Kh1", "g1h1", "king", "white"), mv("Rad8", "a8d8", "rook", "black"), mv("Qd2", "c1d2", "queen", "white"), mv("Rxd2", "d8d2", "rook", "black", { captured: "queen" })],
+        net: 9,
+        lost: { square: "d2", piece: "queen", color: "white" },
+        ended: false,
+      }),
+    );
+    expect(exampleOf(d).inGame).toEqual({
+      moves: "Ne2+ (their knight f4-e2, check), Kh1 (your king g1-h1), Rad8 (their rook a8-d8), Qd2 (your queen c1-d2), Rxd2 (their rook d8-d2, takes your queen)",
+      lost: "your queen d2, for nothing",
+      material: "9 pawns' worth down",
+    });
+    const ex = withStory(qc1Story({ moves: [], net: 2, lostFor: "knight", exchange: true, lost: { square: "e4", piece: "rook", color: "white" }, ended: true }));
+    expect(exampleOf(ex).inGame).toEqual({
+      moves: "none",
+      lost: "your rook e4, for their knight",
+      exchange: "you gave a rook for a knight or bishop",
+      material: "2 pawns' worth down",
+      gameEnded: true,
+    });
+  });
+
+  it("explains allowed and inGame in the prefix, the same for every player", () => {
+    const { system } = buildPrompt(storiedDraft("x", WORKED));
+    expect(system).toContain("Describe as having happened only what inGame shows.");
+    expect(system).toContain("Anything in allowed that is not in inGame is what the move allowed or could have cost");
+    expect(system).not.toMatch(/opponentFoundIt|couldHaveLost/);
+    expect(system).toBe(buildPrompt(storiedDraft("y", { a: [], b: [spot("best-check")] })).system);
   });
 });

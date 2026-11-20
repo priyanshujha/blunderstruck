@@ -441,7 +441,8 @@ export interface ExampleMoves {
 
 /**
  * The moves and squares of an item's examples. With a story: the move played, the punishing
- * line and the better line, their from and to squares, and the pieces hit, behind or lost.
+ * line, the moves the game went on with (`inGame`) and the better line, their from and to
+ * squares, and the pieces hit, behind or lost.
  * An example without a story gives its move played and best move, the squares of its
  * position's pieces, and the moves and squares its fact names.
  */
@@ -463,8 +464,8 @@ export function exampleMoves(examples: readonly FocusExample[]): ExampleMoves {
   for (const e of examples) {
     const st = e.story;
     if (st) {
-      for (const m of [st.played, ...st.punish, ...st.better]) addMove(m);
-      for (const p of [...st.targets, st.rear, st.lost]) if (p) squares.add(p.square);
+      for (const m of [st.played, ...st.punish, ...st.better, ...(st.inGame?.moves ?? [])]) addMove(m);
+      for (const p of [...st.targets, st.rear, st.lost, st.inGame?.lost]) if (p) squares.add(p.square);
       if (st.betterReason?.square) squares.add(st.betterReason.square);
     } else {
       // An example from before stories is shown with its position and fact, so its pieces and
