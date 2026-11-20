@@ -378,6 +378,19 @@ export function storeConformance(make: () => Promise<Store>): void {
         "lichess/rapid/2026-11-19T00:00:00.000Z",
       ]);
       expect(await store.tracks()).toHaveLength(1);
+
+      // Past one 500-row page, across several tracks, written out of order.
+      const many: Track[] = [rapid, { ...TRACK, timeClass: "bullet" }, { ...chess, timeClass: "rapid" }];
+      const base = Date.parse("2020-01-06T00:00:00.000Z");
+      for (let w = 169; w >= 0; w -= 1) {
+        for (const t of many) await store.putReport(fixtureReport(new Date(base + w * 7 * DAY).toISOString(), 0, t));
+      }
+      const streamed = (await collect(store.allReports())).map(
+        (r) => `${r.track.platform}:${r.track.username.toLowerCase()}:${r.track.timeClass}|${r.periodEnd}`,
+      );
+      expect(streamed).toHaveLength(4 + 3 * 170);
+      expect(new Set(streamed).size).toBe(streamed.length);
+      expect(streamed).toEqual([...streamed].sort());
     });
   });
 
