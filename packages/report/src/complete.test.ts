@@ -6,7 +6,7 @@ import type { Store } from "@blunderstruck/store";
 import { describe, expect, it } from "vitest";
 import { AnalysisAborted } from "./analyse";
 import { buildDraft } from "./assemble";
-import { completeReport, LOST_RACE_WARNING } from "./complete";
+import { completeReport } from "./complete";
 import { runReport, type ReportDeps } from "./run";
 import {
   AS_OF,
@@ -482,26 +482,26 @@ describe("another run storing first", () => {
   }
 
   for (const result of ["stale", "conflict"] as const) {
-    it(`on "${result}" in the first pass: no rows, no onReport, a warning, and the stored report`, async () => {
+    it(`on "${result}" in the first pass: no rows, no onReport, no warning, lostRace and the stored report`, async () => {
       const h = harness(games(20, 0.5, 29));
       racing(h, result, 0);
       const warnings: string[] = [];
       const out = await runReport(h.deps({ onWarning: (m) => warnings.push(m) }), opts());
-      expect(out.status).toBe("unchanged");
+      expect(out).toMatchObject({ status: "unchanged", lostRace: true });
       expect(out.report!.summary).toBe("Stored by the other run.");
-      expect(warnings).toEqual([LOST_RACE_WARNING]);
+      expect(warnings).toEqual([]);
       expect(h.reported).toEqual([]);
       expect(await h.store.listPeriodStats(trackKey(TRACK), settingsKey(out.report!.settings))).toEqual([]);
     });
 
-    it(`on "${result}" when completing: no rows, no onReport for it, a warning`, async () => {
+    it(`on "${result}" when completing: no rows, no onReport for it, no warning, lostRace`, async () => {
       const h = harness(games(400, 0.5, 29));
       racing(h, result, 1, false);
       const warnings: string[] = [];
       const out = await runReport(h.deps({ onWarning: (m) => warnings.push(m) }), opts());
-      expect(out.status).toBe("unchanged");
+      expect(out).toMatchObject({ status: "unchanged", lostRace: true });
       expect(out.report).toMatchObject({ revision: 0 });
-      expect(warnings).toEqual([LOST_RACE_WARNING]);
+      expect(warnings).toEqual([]);
       expect(h.reported.map((x) => x.report.revision)).toEqual([0]);
       expect(await h.store.listPeriodStats(trackKey(TRACK), settingsKey(out.report!.settings))).toEqual([]);
     });
@@ -520,5 +520,25 @@ describe("games cut by --max-games", () => {
     expect(next.coverage).toMatchObject({ total: 20, complete: true });
     expect(next.comparison!.games).toBe(200);
     expect(next.weeks.reduce((n, w) => n + w.games, 0)).toBe(220);
+  });
+});
+
+describe("games before the track's first period", () => {
+  it("are never analysed or counted by later reports", async () => {
+    const period = games(30, 0.5, 29.5);
+    const older = games(10, 31, 41);
+    const h = harness([...period, ...older]);
+    const first = (await runReport(h.deps(), opts())).report!;
+    h.evaluator.positions = 0;
+    h.available.push(...games(12, 0.5, 6.5, { asOf: WEEK_LATER }));
+    const next = (await runReport(h.deps(), opts({ asOf: WEEK_LATER }))).report!;
+    expect(h.evaluator.positions).toBe(12 * POSITIONS_PER_GAME);
+    const analysed = await h.store.analysedIds(
+      older.map((g) => g.id),
+      { analysisVersion: first.settings.analysisVersion, depth: 12 },
+    );
+    expect(analysed.size).toBe(0);
+    expect(next.weeks.reduce((n, w) => n + w.games, 0)).toBe(42);
+    expect(next.comparison!.games).toBe(30);
   });
 });

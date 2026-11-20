@@ -20,9 +20,6 @@ export interface CompleteOptions {
   periodEnd?: string;
 }
 
-/** Told to `onWarning` when another run stored this period's report (or an overlapping one) first. */
-export const LOST_RACE_WARNING = "another run stored a report for this period first";
-
 /**
  * Complete every unfinished report of the track, oldest period first. Provisional reports are
  * always completed; sample-only ones only with `includeSampleOnly` (a run without
@@ -52,8 +49,8 @@ export async function completeUnfinished(
  * (provisional, or stopped after the sample on request): analyse every game it still needs,
  * one at a time in `(playedAt, id)` order, then store the next revision with
  * `coverage.complete = true`, its weekly rows, and call `onReport`. Returns undefined when that
- * report is complete or missing, or when another run stored the period first (then
- * `onWarning` gets `LOST_RACE_WARNING` and nothing else is written).
+ * report is complete or missing, or when another run stored the period first (then nothing
+ * else is written).
  *
  * Rules:
  * - A sample-only report keeps `sampleOnly: true` in the store until the completed revision
@@ -154,10 +151,7 @@ export async function completeReport(
       ? { ...written, notes: [...written.notes, "model-failed" as const] }
       : written;
 
-  if ((await store.putReport(next)) !== "stored") {
-    deps.onWarning?.(LOST_RACE_WARNING);
-    return undefined;
-  }
+  if ((await store.putReport(next)) !== "stored") return undefined;
   await storeWeekRows(store, next);
   deps.onReport?.(next, { pending: pending.length });
   return next;

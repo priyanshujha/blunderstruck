@@ -16,7 +16,7 @@ import { FETCH_MAX, MIN_REPORT_GAMES, SAMPLE_GAMES, selectGames } from "@blunder
 import type { Store } from "@blunderstruck/store";
 import { analyseGames, currentSettings, engineNameWithoutStarting, lazyEngine } from "./analyse";
 import { buildDraft, carryWording, pendingFor, reportGames, storeWeekRows } from "./assemble";
-import { completeReport, completeUnfinished, LOST_RACE_WARNING } from "./complete";
+import { completeReport, completeUnfinished } from "./complete";
 import {
   byPlayedAtThenId,
   checkAsOf,
@@ -70,6 +70,8 @@ export interface ReportOutcome {
   pending: number;
   /** The player's other tracks on this platform, when there are any (the run used `report.track`). */
   otherTracks?: Track[];
+  /** Another run stored a report for this period first; `report` is the stored latest one. */
+  lostRace?: true;
 }
 
 /** Run the weekly loop for one player: resume anything unfinished, then fetch, analyse, judge and word. */
@@ -197,7 +199,6 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
 
     const settings = currentSettings(opts.depth, engineName);
     const lostRace = async (): Promise<ReportOutcome> => {
-      // completeReport warns on its own; the first pass's store is checked here.
       const latest = await store.latestReport(track!);
       return {
         status: "unchanged",
@@ -206,6 +207,7 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
         needed: 0,
         pending: await pendingCount(store, latest),
         ...others,
+        lostRace: true,
       };
     };
     const built = await buildDraft({
@@ -220,10 +222,7 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
     const { draft, pending, carriedFrom } = built;
     const written = await writeReport(draft, deps.provider, undefined, { onModelError: deps.onWarning });
     const report = carriedFrom ? carryWording(written, carriedFrom) : written;
-    if ((await store.putReport(report)) !== "stored") {
-      deps.onWarning?.(LOST_RACE_WARNING);
-      return lostRace();
-    }
+    if ((await store.putReport(report)) !== "stored") return lostRace();
     await storeWeekRows(store, report);
     deps.onReport?.(report, { pending: pending.length });
 

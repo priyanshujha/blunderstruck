@@ -79,8 +79,12 @@ async function periodGames(store: Store, ids: readonly string[]): Promise<GameRe
  * been analysed since. Such games are never analysed or counted again.
  */
 export async function cutGameIds(store: Store, track: Track, periodEnd: string): Promise<Set<string>> {
+  return cutFrom(store, latestRevisions(await store.reports(track)), periodEnd);
+}
+
+async function cutFrom(store: Store, reports: readonly WeeklyReport[], periodEnd: string): Promise<Set<string>> {
   const cut = new Set<string>();
-  for (const r of latestRevisions(await store.reports(track))) {
+  for (const r of reports) {
     if (ms(r.periodEnd) === ms(periodEnd) || r.coverage.total >= r.gameIds.length) continue;
     const kept = new Set(cappedOf(await periodGames(store, r.gameIds), r.coverage.total, r.periodEnd).map((g) => g.id));
     for (const id of r.gameIds) if (!kept.has(id)) cut.add(id);
@@ -92,7 +96,8 @@ export async function cutGameIds(store: Store, track: Track, periodEnd: string):
  * Collect the games a report needs from the store: the period (`periodIds`, capped to `total`
  * with `selectGames`), the comparison window (weekly reports only) and the six weeks ending at
  * `periodEnd` (weekly reports only; a first report's weeks hold only its own games). Games of the period never count in the comparison window too, and games that
- * any report (this one or another) left out with `--max-games` never count. `pending` lists
+ * any report (this one or another) left out with `--max-games` never count, nor games played
+ * before the track's earliest period start. `pending` lists
  * those with no analysis matching `key`.
  */
 export async function reportGames(input: {
@@ -111,10 +116,15 @@ export async function reportGames(input: {
   const capped = cappedOf(period, input.total, periodEnd);
   const sample = selectGames(capped, SAMPLE_GAMES, periodEnd);
   const inPeriod = new Set(input.periodIds);
-  const cut = await cutGameIds(store, track, periodEnd);
+  const stored = latestRevisions(await store.reports(track));
+  const cut = await cutFrom(store, stored, periodEnd);
+  // A track never uses a game played before its earliest period start (stored, or this first report's).
+  const starts = [...stored.map((r) => ms(r.periodStart)), ...(input.kind === "first" ? [ms(periodStart)] : [])];
+  const floor = starts.length > 0 ? Math.min(...starts) : Number.NEGATIVE_INFINITY;
 
   const q = { platform: track.platform, username: track.username, timeClass: track.timeClass };
-  const rated = (gs: GameRecord[]) => gs.filter((g) => g.rated && !inPeriod.has(g.id) && !cut.has(g.id));
+  const rated = (gs: GameRecord[]) =>
+    gs.filter((g) => g.rated && !inPeriod.has(g.id) && !cut.has(g.id) && ms(g.playedAt) >= floor);
   let comparison: GameRecord[] = [];
   if (input.kind === "weekly") {
     const w = comparisonWindow(periodStart);

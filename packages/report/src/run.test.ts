@@ -10,7 +10,6 @@ import { AS_OF, failingProvider, game, games, harness, opts, PLAYER, stubEvaluat
 vi.mock("./complete", () => ({
   completeReport: vi.fn(async () => undefined),
   completeUnfinished: vi.fn(async () => undefined),
-  LOST_RACE_WARNING: "another run stored a report for this period first",
 }));
 const complete = vi.mocked(completeReport);
 const unfinished = vi.mocked(completeUnfinished);
