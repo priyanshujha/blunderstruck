@@ -68,6 +68,8 @@ export interface ReportOutcome {
   needed: number;
   /** Games still waiting for analysis. */
   pending: number;
+  /** The player's other tracks on this platform, when there are any (the run used `report.track`). */
+  otherTracks?: Track[];
 }
 
 /** Run the weekly loop for one player: resume anything unfinished, then fetch, analyse, judge and word. */
@@ -96,7 +98,7 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
     let reports: WeeklyReport[] = [];
     if (chosen && !chosen.isNew) {
       checkAsOf(await store.reports(chosen.track), asOf);
-      if (!opts.sampleOnly) resumed = await completeReport(shared, chosen.track);
+      if (!opts.sampleOnly) resumed = await completeReport(shared, chosen.track, { depth: opts.depth });
       reports = await store.reports(chosen.track);
     }
 
@@ -105,6 +107,7 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
       max: FETCH_MAX,
     });
     const mine = reportableGames(fetched, opts.username, asOf);
+    const others = chosen && chosen.others.length > 0 ? { otherTracks: chosen.others } : {};
 
     let track = chosen?.track;
     if (!track) {
@@ -124,6 +127,7 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
         newGames: plan.newGames,
         needed: plan.status === "waiting" ? plan.needed : 0,
         pending: await pendingCount(store, latest),
+        ...others,
       };
     }
 
@@ -206,13 +210,14 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
     deps.onReport?.(report, { pending: pending.length });
 
     let final = report;
-    if (!opts.sampleOnly && pending.length > 0) final = (await completeReport(shared, track)) ?? report;
+    if (!opts.sampleOnly && pending.length > 0) final = (await completeReport(shared, track, { depth: opts.depth })) ?? report;
     return {
       status: "new",
       report: final,
       newGames: plan.games.length,
       needed: 0,
       pending: final === report ? pending.length : await pendingCount(store, final),
+      ...others,
     };
   } finally {
     await engine.quit();
