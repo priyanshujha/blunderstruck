@@ -19,7 +19,8 @@ export interface LineLoss {
   for?: PieceRole;
   /**
    * The exchange: a rook of `side` went for a knight or bishop (neither cancelled by a trade)
-   * and `side` is down for it. The one definition of "the exchange".
+   * and `side` is down at least `HUNG_MIN_NET` for it (nothing won back). The one definition
+   * of "the exchange"; a rook for a minor piece and a pawn is a pawn count, not the exchange.
    */
   exchange: boolean;
 }
@@ -87,7 +88,7 @@ export function lineLoss(fen: string, line: readonly string[], side: Color): Lin
   const gotFor = unmatched.length === 1 ? unmatched[0] : undefined;
   const named =
     !!top && unmatched.length <= 1 && net >= HUNG_MIN_NET && (!!gotFor || PIECE_VALUES[top.role] <= 2 * net);
-  const exchange = net >= 1 && open.some((l) => l.role === "rook") && unmatched.some((w) => MINORS.has(w.role));
+  const exchange = net >= HUNG_MIN_NET && open.some((l) => l.role === "rook") && unmatched.some((w) => MINORS.has(w.role));
   return {
     net,
     ...(named ? { piece: { square: top!.square, piece: top!.role, color: side } } : {}),

@@ -378,7 +378,7 @@ describe("buildPrompt", () => {
 
   it("tells what the move allowed apart from what the game did, when nothing was lost", () => {
     const d = withStory(
-      qc1Story({ moves: [mv("Ne2+", "f4e2", "knight", "black"), mv("Kh1", "g1h1", "king", "white"), mv("Rad8", "a8d8", "rook", "black")], net: 0, ended: false }),
+      qc1Story({ moves: [mv("Ne2+", "f4e2", "knight", "black"), mv("Kh1", "g1h1", "king", "white"), mv("Rad8", "a8d8", "rook", "black")], ended: false }),
     );
     const ex = exampleOf(d);
     expect(ex.allowed).toEqual({
@@ -386,10 +386,10 @@ describe("buildPrompt", () => {
       hits: "your king g1, your queen c1",
       wouldCost: "your queen c1, for their knight",
     });
+    // Not paid: the next moves only, no cost either way.
     expect(ex.inGame).toEqual({
       moves: "Ne2+ (their knight f4-e2, check), Kh1 (your king g1-h1), Rad8 (their rook a8-d8)",
-      lost: "nothing",
-      material: "level",
+      paid: false,
     });
     expect(JSON.stringify(ex)).not.toMatch(/opponentFoundIt|"lost": "your/);
     // The moves the game went on with may be named, as may the engine's line.
@@ -401,7 +401,7 @@ describe("buildPrompt", () => {
           { patternId: "missed-tactic", title: "Checks", why: "A check went unplayed.", drill: "Look at your checks.", steps: [{ blindSpot: "best-check", text: "Look at your checks first." }] },
         ],
       });
-    expect(parseWording(answer("Qc1 allowed Ne2+ and Nxc1; they played Rad8 instead and you got away with it."), d)).toMatchObject({ ok: true });
+    expect(parseWording(answer("Qc1 allowed Ne2+ and Nxc1, which could have cost your queen; they played Rad8 instead."), d)).toMatchObject({ ok: true });
     expect(parseWording(answer("After Qc1 they played Rd7."), d).ok).toBe(false);
   });
 
@@ -409,6 +409,7 @@ describe("buildPrompt", () => {
     const d = withStory(
       qc1Story({
         moves: [mv("Ne2+", "f4e2", "knight", "black"), mv("Kh1", "g1h1", "king", "white"), mv("Rad8", "a8d8", "rook", "black"), mv("Qd2", "c1d2", "queen", "white"), mv("Rxd2", "d8d2", "rook", "black", { captured: "queen" })],
+        paid: true,
         net: 9,
         lost: { square: "d2", piece: "queen", color: "white" },
         ended: false,
@@ -416,12 +417,14 @@ describe("buildPrompt", () => {
     );
     expect(exampleOf(d).inGame).toEqual({
       moves: "Ne2+ (their knight f4-e2, check), Kh1 (your king g1-h1), Rad8 (their rook a8-d8), Qd2 (your queen c1-d2), Rxd2 (their rook d8-d2, takes your queen)",
+      paid: true,
       lost: "your queen d2, for nothing",
       material: "9 pawns' worth down",
     });
-    const ex = withStory(qc1Story({ moves: [], net: 2, lostFor: "knight", exchange: true, lost: { square: "e4", piece: "rook", color: "white" }, ended: true }));
+    const ex = withStory(qc1Story({ moves: [], paid: true, net: 2, lostFor: "knight", exchange: true, lost: { square: "e4", piece: "rook", color: "white" }, ended: true }));
     expect(exampleOf(ex).inGame).toEqual({
       moves: "none",
+      paid: true,
       lost: "your rook e4, for their knight",
       exchange: "you gave a rook for a knight or bishop",
       material: "2 pawns' worth down",
@@ -429,11 +432,18 @@ describe("buildPrompt", () => {
     });
   });
 
+  it("reads a stored inGame without paid as unpaid and shows no cost", () => {
+    const stored = qc1Story({ moves: [mv("Ne2+", "f4e2", "knight", "black")], net: 9, lost: { square: "c1", piece: "queen", color: "white" }, ended: false });
+    expect(exampleOf(withStory(stored)).inGame).toEqual({ moves: "Ne2+ (their knight f4-e2, check)", paid: false });
+  });
+
   it("explains allowed and inGame in the prefix, the same for every player", () => {
     const { system } = buildPrompt(storiedDraft("x", WORKED));
-    expect(system).toContain("Describe as having happened only what inGame shows.");
-    expect(system).toContain("Anything in allowed that is not in inGame is what the move allowed or could have cost");
-    expect(system).not.toMatch(/opponentFoundIt|couldHaveLost/);
+    expect(system).toContain("Otherwise say only what the move allowed or could have cost");
+    expect(system).toContain("you may say the opponent did not play the punishing move, but nothing about how the game turned out after it");
+    expect(system).not.toMatch(/opponentFoundIt|couldHaveLost|got away/);
+    expect(system).toContain("inGame is only the next few moves the game really played, not a verdict on how the game went.");
+    expect(system).toContain('State a cost as fact (\"it cost your queen\") only for an example whose inGame says paid is true.'.replace(/\\"/g, '"'));
     expect(system).toBe(buildPrompt(storiedDraft("y", { a: [], b: [spot("best-check")] })).system);
   });
 });

@@ -295,7 +295,11 @@ function summary(draft: ReportDraft): string {
         : games === 1
           ? "Just a single game in this period, so here are the numbers on their own."
           : "Only {games} games in this period, so here are the numbers on their own.";
-    parts.push(`${opening} Focus items start once there are enough games to go on.`);
+    const later =
+      draft.kind === "first"
+        ? "There are not enough games yet to pick something to work on; that starts once you have played a few more."
+        : "That is not enough games to pick something to work on this time; it starts again once you have played a few more.";
+    parts.push(`${opening} ${later}`);
   } else {
     parts.push("Over {games} games you made {mistakesPerGame} mistakes a game.");
     if (draft.focus.length === 0) {

@@ -159,8 +159,8 @@ const EXAMPLE = {
 
 /** The input the worked example answers, shortened. */
 const EXAMPLE_INPUT = [
-  "- allowed-tactic, blind spots answer-check then moved-piece-lost. Example: played Qd2 (your queen d1-d2); allowed Ne4+ (their knight f6-e4, check) Ke1 Nxd2 (takes your queen) Kxd2, hitting your king f2 and your queen d2, which would cost your queen d2 for their knight; inGame the same moves were played and the queen was lost for the knight; better Re1, which covers e4.",
-  "- missed-tactic, blind spot best-check. Example: played h6 (your pawn h7-h6); inGame nothing was lost; better Ne4+ (your knight f6-e4, check) Ke1 Nxd2 (takes their queen) Kxd2, which wins their queen for your knight.",
+  "- allowed-tactic, blind spots answer-check then moved-piece-lost. Example: played Qd2 (your queen d1-d2); allowed Ne4+ (their knight f6-e4, check) Ke1 Nxd2 (takes your queen) Kxd2, hitting your king f2 and your queen d2, which would cost your queen d2 for their knight; inGame the same moves were played, paid true, the queen lost for the knight; better Re1, which covers e4.",
+  "- missed-tactic, blind spot best-check. Example: played h6 (your pawn h7-h6); better Ne4+ (your knight f6-e4, check) Ke1 Nxd2 (takes their queen) Kxd2, which wins their queen for your knight.",
 ].join("\n");
 
 function bandLines(): string {
@@ -184,7 +184,7 @@ const SYSTEM = [
   "- Each focus item comes with why code chose it: kind \"new\" (chosen for the first time), \"kept\" (still on the list from earlier reports), \"rose\" (it climbed into the top picks), \"returned\" (worked on before, now back). Score, recentCost and severity are win-percentage points; chronicity is how steadily it came back. Use these to choose what to stress, never to quote.",
   "- Each focus item comes with up to two examples from the player's games, each with its story, computed by the engine: the move played, the punishing line (the opponent's best answer, move by move), the pieces it hit, the piece lost, the better line and why it was better, plus a short fact. An example without a story is given as a FEN position instead, with the move played and the engine's best move. Do not invent positions, moves or facts that are not given.",
   "- The page shows each example's moves as sentences and boards of its own, so do not retell the lines; naming one move to make a point is plenty.",
-  "- Each story separates what the move allowed from what happened. allowed is the engine's line after the move and what it would have cost (wouldCost); inGame is what was actually played next in the game and what it really cost. Describe as having happened only what inGame shows. Anything in allowed that is not in inGame is what the move allowed or could have cost (\"it allowed Ne4+, which would have won your queen\", \"you got away with it\"), never something that was lost. A story without inGame tells you only what the move allowed, so do not say what happened next in that game.",
+  "- Each story separates what the move allowed from what was played. allowed is the engine's line after the move and what it would have cost (wouldCost). inGame is only the next few moves the game really played, not a verdict on how the game went. paid is true only when the game took what the move allowed; then inGame also says what was lost. State a cost as fact (\"it cost your queen\") only for an example whose inGame says paid is true. Otherwise say only what the move allowed or could have cost (\"it allowed Ne4+, which could have cost your queen\"); you may say the opponent did not play the punishing move, but nothing about how the game turned out after it. A story without inGame tells you only what the move allowed, so do not say what happened next in that game.",
   "- Earlier focus items may come with a verdict: \"improved\", \"flat\" (no clear change), \"worse\" or \"insufficient-data\" (not enough games yet). Mention an improvement warmly in the summary. Do not call \"flat\" or \"insufficient-data\" a failure.",
   "- Directly under your text, the program prints for each focus item a frequency line (in how many of the player's games it happened, and roughly how often), its goal, and a line with how many recent weeks it came back in (only when at least three weeks were counted). Do not restate them: the why says what happened and why it matters, and the drill says what to do.",
   "- So do not open the why with how many games were affected, and do not restate that count anywhere: the frequency line already says it. Spend the why on what the examples and the blind spots show: the move that let it happen, what it cost, and the thing the occurrences had in common.",
@@ -302,7 +302,6 @@ function reasonWords(r: BetterReason): { kind: BetterReason["kind"]; says: strin
   }
 }
 
-/** An example's story, compactly, in words and notation. */
 /** "your queen d2, for their knight". */
 function costWords(lost: StoryPiece, lostFor: string | undefined, me: MoveDetail["color"]): string {
   return `${pieceWords(lost, me)}${lostFor ? `, for their ${lostFor}` : ", for nothing"}`;
@@ -317,7 +316,8 @@ function materialWords(net: number): string {
 
 /**
  * An example's story, compactly, in words and notation: what the move allowed (the engine's
- * line and what it would cost) apart from what the game actually did next (`inGame`).
+ * line and what it would cost) apart from the next moves the game really played (`inGame`),
+ * which carry a cost only when the game took what the move allowed (`paid`).
  */
 function storyWords(st: ExampleStory): Record<string, unknown> {
   const me = st.played.color;
@@ -329,12 +329,15 @@ function storyWords(st: ExampleStory): Record<string, unknown> {
     ...(st.lost ? { wouldCost: costWords(st.lost, st.lostFor, me) } : {}),
   };
   const g = st.inGame;
+  // Only a paid example carries what was lost: the next moves alone say nothing about the cost.
+  const paid = g?.paid === true;
   const inGame = g
     ? {
         moves: g.moves.length > 0 ? line(g.moves) : "none",
-        lost: g.lost ? costWords(g.lost, g.lostFor, me) : "nothing",
-        ...(g.exchange ? { exchange: "you gave a rook for a knight or bishop" } : {}),
-        material: materialWords(g.net),
+        paid,
+        ...(paid ? { lost: g.lost ? costWords(g.lost, g.lostFor, me) : "no piece" } : {}),
+        ...(paid && g.exchange ? { exchange: "you gave a rook for a knight or bishop" } : {}),
+        ...(paid && g.net !== undefined ? { material: materialWords(g.net) } : {}),
         ...(g.ended ? { gameEnded: true } : {}),
       }
     : undefined;

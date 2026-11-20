@@ -373,7 +373,8 @@ describe("storyOf: what the game actually played", () => {
     expect(s.actualReply).toMatchObject({ san: "Nxe4", captured: "queen" });
     expect(s.followed).toBe(0);
     expect(s.replyFound).toBe(false);
-    expect(s.inGame).toMatchObject({ net: 9, lost: { square: "e4", piece: "queen", color: "black" }, ended: true });
+    // Another piece took the queen on its square at once: the game took what the move allowed.
+    expect(s.inGame).toMatchObject({ paid: true, net: 9, lost: { square: "e4", piece: "queen", color: "black" }, ended: true });
     expect(s.inGame?.moves.map((m) => m.san)).toEqual(["Nxe4"]);
     expect(s.inGame?.lostFor).toBeUndefined();
   });
@@ -397,7 +398,7 @@ describe("storyOf: what the game actually played", () => {
     // In the game Black won a queen for the knight: nothing lost, and up material.
     expect(s.inGame?.moves.map((m) => m.san)).toEqual(["Qxe5", "dxe5"]);
     expect(s.inGame?.lost).toBeUndefined();
-    expect(s.inGame?.net).toBe(-6);
+    expect(s.inGame).toMatchObject({ paid: true, net: -6, ended: true });
   });
 
   describe("1.Qc1? Ne2+ Kh1 Nxc1, as far as the game went", () => {
@@ -418,15 +419,15 @@ describe("storyOf: what the game actually played", () => {
       expect(s.lostFor).toBe("knight");
       expect(s.followed).toBe(2);
       expect(s.replyFound).toBe(true);
-      expect(s.inGame).toEqual({ moves: expect.any(Array), net: 0, ended: true });
-      expect(s.inGame?.moves.map((m) => m.san)).toEqual(["Ne2+", "Kh1", "Rad8"]);
+      expect(s.inGame).toEqual({ moves: expect.any(Array), ended: false, paid: false });
+      expect(s.inGame?.moves.map((m) => m.san)).toEqual(["Ne2+"]);
     });
 
     it("follows the whole line", async () => {
       const g = await fixtureGame({ pgn: fenPgn(FEN, "1. Qc1 Ne2+ 2. Kh1 Nxc1 3. Rxc1 Rad8"), as: "white", evals: EVALS });
       const s = story(g, 1);
       expect(s.followed).toBe(4);
-      expect(s.inGame).toMatchObject({ net: 6, lost: QUEEN, lostFor: "knight", ended: false });
+      expect(s.inGame).toMatchObject({ paid: true, net: 6, lost: QUEEN, lostFor: "knight", ended: false });
       expect(s.inGame?.moves.map((m) => m.san)).toEqual(["Ne2+", "Kh1", "Nxc1", "Rxc1"]);
     });
 
@@ -437,7 +438,7 @@ describe("storyOf: what the game actually played", () => {
       expect(s.replyFound).toBe(false);
       expect(s.actualReply).toMatchObject({ san: "Rad8" });
       expect(s.inGame?.moves.map((m) => m.san)).toEqual(["Rad8"]);
-      expect(s.inGame?.lost).toBeUndefined();
+      expect(s.inGame).toEqual({ moves: expect.any(Array), ended: true, paid: false });
     });
 
     it("the game ends on the played move", async () => {
@@ -446,15 +447,16 @@ describe("storyOf: what the game actually played", () => {
       expect(brief(s)).toEqual(["Ne2+", "Kh1", "Nxc1", "Rxc1"]);
       expect(s.followed).toBe(0);
       expect(s.actualReply).toBeUndefined();
-      expect(s.inGame).toEqual({ moves: [], net: 0, ended: true });
+      expect(s.inGame).toEqual({ moves: [], ended: true, paid: false });
     });
 
     it("the game ends mid-line", async () => {
       const g = await fixtureGame({ pgn: fenPgn(FEN, "1. Qc1 Ne2+ 2. Kh1"), as: "white", evals: EVALS });
       const s = story(g, 1);
       expect(s.followed).toBe(2);
-      expect(s.inGame).toMatchObject({ net: 0, ended: true });
-      expect(s.inGame?.moves.map((m) => m.san)).toEqual(["Ne2+", "Kh1"]);
+      // Kh1, the game's last move, is cut as a quiet ply: the kept move is not the last one.
+      expect(s.inGame).toEqual({ moves: expect.any(Array), ended: false, paid: false });
+      expect(s.inGame?.moves.map((m) => m.san)).toEqual(["Ne2+"]);
     });
   });
 
@@ -493,7 +495,7 @@ describe("storyOf: the game reaches the result by its own moves", () => {
     expect(s.replyFound).toBe(false);
     expect(sans(s)).toEqual(["Nxd5", "Nxd5", "exd5"]);
     // The knights were traded, so the queen went for nothing on balance (net 9).
-    expect(s.inGame).toMatchObject({ net: 9, lost: { square: "d5", piece: "queen", color: "white" }, ended: false });
+    expect(s.inGame).toMatchObject({ paid: true, net: 9, lost: { square: "d5", piece: "queen", color: "white" }, ended: false });
     expect(s.inGame?.lostFor).toBeUndefined();
   });
 
@@ -510,7 +512,8 @@ describe("storyOf: the game reaches the result by its own moves", () => {
     expect(brief(s)).toEqual(["Ne2+", "Kh2", "Nxc1", "Rxc1"]);
     expect(s.followed).toBe(1);
     expect(sans(s)).toEqual(["Ne2+", "Kh1", "Nxc1", "Rxc1"]);
-    expect(s.inGame).toMatchObject({ net: 6, lost: { square: "c1", piece: "queen", color: "white" }, lostFor: "knight", ended: false });
+    // Ne2+ was played and the unmoved queen was taken on c1 within the window: paid (rule 4).
+    expect(s.inGame).toMatchObject({ paid: true, net: 6, lost: { square: "c1", piece: "queen", color: "white" }, lostFor: "knight", ended: false });
   });
 
   it("1...Rc1? 2.b8=Q Rc2+: the promotion is already in the game's net, and the game ended", async () => {
@@ -524,7 +527,7 @@ describe("storyOf: the game reaches the result by its own moves", () => {
     });
     const s = story(g, 2);
     expect(sans(s)).toEqual(["b8=Q", "Rc2+"]);
-    expect(s.inGame).toMatchObject({ net: 8, ended: true });
+    expect(s.inGame).toMatchObject({ paid: true, net: 8, ended: true });
     expect(s.inGame?.lost).toBeUndefined();
   });
 
@@ -542,7 +545,7 @@ describe("storyOf: the game reaches the result by its own moves", () => {
     expect(s.punish[0]).toMatchObject({ san: "Rd1#", mate: true });
     expect(s.followed).toBe(0);
     expect(s.inGame?.moves).toEqual([expect.objectContaining({ san: "Re1#", mate: true })]);
-    expect(s.inGame?.ended).toBe(true);
+    expect(s.inGame).toMatchObject({ ended: true, paid: true, net: 0 });
   });
 
   it("a missed chance: inGame is what the player's actual move led to", async () => {
@@ -560,7 +563,180 @@ describe("storyOf: the game reaches the result by its own moves", () => {
     });
     const s = story(g, 2, "missed-tactic");
     expect(s.better.map((m) => m.san)).toEqual(["Ne4+", "Ke1", "Nxd2", "Kxd2"]);
-    expect(s.inGame).toMatchObject({ net: 0, ended: true });
-    expect(s.inGame?.moves.map((m) => m.san)).toEqual(["Rhe1", "Rad8"]);
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: false, paid: false });
+    expect(s.inGame?.moves.map((m) => m.san)).toEqual(["Rhe1"]);
+  });
+});
+
+describe("storyOf: inGame states a cost only when the game took what the move allowed", () => {
+  const sans = (s: ExampleStory): string[] | undefined => s.inGame?.moves.map((m) => m.san);
+  const QC1 = "r4rk1/ppp2ppp/8/8/3n4/8/PPPQ1PPP/5RK1 w - - 0 1";
+  const QC1_EVALS: Record<string, ScriptedEval> = {
+    1: { cp: 765, pv: ["d2d4", "b7b6", "d4a4", "c7c5", "h2h4", "h7h6", "f1e1", "f8c8", "c2c3", "c8c7"] },
+    2: { cp: -750, pv: ["d4e2", "g1h1", "e2c1", "f1c1", "a8d8", "g2g3", "f7f5", "c1e1", "g8f7", "h1g2"] },
+  };
+  const NE5 = "5rk1/ppp2ppp/1qnp4/8/3P4/2P5/PP2QPPP/2BR2K1 b - - 0 1";
+  const NE5_EVALS: Record<string, ScriptedEval> = {
+    2: { cp: 10, pv: ["b6a5", "a2a3", "a5f5", "d1e1", "a7a6", "g2g4", "f5g6", "h2h3", "h7h6", "f2f4"] },
+    3: { cp: 640, pv: ["d4e5", "f8e8", "c1f4", "b6c6", "e2c2", "d6e5", "f4e3", "a7a6", "f2f3", "c6c4"] },
+  };
+
+  it("keeps the reply that was played even when nothing in the stretch captures or checks", async () => {
+    // 1...h6? allows d5 (+5.22: d5 Ke7 dxc6); the game went 2.d5 Kf8 3.a3 a6 4.g3.
+    const g = await fixtureGame({
+      pgn: fenPgn("4k3/ppp2ppp/2n5/1B6/3P4/8/PP3PPP/6K1 b - - 0 1", "1... h6 2. d5 Kf8 3. a3 a6 4. g3"),
+      as: "black",
+      evals: {
+        2: { cp: 54, pv: ["e8e7", "b5c6", "b7c6", "g1f1", "e7d6", "f1e2", "c6c5", "e2d3", "d6d5", "d4c5"] },
+        3: { cp: 522, pv: ["d4d5", "e8e7", "d5c6", "b7b6", "g1f1", "e7d6", "f1e2", "d6c5", "b5a4", "c5d6"] },
+      },
+    });
+    const s = story(g, 2);
+    expect(brief(s)).toEqual(["d5", "Ke7", "dxc6"]);
+    expect(s.followed).toBe(1);
+    expect(sans(s)).toEqual(["d5"]);
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: false, paid: false });
+  });
+
+  it("does not say the game ended when quiet moves came after the kept one", async () => {
+    const g = await fixtureGame({ pgn: fenPgn(QC1, "1. Qc1 h6 2. a3 a6"), as: "white", evals: QC1_EVALS });
+    const s = story(g, 1);
+    expect(sans(s)).toEqual(["h6"]);
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: false, paid: false });
+  });
+
+  it("1.Qc1 Rad8 2.Qh6 gxh6: the queen went by the player's own later move, not by what Qc1 allowed", async () => {
+    // (3.Kh2 is illegal here, the h-pawn stands on h2: the game's last move is 3.Kh1.)
+    const g = await fixtureGame({ pgn: fenPgn(QC1, "1. Qc1 Rad8 2. Qh6 gxh6 3. Kh1"), as: "white", evals: QC1_EVALS });
+    expect(g.analysis.moves.map((m) => m.san)).toEqual(["Qc1", "Rad8", "Qh6", "gxh6", "Kh1"]);
+    const s = story(g, 1);
+    expect(s.lost).toEqual({ square: "c1", piece: "queen", color: "white" });
+    expect(sans(s)).toEqual(["Rad8", "Qh6", "gxh6"]);
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: false, paid: false });
+  });
+
+  it("1...Ne5 2.h3 ... 4.dxe5: the knight went three moves later, outside what is attributed", async () => {
+    const g = await fixtureGame({ pgn: fenPgn(NE5, "1... Ne5 2. h3 a6 3. a3 h6 4. dxe5 dxe5"), as: "black", evals: NE5_EVALS });
+    const s = story(g, 2);
+    expect(s.lost).toEqual({ square: "e5", piece: "knight", color: "black" });
+    expect(sans(s)?.[0]).toBe("h3");
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: expect.any(Boolean), paid: false });
+  });
+
+  it("1...Ne5 2.dxe5 dxe5: paid for the exchange on e5 only, not for the player's own later Qxf2+", async () => {
+    const g = await fixtureGame({
+      pgn: fenPgn(NE5, "1... Ne5 2. dxe5 dxe5 3. a3 Qxf2+ 4. Qxf2"),
+      as: "black",
+      evals: NE5_EVALS,
+    });
+    const s = story(g, 2);
+    // The game recaptured where the engine's line stopped, so rule 1 does not apply; rule 3 does.
+    expect(s.followed).toBe(1);
+    expect(s.inGame).toMatchObject({ paid: true, net: 2, lost: { square: "e5", piece: "knight", color: "black" } });
+    expect(s.inGame?.lostFor).toBeUndefined();
+  });
+
+  it("an exchange longer than the window is not attributed", async () => {
+    // Constructed: Ned5?? walks into a 13-capture exchange on d5; the stored answer is ...cxd5.
+    const g = await fixtureGame({
+      pgn: fenPgn(
+        "b2r2k1/3q4/1np1pn2/8/2P1P3/1BN1N3/3Q4/3R2K1 w - - 0 1",
+        "1. Ned5 cxd5 2. exd5 exd5 3. cxd5 Nfxd5 4. Nxd5 Nxd5 5. Bxd5 Bxd5 6. Qxd5 Qxd5 7. Rxd5 Rxd5",
+      ),
+      as: "white",
+      evals: { 1: { cp: 0, pv: ["g1h1"] }, 2: { cp: -300, pv: ["c6d5"] } },
+    });
+    const s = story(g, 1);
+    expect(s.lost).toEqual({ square: "d5", piece: "knight", color: "white" });
+    expect(s.actualReply).toMatchObject({ san: "cxd5", captured: "knight" });
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: false, paid: false });
+  });
+
+  it("stories stored without inGame or without paid still parse", () => {
+    const g = { played: { san: "e4", uci: "e2e4", from: "e2", to: "e4", piece: "pawn", color: "white", check: false, mate: false, fenAfter: "x" } };
+    const base = { ...g, punish: [], replyFound: false, better: [], targets: [], gain: 0, winPctBefore: 50, winPctAfter: 40, depth: 12 };
+    expect(ExampleStory.safeParse(base).success).toBe(true);
+    expect(ExampleStory.safeParse({ ...base, inGame: { moves: [], net: 3, ended: false } }).success).toBe(true);
+  });
+});
+
+describe("storyOf: paid when the punishing move was played and answered differently", () => {
+  const FEN = "r4rk1/ppp2ppp/8/8/3n4/8/PPPQ1PP1/5RK1 w - - 0 1";
+  const EVALS: Record<string, ScriptedEval> = {
+    1: { cp: 717, pv: ["d2d4", "f8d8", "d4e4", "c7c6", "e4e7", "b7b6", "f1e1", "c6c5", "f2f4", "h7h6"] },
+    2: { cp: -809, pv: ["d4e2", "g1h2", "e2c1", "f1c1", "f8d8", "c2c4", "d8d6", "c1e1", "g8f8"] },
+  };
+
+  it("1.Qc1 Ne2+ 2.Kh1 Nxc1 (the engine had Kh2): the queen was taken where it stood", async () => {
+    const g = await fixtureGame({ pgn: fenPgn(FEN, "1. Qc1 Ne2+ 2. Kh1 Nxc1"), as: "white", evals: EVALS });
+    const s = story(g, 1);
+    expect(s.followed).toBe(1);
+    expect(s.inGame).toMatchObject({ paid: true, net: 9, lost: { square: "c1", piece: "queen", color: "white" } });
+  });
+
+  it("1.Qc1 Ne2+ 2.Kh1 Rad8 3.Qh6 gxh6: the queen moved away first and was lost elsewhere", async () => {
+    const g = await fixtureGame({ pgn: fenPgn(FEN, "1. Qc1 Ne2+ 2. Kh1 Rad8 3. Qh6 gxh6"), as: "white", evals: EVALS });
+    const s = story(g, 1);
+    expect(s.followed).toBe(1);
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: expect.any(Boolean), paid: false });
+  });
+
+  it("1.Qc1 Rad8 2.Qh6 gxh6: the punishing move was never played", async () => {
+    const g = await fixtureGame({ pgn: fenPgn(FEN, "1. Qc1 Rad8 2. Qh6 gxh6"), as: "white", evals: EVALS });
+    const s = story(g, 1);
+    expect(s.followed).toBe(0);
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: expect.any(Boolean), paid: false });
+  });
+});
+
+describe("storyOf: inGame.ended only when the last kept move is the game's last move", () => {
+  const sans = (s: ExampleStory): string[] | undefined => s.inGame?.moves.map((m) => m.san);
+  // No h-pawn, so 3.Kh2 is legal.
+  const FEN = "r4rk1/ppp2ppp/8/8/3n4/8/PPPQ1PP1/5RK1 w - - 0 1";
+  const EVALS: Record<string, ScriptedEval> = {
+    1: { cp: 717, pv: ["d2d4", "f8d8", "d4e4", "c7c6", "e4e7", "b7b6", "f1e1", "c6c5", "f2f4", "h7h6"] },
+    2: { cp: -809, pv: ["d4e2", "g1h2", "e2c1", "f1c1", "f8d8", "c2c4", "d8d6", "c1e1", "g8f8"] },
+  };
+  const read = async (moves: string) => {
+    const g = await fixtureGame({ pgn: fenPgn(FEN, moves), as: "white", evals: EVALS });
+    expect(g.analysis.moves).toHaveLength(moves.split(" ").filter((t) => !/^\d+\.$/.test(t)).length);
+    return story(g, 1);
+  };
+
+  it("1.Qc1 Rad8 2.Qh6 gxh6 3.Kh2: kept moves stop at gxh6, so the game did not end there", async () => {
+    const s = await read("1. Qc1 Rad8 2. Qh6 gxh6 3. Kh2");
+    expect(sans(s)).toEqual(["Rad8", "Qh6", "gxh6"]);
+    expect(s.inGame?.ended).toBe(false);
+  });
+
+  it("the same game ending on gxh6 did end there", async () => {
+    const s = await read("1. Qc1 Rad8 2. Qh6 gxh6");
+    expect(sans(s)).toEqual(["Rad8", "Qh6", "gxh6"]);
+    expect(s.inGame?.ended).toBe(true);
+  });
+
+  it("the first-move path: one quiet move kept, more played", async () => {
+    const s = await read("1. Qc1 h6 2. a3");
+    expect(sans(s)).toEqual(["h6"]);
+    expect(s.inGame?.ended).toBe(false);
+  });
+
+  it("the paid stretch does not change ended", async () => {
+    const s = await read("1. Qc1 Ne2+ 2. Kh1 Nxc1 3. Rxc1 Rfd8 4. a3");
+    expect(s.inGame).toMatchObject({ paid: true, ended: false });
+  });
+
+  it("the 8-ply cap: a long capture chain is cut, and the game goes on", async () => {
+    const g = await fixtureGame({
+      pgn: fenPgn(
+        "b2r2k1/3q4/1np1pn2/8/2P1P3/1BN1N3/3Q4/3R2K1 w - - 0 1",
+        "1. Ned5 cxd5 2. exd5 exd5 3. cxd5 Nfxd5 4. Nxd5 Nxd5 5. Bxd5 Bxd5 6. Qxd5 Qxd5 7. Rxd5 Rxd5",
+      ),
+      as: "white",
+      evals: { 1: { cp: 0, pv: ["g1h1"] }, 2: { cp: -300, pv: ["c6d5"] } },
+    });
+    const s = story(g, 1);
+    expect(s.inGame?.moves.length).toBeLessThanOrEqual(8);
+    expect(s.inGame?.ended).toBe(false);
   });
 });

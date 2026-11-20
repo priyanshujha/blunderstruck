@@ -116,4 +116,10 @@ describe("lostPiece", () => {
       expect(lineLoss(fen, ["e1f1", "b4c3", "d1d5", "e6d5"], "white")).toEqual({ net: 7, exchange: false });
     });
   });
+
+  it("a rook for a bishop with a pawn won back is a pawn count, not the exchange", () => {
+    // Constructed line: ...Rxc3 bxc3 Bxa3.
+    const fen = "2r2bk1/5ppp/8/8/8/P1B5/1P3PPP/6K1 b - - 0 1";
+    expect(lineLoss(fen, ["c8c3", "b2c3", "f8a3"], "black")).toEqual({ net: 1, exchange: false });
+  });
 });

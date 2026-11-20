@@ -87,24 +87,35 @@ export const ExampleStory = z.object({
   /** The most valuable enemy piece won for `lost`; absent when it went for nothing or pawns only. */
   lostFor: PieceRole.optional(),
   /**
-   * What the game actually did after the move, read from the game's own moves with the same
-   * rules as `punish` (whose facts are the engine's line, not the game). Filled for every
-   * pattern, "missed" ones included: there it is what the player's actual move led to.
+   * The next few moves the game really played after the move, read from the game's own moves.
+   * Never a verdict on what the mistake finally cost: a cost is stated only when `paid` is true.
+   * Filled for every pattern, "missed" ones included (there: what the actual move led to).
    */
   inGame: z
     .object({
-      /** The plies played after the move, cut like `punish`; up to the game's end when it ended within them. */
+      /**
+       * The plies played after the move, cut after the last capture, promotion, check or mate in
+       * the stretch read (as `punish` is); at least the first ply when one was played.
+       */
       moves: z.array(MoveDetail).max(STORY_LINE_MAX_PLIES),
-      /** Material the player is down after the move and `moves`, in pawns (negative when up). */
-      net: z.number(),
-      /** The player's piece lost over those plies, by the same rule as `lost`. */
-      lost: StoryPiece.optional(),
-      /** The enemy piece won for it; absent when it went for nothing or pawns only. */
-      lostFor: PieceRole.optional(),
-      /** The player gave a rook for a knight or bishop over those plies (`net` gives the rest). */
-      exchange: z.boolean().optional(),
-      /** The game ended within `moves`. */
+      /** The last move in `moves` is the game's last move (true with no moves when the game ended on the move). */
       ended: z.boolean(),
+      /**
+       * The game took what the move allowed: it played the engine's punishing line through the
+       * plies `gain` counts, or the opponent's next move took the piece named in `lost` and that
+       * exchange finished within `STORY_LINE_MAX_PLIES`, or the game mated the player as the
+       * punishing line does, and in each case the exchange was over. Absent on stories stored
+       * before the field existed: read as false.
+       */
+      paid: z.boolean().optional(),
+      /** Only when `paid`: material the player is down over the paid plies, in pawns (negative when up). */
+      net: z.number().optional(),
+      /** Only when `paid`: the player's piece lost over the paid plies, by the rule of `lost`. */
+      lost: StoryPiece.optional(),
+      /** Only when `paid`: the enemy piece won for it; absent when it went for nothing or pawns only. */
+      lostFor: PieceRole.optional(),
+      /** Only when `paid`: the player gave a rook for a knight or bishop (`net` gives the rest). */
+      exchange: z.boolean().optional(),
     })
     .optional(),
   /** Material balance change for the player along `punish`, in pawns. */

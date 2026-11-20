@@ -274,12 +274,27 @@ function betterReasonOf(
   return undefined;
 }
 
+/** A capture onto `square`. */
+const capturesOn = (d: MoveDetail, square: string): boolean => !!d.captured && d.to === square;
+
 /**
- * What the game itself did after the player's move at `ply`: its next plies, read over the
- * plies `lineOutcome` scores them on and cut after the last capture, promotion, check or mate,
- * like `punish`. When the game ended within those plies, every ply to its end is kept and
- * `ended` is set. `net`, `lost`, `lostFor` and `exchange` are `lineLoss` over the move and
- * those plies.
+ * The next few moves the game itself played after the player's move, and whether the game took
+ * what the move allowed (`paid`). `moves` is the game's continuation read over the plies
+ * `lineOutcome` scores it on, cut after the last capture, promotion, check or mate, keeping at
+ * least the first ply played. `ended` says the last kept move is the game's last move.
+ *
+ * `paid` holds, by the first rule that applies, when:
+ * 1. the game played `punish` through its last capture, promotion or mate (the plies `gain`
+ *    counts), the punishing line was not cut by `STORY_LINE_MAX_PLIES`, and the game's next ply
+ *    does not recapture on a square taken on in those plies;
+ * 2. `punish` ends in mate and the game mated the player within as many plies;
+ * 3. the opponent's very next move took the piece `lost` names on its square, and the run of
+ *    captures on that square ended within `STORY_LINE_MAX_PLIES` plies.
+ * 4. the opponent's next move was the first move of `punish`, and within the plies read the
+ *    opponent took the piece `lost` names on the square it stood on after the move, without it
+ *    having moved, and the captures on that square ended within those plies.
+ * `net`, `lost`, `lostFor` and `exchange` are `lineLoss` over the move and the paid plies, and
+ * are set only when `paid`.
  */
 function gameAfter(
   g: PlayerGame,
@@ -288,21 +303,62 @@ function gameAfter(
   uci: string,
   afterPlayed: Chess,
   player: Color,
+  engine: { punish: readonly Step[]; followed: number; capped: boolean; lost?: StoryPiece },
 ): NonNullable<ExampleStory["inGame"]> {
   const actual = g.analysis.moves.filter((m) => m.ply > ply).map((m) => m.uci);
+  const game = replay(afterPlayed.clone(), actual, BEST_LINE_MAX_PLIES);
   const scored = lineOutcome(fenBefore, [uci, ...actual].slice(0, BEST_LINE_MAX_PLIES), player);
   const window = Math.min(scored.plies - 1, STORY_LINE_MAX_PLIES);
-  const endsWithin = actual.length <= window;
-  const read = replay(afterPlayed.clone(), actual, endsWithin ? actual.length : window);
-  const steps = endsWithin ? read : cutAtLastEvent(read, 0);
-  const loss = lineLoss(fenBefore, [uci, ...steps.map((s) => s.detail.uci)], player);
+  const moves = cutAtLastEvent(game.slice(0, window), 1);
+  const ended = moves.length === actual.length;
+
+  const { punish, followed } = engine;
+  let paidPlies: number | undefined;
+  let last = -1;
+  punish.forEach((s, i) => {
+    if (s.detail.captured || s.detail.promotion || s.detail.mate) last = i;
+  });
+  if (last >= 0 && followed > last && !engine.capped) {
+    const squares = punish.slice(0, last + 1).filter((s) => s.detail.captured).map((s) => s.detail.to);
+    const next = game[last + 1]?.detail;
+    if (!next || !squares.some((sq) => capturesOn(next, sq))) paidPlies = last + 1;
+  }
+  if (paidPlies === undefined && punish.length > 0 && punish[punish.length - 1]!.detail.mate) {
+    const mate = game.slice(0, punish.length).findIndex((s) => s.detail.mate && s.detail.color !== player);
+    if (mate !== -1) paidPlies = mate + 1;
+  }
+  const lost = engine.lost;
+  if (paidPlies === undefined && lost && game[0] && capturesOn(game[0].detail, lost.square) && game[0].detail.captured === lost.piece) {
+    let run = 0;
+    while (run < game.length && capturesOn(game[run]!.detail, lost.square)) run++;
+    if (run <= STORY_LINE_MAX_PLIES) paidPlies = run;
+  }
+
+  if (paidPlies === undefined && lost && punish[0] && game[0]?.detail.uci === punish[0].detail.uci) {
+    // The punishing move was played and the game took the same, unmoved piece within the window.
+    const there = afterPlayed.board.get(squareIndex(lost.square));
+    if (there?.color === player && there.role === lost.piece) {
+      const at = game
+        .slice(0, window)
+        .findIndex((s) => s.detail.color !== player && s.detail.captured === lost.piece && s.detail.to === lost.square);
+      const movedFirst = at !== -1 && game.slice(0, at).some((s) => s.detail.color === player && s.detail.from === lost.square);
+      if (at !== -1 && !movedFirst) {
+        let end = at;
+        while (end < game.length && capturesOn(game[end]!.detail, lost.square)) end++;
+        if (end <= window) paidPlies = end;
+      }
+    }
+  }
+  if (paidPlies === undefined) return { moves: moves.map((s) => s.detail), ended, paid: false };
+  const loss = lineLoss(fenBefore, [uci, ...game.slice(0, paidPlies).map((s) => s.detail.uci)], player);
   return {
-    moves: steps.map((s) => s.detail),
+    moves: moves.map((s) => s.detail),
+    ended,
+    paid: true,
     net: loss.net,
     ...(loss.piece ? { lost: loss.piece } : {}),
     ...(loss.for ? { lostFor: loss.for } : {}),
     ...(loss.exchange ? { exchange: true } : {}),
-    ended: endsWithin && steps.length === actual.length,
   };
 }
 
@@ -327,8 +383,8 @@ function gameAfter(
  *   of the played move plus `punish`, and to the end of `better`.
  * - `lost` and `lostFor` are the piece the played move and `punish` cost the player and what
  *   was won for it, by `lineLoss`: what the move allowed, by the engine's line.
- * - `inGame` reads the game's own moves after the move the same way (see `gameAfter`), for
- *   every pattern: facts about the game never come from matching the engine's line.
+ * - `inGame` is the next few moves the game really played (see `gameAfter`), for every
+ *   pattern; it states a cost only when the game took what the move allowed (`paid`).
  *
  * Undefined when the finding is for another game, its ply is not in the game, or the stored
  * move is not legal in its own position.
@@ -362,7 +418,12 @@ export function storyOf(
   let followed = 0;
   while (followed < punish.length && moveAt(g, move.ply + 1 + followed)?.uci === punish[followed]!.detail.uci) followed++;
   const replyFound = followed >= 1;
-  const inGame = gameAfter(g, move.ply, move.fenBefore, move.uci, afterPlayed, player);
+  const inGame = gameAfter(g, move.ply, move.fenBefore, move.uci, afterPlayed, player, {
+    punish,
+    followed,
+    capped: playedLine.plies - 1 > STORY_LINE_MAX_PLIES,
+    ...(lost ? { lost } : {}),
+  });
 
   const bestLine = move.bestLine ?? (move.bestUci ? [move.bestUci] : []);
   const bestIsPlayed = bestLine[0] === move.uci;

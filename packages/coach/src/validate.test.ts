@@ -679,6 +679,15 @@ describe("templateWording", () => {
     expect(render(TWO)).toContain("The habits that stand out: pieces left hanging and missed tactics.");
     const few = { ...draft([]), notes: ["few-games" as const] };
     expect(render(few)).toContain("Only 31 games");
+    expect(render(few)).toContain(
+      "Only 31 games in this period, so here are the numbers on their own. There are not enough games yet to pick something to work on; that starts once you have played a few more.",
+    );
+    const weekly = { ...few, kind: "weekly" as const };
+    expect(render(weekly)).toContain("That is not enough games to pick something to work on this time; it starts again once you have played a few more.");
+    expect(parseWording(JSON.stringify(templateWording(weekly)), weekly)).toMatchObject({ ok: true });
+    for (const d of [few, weekly, { ...few, current: { ...few.current, games: 0 } }, { ...weekly, current: { ...weekly.current, games: 1 } }]) {
+      expect(render(d)).not.toMatch(/focus item|this week/i);
+    }
     for (const [games, opening] of [[1, "Just a single game in this period"], [0, "No games were played in this period"]] as const) {
       const d = { ...few, current: { ...few.current, games } };
       expect(render(d)).toContain(opening);
@@ -1099,4 +1108,3 @@ describe("the summary's overall level", () => {
     ]);
   });
 });
-
