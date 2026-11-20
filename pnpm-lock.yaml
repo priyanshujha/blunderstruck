@@ -35,6 +35,9 @@ importers:
       '@blunderstruck/ingest':
         specifier: workspace:*
         version: link:../../packages/ingest
+      '@blunderstruck/patterns':
+        specifier: workspace:*
+        version: link:../../packages/patterns
 
   packages/coach:
     dependencies:
@@ -62,6 +65,19 @@ importers:
       '@blunderstruck/contracts':
         specifier: workspace:*
         version: link:../contracts
+
+  packages/patterns:
+    dependencies:
+      '@blunderstruck/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      chessops:
+        specifier: ^0.15.1
+        version: 0.15.1
+    devDependencies:
+      '@blunderstruck/engine':
+        specifier: workspace:*
+        version: link:../engine
 
 packages:
 

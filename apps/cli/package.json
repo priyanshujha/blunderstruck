@@ -6,5 +6,5 @@
   "type": "module",
   "exports": { ".": "./src/main.ts" },
   "scripts": { "typecheck": "tsc --noEmit -p ." },
-  "dependencies": { "@blunderstruck/contracts": "workspace:*", "@blunderstruck/ingest": "workspace:*", "@blunderstruck/engine": "workspace:*", "@blunderstruck/coach": "workspace:*" }
+  "dependencies": { "@blunderstruck/contracts": "workspace:*", "@blunderstruck/ingest": "workspace:*", "@blunderstruck/engine": "workspace:*", "@blunderstruck/coach": "workspace:*", "@blunderstruck/patterns": "workspace:*" }
 }

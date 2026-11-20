@@ -8,7 +8,7 @@ your errors into recurring patterns, and asks an AI coach (Claude or Gemini, wit
 key) for advice sized to your rating. Then it checks your next batch of games against the
 same patterns.
 
-> Early days. Game import and Stockfish analysis work today. Pattern detection, progress
+> Early days. Game import, Stockfish analysis and pattern detection work today. Progress
 > tracking and the coach are being built; see [docs/architecture.md](docs/architecture.md).
 
 ## Try it
@@ -19,7 +19,12 @@ Requires Node 22+, pnpm, and Stockfish (`brew install stockfish` or your package
 pnpm install
 pnpm cli fetch lichess <your-username> --max 20
 pnpm cli analyze data/lichess-<your-username>.json --player <your-username>
+pnpm cli patterns data/lichess-<your-username>.json --player <your-username>
 ```
+
+`analyze` lists the mistakes in one game. `patterns` analyses every game in the file (results
+are cached next to it, so a second run is fast) and prints your top habits with example
+positions. Add `--all` to see every pattern and your repeated opening mistakes.
 
 The output looks like this (illustrative):
 

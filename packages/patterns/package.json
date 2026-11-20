@@ -1,0 +1,20 @@
+{
+  "name": "@blunderstruck/patterns",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@blunderstruck/contracts": "workspace:*",
+    "chessops": "^0.15.1"
+  },
+  "devDependencies": {
+    "@blunderstruck/engine": "workspace:*"
+  }
+}

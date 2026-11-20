@@ -1,5 +1,6 @@
 import {
   ANALYSIS_VERSION,
+  BEST_LINE_MAX_PLIES,
   type AnalyzedGame,
   type AnalyzedMove,
   type Color,
@@ -27,6 +28,12 @@ export interface AnalyzeOptions {
 
 const other = (c: Color): Color => (c === "white" ? "black" : "white");
 
+/** The engine's main line, kept only when it starts with the move the engine chose. */
+function bestLineOf(r: EvalResult): string[] | undefined {
+  if (!r.bestMove || !r.pv || r.pv[0] !== r.bestMove) return undefined;
+  return r.pv.slice(0, BEST_LINE_MAX_PLIES);
+}
+
 /** Evaluates every position of a game once and scores each move by the win probability it gave away. */
 export async function analyzeGame(
   engine: Evaluator,
@@ -38,20 +45,20 @@ export async function analyzeGame(
   const moves: AnalyzedMove[] = [];
   await engine.newGame?.();
 
-  let before: { score: Score; best?: string } | undefined;
+  let before: { score: Score; best?: string; line?: string[] } | undefined;
   for (const p of plies) {
     if (!before) {
       const r = await engine.evaluate(p.fenBefore, depth);
-      before = { score: toWhitePov(r.score, p.color), best: r.bestMove };
+      before = { score: toWhitePov(r.score, p.color), best: r.bestMove, line: bestLineOf(r) };
     }
-    let after: { score: Score; best?: string };
+    let after: { score: Score; best?: string; line?: string[] };
     if (p.terminal === "checkmate") {
       after = { score: { mate: p.color === "white" ? 1 : -1 } };
     } else if (p.terminal === "draw") {
       after = { score: { cp: 0 } };
     } else {
       const r = await engine.evaluate(p.fenAfter, depth);
-      after = { score: toWhitePov(r.score, other(p.color)), best: r.bestMove };
+      after = { score: toWhitePov(r.score, other(p.color)), best: r.bestMove, line: bestLineOf(r) };
     }
 
     if (!opts.only || opts.only === p.color) {
@@ -67,6 +74,7 @@ export async function analyzeGame(
         fenBefore: p.fenBefore,
         fenAfter: p.fenAfter,
         bestUci: before.best,
+        ...(before.line ? { bestLine: before.line } : {}),
         scoreBefore: before.score,
         scoreAfter: after.score,
         winPctBefore,
@@ -79,10 +87,13 @@ export async function analyzeGame(
     before = after;
   }
 
+  // After the loop `before` holds the position after the last move; it has no line when the
+  // game ended on the board, since that position is never evaluated.
   return {
     gameId: game.id,
     analysisVersion: ANALYSIS_VERSION,
     engine: { name: engine.name, depth },
     moves,
+    ...(before?.line ? { finalLine: before.line } : {}),
   };
 }

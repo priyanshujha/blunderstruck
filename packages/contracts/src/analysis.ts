@@ -23,7 +23,10 @@ export type Judgment = z.infer<typeof Judgment>;
 export const JUDGMENT_THRESHOLDS = { inaccuracy: 5, mistake: 10, blunder: 15 } as const;
 
 /** Bump when engine settings or judgment rules change in a way that makes old analyses incomparable. */
-export const ANALYSIS_VERSION = 1;
+export const ANALYSIS_VERSION = 2;
+
+/** Longest engine main line stored on a move (`AnalyzedMove.bestLine`), in plies. */
+export const BEST_LINE_MAX_PLIES = 10;
 
 export const AnalyzedMove = z.object({
   /** Half-move number from move 1 of a standard game: White's 1st move is 1, Black's 1st is 2. */
@@ -36,6 +39,12 @@ export const AnalyzedMove = z.object({
   fenAfter: z.string(),
   /** Engine's preferred move in the position before this move (UCI). Absent at depth 0 / forced lines. */
   bestUci: z.string().optional(),
+  /**
+   * Engine's main line (PV) from `fenBefore`, in UCI, at most `BEST_LINE_MAX_PLIES` moves.
+   * Its first move is always `bestUci`. Absent when there is no best move, or when the PV the
+   * engine reported does not start with the move it chose. Added in analysis version 2.
+   */
+  bestLine: z.array(z.string()).max(BEST_LINE_MAX_PLIES).optional(),
   scoreBefore: Score,
   scoreAfter: Score,
   /** Mover's win probability (0-100) before and after their move. */
@@ -54,5 +63,12 @@ export const AnalyzedGame = z.object({
   analysisVersion: z.number().int(),
   engine: z.object({ name: z.string(), depth: z.number().int() }),
   moves: z.array(AnalyzedMove),
+  /**
+   * Engine's main line (UCI) from the position after the game's last move, at most
+   * `BEST_LINE_MAX_PLIES` moves: the answer to a last move that no later move records (a
+   * blunder followed by resignation). Same rules as `AnalyzedMove.bestLine`; also absent when
+   * the game ended on the board (checkmate, stalemate or another drawn position).
+   */
+  finalLine: z.array(z.string()).max(BEST_LINE_MAX_PLIES).optional(),
 });
 export type AnalyzedGame = z.infer<typeof AnalyzedGame>;

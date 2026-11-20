@@ -18,6 +18,33 @@ export interface EvalResult {
   score: Score;
   depth: number;
   bestMove?: string;
+  /** Main line (UCI) from the same info line that set `score`. May disagree with `bestMove`. */
+  pv?: string[];
+}
+
+export interface InfoLine {
+  depth: number;
+  score: Score;
+  pv?: string[];
+}
+
+/**
+ * Reads one UCI "info" line. Returns undefined for anything that does not carry an exact score:
+ * other output, "info string ..." and lines marked upperbound or lowerbound (aspiration-window
+ * fail-highs and fail-lows, whose score and pv are provisional).
+ */
+export function parseInfoLine(line: string): InfoLine | undefined {
+  if (!line.startsWith("info ") || / (upper|lower)bound\b/.test(line)) return undefined;
+  // "info depth 0 score mate 0" (checkmated) has nothing between depth and score.
+  const m = /\bdepth (\d+)\b.*?\bscore (cp|mate) (-?\d+)/.exec(line);
+  if (!m) return undefined;
+  const info: InfoLine = {
+    depth: Number(m[1]),
+    score: m[2] === "cp" ? { cp: Number(m[3]) } : { mate: Number(m[3]) },
+  };
+  const pv = / pv (.+)$/.exec(line)?.[1]?.trim().split(/\s+/);
+  if (pv && pv.length > 0) info.pv = pv;
+  return info;
 }
 
 /** One Stockfish process, driven over UCI. Calls must not overlap: await each one. */
@@ -69,14 +96,15 @@ export class UciEngine {
     let score: Score = { cp: 0 };
     let seenDepth = 0;
     let bestMove: string | undefined;
+    let pv: string[] | undefined;
     this.send(`position fen ${fen}`);
     await this.until(`go depth ${depth}`, (l) => {
-      if (l.startsWith("info ") && !l.includes(" upperbound") && !l.includes(" lowerbound")) {
-        // "info depth 0 score mate 0" (checkmated) has nothing between depth and score.
-        const m = /\bdepth (\d+)\b.*?\bscore (cp|mate) (-?\d+)/.exec(l);
-        if (m) {
-          seenDepth = Number(m[1]);
-          score = m[2] === "cp" ? { cp: Number(m[3]) } : { mate: Number(m[3]) };
+      if (l.startsWith("info ")) {
+        const info = parseInfoLine(l);
+        if (info) {
+          seenDepth = info.depth;
+          score = info.score;
+          pv = info.pv;
         }
         return false;
       }
@@ -87,7 +115,7 @@ export class UciEngine {
       }
       return false;
     });
-    return { score, depth: seenDepth, bestMove };
+    return { score, depth: seenDepth, bestMove, pv };
   }
 
   async quit(): Promise<void> {
