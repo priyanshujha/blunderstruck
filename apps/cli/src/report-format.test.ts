@@ -1,0 +1,302 @@
+import {
+  PATTERN_IDS,
+  type FocusItem,
+  type PatternProgress,
+  type PatternStat,
+  type PeriodStats,
+  REPORT_WEEKS,
+  WeeklyReport,
+} from "@blunderstruck/contracts";
+import { describe, expect, it } from "vitest";
+import { formatReport } from "./report-format";
+
+const FEN = "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4";
+const SETTINGS = { analysisVersion: 2, patternsVersion: 1, engine: { name: "Stub 1", depth: 12 } };
+
+const stat = (patternId: string, games: number, moves: number, per100: number, loss = 30): PatternStat => {
+  const occurrences = Math.round((per100 * moves) / 100);
+  return {
+    patternId,
+    games,
+    moves,
+    gamesAffected: Math.min(games, occurrences),
+    occurrences,
+    per100Moves: per100,
+    avgWinPctLoss: occurrences === 0 ? 0 : loss,
+  };
+};
+
+/** Every pattern over `games` games; `rates` overrides the per-100 rate of named patterns. */
+function period(end: string, games: number, rates: Record<string, number> = {}): PeriodStats {
+  const moves = games * 35;
+  return {
+    start: new Date(Date.parse(end) - 7 * 86_400_000).toISOString(),
+    end,
+    games,
+    moves,
+    mistakesPer100Moves: 6.5,
+    settings: SETTINGS,
+    stats: PATTERN_IDS.map((id) => stat(id, games, moves, rates[id] ?? 0.2)),
+  };
+}
+
+const WEEK_ENDS = [
+  "2026-11-19T00:00:00.000Z",
+  "2026-11-12T00:00:00.000Z",
+  "2026-11-05T00:00:00.000Z",
+  "2026-10-29T00:00:00.000Z",
+  "2026-10-22T00:00:00.000Z",
+  "2026-10-15T00:00:00.000Z",
+];
+const WEEK_RATES = [2.1, 2.9, 3.4, 3.0, 3.2, 3.6];
+
+const weeks = (): PeriodStats[] =>
+  WEEK_ENDS.slice(0, REPORT_WEEKS).map((end, i) => period(end, 6, { "hung-piece": WEEK_RATES[i]! }));
+
+const focusItem = (patternId: string, over: Partial<FocusItem> = {}): FocusItem => ({
+  patternId,
+  title: "Look before you let go of a piece",
+  why: "You left a piece hanging in {gamesAffected} of {games} games, {rate} per 100 moves.",
+  drill: "Before each move, ask what the piece you just moved no longer protects.",
+  exampleGameIds: ["g1", "g2"],
+  baseline: stat(patternId, 30, 1050, 3.0),
+  target: 2.25,
+  since: "2026-10-29T00:00:00.000Z",
+  reason: {
+    kind: "kept",
+    previousRank: 1,
+    score: 14.2,
+    recentCost: 7.1,
+    naiveCostThisPeriod: 6.2,
+    rate: 2.1,
+    severity: 30,
+    chronicity: 0.9,
+    weeksRecurred: 5,
+    weeksCounted: 6,
+    weeks: [true, true, true, true, true, false],
+  },
+  examples: [
+    {
+      patternId,
+      gameId: "g1",
+      ply: 23,
+      winPctLoss: 32.4,
+      fen: FEN,
+      played: "Qxf7",
+      best: "Nf3",
+    },
+    { patternId, gameId: "g2", ply: 31, winPctLoss: 25, fen: FEN, played: "Bxf7" },
+  ],
+  ...over,
+});
+
+const progress = (patternId: string, verdict: PatternProgress["verdict"], before: number, now: number, p: number | null): PatternProgress => ({
+  patternId,
+  previous: stat(patternId, 30, 1050, before),
+  current: stat(patternId, 30, 1050, now),
+  verdict,
+  pValue: p,
+});
+
+function weekly(over: Record<string, unknown> = {}): WeeklyReport {
+  return WeeklyReport.parse({
+    player: "quiet_rook_test",
+    track: { platform: "lichess", username: "quiet_rook_test", timeClass: "rapid" },
+    kind: "weekly",
+    revision: 1,
+    periodStart: "2026-11-12T00:00:00.000Z",
+    periodEnd: "2026-11-19T00:00:00.000Z",
+    rating: 1420,
+    band: "club",
+    bandSource: "ratings",
+    settings: SETTINGS,
+    gamesFound: 31,
+    gamesAnalyzed: 31,
+    gameIds: ["g1", "g2"],
+    coverage: { sampled: 31, analysed: 31, total: 31, complete: true, sampleOnly: false },
+    current: period("2026-11-19T00:00:00.000Z", 31, { "hung-piece": 2.1 }),
+    comparison: period("2026-11-12T00:00:00.000Z", 120, { "hung-piece": 3.0 }),
+    weeks: weeks(),
+    trends: PATTERN_IDS.map((id) => progress(id, id === "hung-piece" ? "improved" : "flat", 3.0, 2.1, 0.04)),
+    priorities: [],
+    focus: [focusItem("hung-piece")],
+    progress: [progress("hung-piece", "improved", 3.0, 2.1, 0.04), progress("missed-tactic", "insufficient-data", 0.5, 0.4, null)],
+    retired: [
+      {
+        patternId: "thrown-win",
+        why: "graduated",
+        since: "2026-09-24T00:00:00.000Z",
+        baseline: stat("thrown-win", 28, 980, 1.5),
+        current: stat("thrown-win", 31, 1085, 0.9),
+      },
+    ],
+    summary: "{games} games, {mistakeRate} mistakes per 100 moves. {focusCount} thing to work on.",
+    wording: { source: "model", provider: "anthropic", model: "stub-model", wordedFor: ["hung-piece"], calls: 1 },
+    notes: [],
+    ...over,
+  });
+}
+
+describe("formatReport", () => {
+  it("prints a normal weekly report in order, with tokens filled in", () => {
+    const text = formatReport(weekly());
+    const lines = text.split("\n");
+
+    expect(lines[0]).toBe("Weekly report for quiet_rook_test (lichess, rapid)");
+    expect(text).toContain("Rating band: club, from your median rating of 1420 in these games");
+    expect(text).toContain("Period: 2026-11-12 to 2026-11-19");
+    expect(text).toContain("Games: 31 found, all analysed");
+    expect(text).not.toContain("still analysing");
+    expect(text).toContain("31 games, 6.50 mistakes per 100 moves. 1 thing to work on.");
+    expect(text).toContain("1. Look before you let go of a piece");
+    expect(text).toContain("You left a piece hanging in 23 of 31 games, 2.10 per 100 moves.");
+    expect(text).toContain("It came up in 5 of your last 6 weeks.");
+    expect(text).toContain("Now 2.10 per 100 moves; started at 3.00; target 2.25.");
+    expect(text).toContain(`Position (FEN): ${FEN}`);
+    expect(text).toContain("You played Qxf7; better was Nf3 (-32.4 win%)");
+    expect(text).toContain("You played Bxf7 (-25.0 win%)");
+    expect(text).toContain("Left a piece hanging: improved (3.00 before, 2.10 now, per 100 moves, p = 0.040)");
+    expect(text).toContain("Missed a winning tactic: not enough games yet");
+    expect(text).toContain("Let a winning position slip: reached its target and stayed there");
+    expect(text).not.toMatch(/\{\w+\}/);
+    // No week table or trends without `all`.
+    expect(text).not.toContain("Week by week");
+    expect(text).not.toContain("All patterns");
+
+    const order = ["Focus", "Last report's focus", "Retired from your list"].map((h) => text.indexOf(h));
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(order.every((i) => i >= 0)).toBe(true);
+  });
+
+  it("says no clear change and worse in plain words", () => {
+    const text = formatReport(
+      weekly({ progress: [progress("hung-piece", "flat", 3.0, 2.9, 0.4), progress("missed-tactic", "worse", 0.5, 1.2, 0.01)] }),
+    );
+    expect(text).toContain("Left a piece hanging: no clear change");
+    expect(text).toContain("Missed a winning tactic: worse");
+  });
+
+  it("omits the persistence sentence when fewer than three weeks were counted", () => {
+    const item = focusItem("hung-piece", {
+      reason: { ...focusItem("hung-piece").reason, weeksCounted: 2, weeksRecurred: 2, kind: "new" },
+    });
+    const text = formatReport(weekly({ focus: [item] }));
+    expect(text).not.toContain("of your last");
+    expect(text).toContain("New on your list.");
+  });
+
+  it("shows the week table and all nine trends with all", () => {
+    const text = formatReport(weekly(), { all: true });
+    expect(text).toContain("Week by week");
+    const rows = text.split("\n").filter((l) => /^2026-\d\d-\d\d\s+6\s/.test(l));
+    expect(rows).toHaveLength(6);
+    // Oldest week first, newest last.
+    expect(rows[0]).toMatch(/^2026-10-15/);
+    expect(rows[5]).toMatch(/^2026-11-19.*2\.10$/);
+    expect(text).toContain("All patterns against the 30 days before");
+    for (const name of ["Missed a mate", "Walked into a mate", "Same opening mistake again"]) {
+      expect(text).toContain(name);
+    }
+  });
+
+  it("prints the week table on a first report without all, and no verdicts", () => {
+    const text = formatReport(
+      weekly({
+        kind: "first",
+        revision: 0,
+        comparison: null,
+        trends: [],
+        progress: [],
+        retired: [],
+        focus: [focusItem("hung-piece", { reason: { ...focusItem("hung-piece").reason, kind: "new" } })],
+      }),
+    );
+    expect(text.split("\n")[0]).toBe("First report for quiet_rook_test (lichess, rapid)");
+    expect(text).toContain("Week by week");
+    expect(text).not.toContain("Last report's focus");
+    expect(text).not.toContain("Retired from your list");
+    expect(formatReport(weekly({ kind: "first", comparison: null, trends: [], progress: [], retired: [] }), { all: true })).toContain(
+      "No earlier games to compare with yet.",
+    );
+  });
+
+  it("says plainly when there are too few games and still prints the numbers", () => {
+    const text = formatReport(
+      weekly({
+        kind: "first",
+        revision: 0,
+        gamesFound: 7,
+        gamesAnalyzed: 7,
+        coverage: { sampled: 7, analysed: 7, total: 7, complete: true, sampleOnly: false },
+        current: period("2026-11-19T00:00:00.000Z", 7, { "hung-piece": 1.5 }),
+        comparison: null,
+        trends: [],
+        progress: [],
+        retired: [],
+        focus: [],
+        summary: "{games} games so far, {mistakeRate} mistakes per 100 moves.",
+        wording: { source: "template", wordedFor: [], calls: 0 },
+        notes: ["few-games", "no-key"],
+      }),
+    );
+    expect(text).toContain("Too few games to pick focus items (7 games found, at least 10 needed).");
+    expect(text).toContain("7 games so far, 6.50 mistakes per 100 moves.");
+    expect(text).toContain("The numbers");
+    expect(text).toMatch(/Left a piece hanging\s+1\.50\s+/);
+    expect(text).not.toContain("Focus");
+    expect(text).not.toContain("Week by week");
+    expect(text).toContain("No model key was set, so the wording comes from built-in templates.");
+    // The few-games note is not repeated once the body has said it.
+    expect(text).not.toContain("so no focus items were picked");
+  });
+
+  it("marks a provisional report with the analysed share and the pending count", () => {
+    const text = formatReport(
+      weekly({
+        revision: 0,
+        gamesFound: 1500,
+        gamesAnalyzed: 150,
+        coverage: { sampled: 150, analysed: 150, total: 1500, complete: false, sampleOnly: false },
+      }),
+      { pending: 1350 },
+    );
+    expect(text).toContain("Games: 1,500 found, 150 analysed");
+    expect(text).toContain("Based on 150 of 1,500 games; 1,350 still analysing.");
+    // Without `pending`, it is worked out from the coverage.
+    expect(
+      formatReport(
+        weekly({ gamesFound: 1500, gamesAnalyzed: 150, coverage: { sampled: 150, analysed: 150, total: 1500, complete: false, sampleOnly: false } }),
+      ),
+    ).toContain("1,350 still analysing.");
+  });
+
+  it("words a sample-only report and the note", () => {
+    const text = formatReport(
+      weekly({
+        gamesFound: 400,
+        gamesAnalyzed: 150,
+        coverage: { sampled: 150, analysed: 150, total: 400, complete: false, sampleOnly: true },
+        notes: ["sample-only"],
+      }),
+    );
+    expect(text).toContain("Based on a sample of 150 of 400 games; run report again to analyse the rest.");
+    expect(text).not.toContain("still analysing");
+    expect(text).toContain("Stopped after the sample, as asked");
+  });
+
+  it("explains the remaining notes in plain sentences", () => {
+    const text = formatReport(weekly({ notes: ["model-failed", "settings-changed"], bandSource: "default", rating: null }));
+    expect(text).toContain("Rating band: club, assumed, as these games carry no ratings");
+    expect(text).toContain("The model did not give usable wording");
+    expect(text).toContain("Analysis settings changed since the last report.");
+  });
+
+  it("says why an item was retired", () => {
+    const base = weekly().retired[0]!;
+    const text = formatReport(
+      weekly({ retired: [{ ...base, why: "rotated" }, { ...base, patternId: "hung-piece", why: "outgrown" }] }),
+    );
+    expect(text).toContain("another habit now costs more");
+    expect(text).toContain("no longer a priority at your rating band");
+  });
+});
