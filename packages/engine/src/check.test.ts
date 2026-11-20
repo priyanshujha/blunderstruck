@@ -222,48 +222,84 @@ describe("F1 at the checked depth", () => {
     expect(check.winPctLoss).toBeCloseTo(68.5, 0);
   });
 
-  it("resolves to the checked values, with the reply's line and shared score updated", async () => {
-    const { c } = await f1Checked();
+  it("resolves to the checked values; the reply keeps its numbers and takes the deeper answer line", async () => {
+    const { a, c } = await f1Checked();
     const r = resolveChecked(c);
     const [qd2, ne4] = r.moves;
+    const check = c.moves[0]!.check!;
     expect(qd2).toMatchObject({
-      scoreBefore: { cp: 788 },
-      scoreAfter: { cp: -283 },
+      scoreBefore: check.scoreBefore,
+      scoreAfter: check.scoreAfter,
+      winPctBefore: check.winPctBefore,
+      winPctAfter: check.winPctAfter,
+      winPctLoss: check.winPctLoss,
+      judgment: "blunder",
       bestUci: "h1e1",
       bestLine: ["h1e1", "a8d8", "d1f3"],
-      judgment: "blunder",
     });
-    expect(qd2!.winPctLoss).toBeCloseTo(68.5, 0);
-    expect(ne4).toMatchObject({ scoreBefore: { cp: -283 }, bestUci: "f6e4", bestLine: F1_ANSWER, winPctLoss: 0 });
-    expect(ne4!.winPctBefore).toBeCloseTo(100 - qd2!.winPctAfter, 6);
+    const stored = a.moves[1]!;
+    expect(ne4).toEqual({ ...stored, bestUci: "f6e4", bestLine: F1_ANSWER });
     expect(() => AnalyzedGameSchema.parse(r)).not.toThrow();
   });
 });
 
+const NUMBERS = ["scoreBefore", "scoreAfter", "winPctBefore", "winPctAfter", "winPctLoss", "judgment"] as const;
+
+/** Every move without its own check has the same numbers in the resolved game as in the stored one. */
+function expectUncheckedKept(stored: AnalyzedGame, resolved: AnalyzedGame) {
+  resolved.moves.forEach((m, i) => {
+    if (m.check) return;
+    for (const k of NUMBERS) expect(m[k], `ply ${m.ply} ${k}`).toEqual(stored.moves[i]![k]);
+  });
+}
+
 describe("resolveChecked", () => {
-  it("is idempotent, does not change its input, and leaves moves away from a check untouched", async () => {
+  // A level first look in which one move lost 5.5; the check then finds the opponent +400 after it.
+  for (const [flagged, color] of [
+    [4, "white"],
+    [5, "black"],
+  ] as const) {
+    it(`never re-judges an unchecked reply (${color} flagged)`, async () => {
+      const a = await firstLook(OPEN, new Map());
+      a.moves[flagged]!.winPctLoss = 5.5;
+      const fens = positions(OPEN);
+      const replyColor = color === "white" ? "black" : "white";
+      const deep = new Map([[fens[flagged + 1]!, { score: { cp: 400 }, bestMove: "a2a3", pv: ["a2a3"] }]]);
+      const one = await checkGame(scripted(deep).engine, a, { depth: 18, color });
+      expect(checkMoves(one, replyColor, 18)).toEqual([]);
+      const both = await checkGame(scripted(deep).engine, one, { depth: 18, color: replyColor });
+      expect(both.check?.colors).toHaveLength(2);
+      expect(both.moves[flagged]!.check?.judgment).toBe("blunder");
+      for (const g of [one, both]) {
+        const r = resolveChecked(g);
+        const reply = r.moves[flagged + 1]!;
+        expect(reply.check).toBeUndefined();
+        expect(reply).toMatchObject({ winPctLoss: 0, judgment: "ok", bestUci: "a2a3", bestLine: ["a2a3"] });
+        expect(r.moves[flagged]).toMatchObject({ judgment: "blunder" });
+        expectUncheckedKept(a, r);
+      }
+    });
+  }
+
+  it("keeps every unchecked move's numbers, is idempotent and does not change its input", async () => {
     const a = await openingGame();
     const fens = positions(OPEN);
     const deep = scripted(new Map([[fens[3]!, { score: { cp: 500 }, bestMove: "f6e4", pv: ["f6e4"] }]]));
-    // Only ply 3 is flagged in this copy.
-    a.moves[0]!.winPctLoss = 0;
-    a.moves[4]!.winPctLoss = 0;
     const c = await checkGame(deep.engine, a, { depth: 18, color: "white" });
     const before = structuredClone(c);
     const r = resolveChecked(c);
     expect(c).toEqual(before);
     expect(resolveChecked(r)).toEqual(r);
-    // Plies 2, 3 and 4 are the checked move and its neighbours; the rest are as stored.
-    r.moves.forEach((m, i) => {
-      if (![1, 2, 3].includes(i)) expect(m).toEqual(c.moves[i]);
-    });
-    for (let i = 0; i + 1 < r.moves.length; i++) {
-      expect(r.moves[i]!.scoreAfter).toEqual(r.moves[i + 1]!.scoreBefore);
-    }
-    expect(r.moves[3]).toMatchObject({ scoreBefore: { cp: -500 }, bestUci: "f6e4", bestLine: ["f6e4"] });
+    expectUncheckedKept(a, r);
+    // Ply 4 answers the checked ply 3: only its line changes.
+    expect(r.moves[3]).toEqual({ ...c.moves[3], bestUci: "f6e4", bestLine: ["f6e4"] });
+    // A reply to a check without an answer line keeps its first-look line.
+    expect(r.moves[1]).toEqual(c.moves[1]);
+    // Moves next to no check are as stored.
+    for (const i of [6, 7, 8, 9]) expect(r.moves[i]).toEqual(c.moves[i]);
   });
 
-  it("gives a shared position the later move's own evaluation when both neighbours were checked", async () => {
+  it("gives each checked move its own checked values when both neighbours were checked", async () => {
     const a = await openingGame();
     const fens = positions(OPEN);
     const w = await checkGame(scripted(new Map([[fens[1]!, { score: { cp: 200 } }]])).engine, a, {
@@ -275,29 +311,39 @@ describe("resolveChecked", () => {
       color: "black",
     });
     const r = resolveChecked(wb);
-    expect(r.moves[0]!.scoreAfter).toEqual({ cp: -260 });
+    expect(r.moves[0]!.scoreAfter).toEqual({ cp: -200 });
+    expect(r.moves[0]!.judgment).toBe(wb.moves[0]!.check!.judgment);
     expect(r.moves[1]!.scoreBefore).toEqual({ cp: -260 });
-    for (let i = 0; i + 1 < r.moves.length; i++) {
-      expect(r.moves[i]!.scoreAfter).toEqual(r.moves[i + 1]!.scoreBefore);
-    }
+    expect(r.moves[1]!.winPctLoss).toBe(wb.moves[1]!.check!.winPctLoss);
+    expectUncheckedKept(a, r);
     expect(resolveChecked(r)).toEqual(r);
   });
 
   it("puts a last move's answer into finalLine", async () => {
     const pgn = '[Event "t"]\n\n1. e4 e5 *';
     const fens = positions(pgn);
-    const a = await firstLook(
-      pgn,
-      new Map([
-        [fens[2]!, { score: { cp: 400 }, bestMove: "d2d4", pv: ["d2d4", "d7d6"] }],
-      ]),
-    );
+    const a = await firstLook(pgn, new Map([[fens[2]!, { score: { cp: 400 }, bestMove: "d2d4", pv: ["d2d4", "d7d6"] }]]));
     expect(a.finalLine).toEqual(["d2d4", "d7d6"]);
     const deep = scripted(new Map([[fens[2]!, { score: { cp: 450 }, bestMove: "g1f3", pv: ["g1f3", "b8c6"] }]]));
     const c = await checkGame(deep.engine, a, { depth: 18, color: "black" });
     expect(c.moves[1]!.check?.answerLine).toEqual(["g1f3", "b8c6"]);
     expect(c.finalLine).toEqual(["d2d4", "d7d6"]);
     expect(resolveChecked(c).finalLine).toEqual(["g1f3", "b8c6"]);
+  });
+
+  it("leaves finalLine alone when a one-colour analysis's last move was not the game's last", async () => {
+    const pgn = '[Event "t"]\n\n1. e4 e5 *';
+    const fens = positions(pgn);
+    const shallow = new Map([
+      [fens[1]!, { score: { cp: 300 } }],
+      [fens[2]!, { score: { cp: 0 }, bestMove: "d2d4", pv: ["d2d4", "d7d6"] }],
+    ]);
+    const a = await analyzeGame(scripted(shallow).engine, { id: "g1", pgn }, { depth: 12, only: "white" });
+    expect(a.moves.map((m) => m.ply)).toEqual([1]);
+    const deep = scripted(new Map([[fens[1]!, { score: { cp: 350 }, bestMove: "e7e5", pv: ["e7e5", "g1f3"] }]]));
+    const c = await checkGame(deep.engine, a, { depth: 18, color: "white" });
+    expect(c.moves[0]!.check?.answerLine).toEqual(["e7e5", "g1f3"]);
+    expect(resolveChecked(c).finalLine).toEqual(["d2d4", "d7d6"]);
   });
 
   it("returns an unchecked game unchanged", async () => {

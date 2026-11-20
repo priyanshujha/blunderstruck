@@ -77,6 +77,7 @@ export function checkMoves(analysis: AnalyzedGame, color: Color, depth: number):
  * evaluates each chosen move's `fenBefore` and then its `fenAfter` (skipped when the move ended
  * the game), in ply order, so the result never depends on what the engine searched before.
  *
+ * Reads the first-look fields, so pass the stored analysis, not a `resolveChecked` one.
  * Returns a new game; the input is not changed. A game already checked at this depth for this
  * colour is returned as a copy without calling the engine. Checking the other colour at the same
  * depth adds it to `check.colors`; a check at another depth replaces every earlier check.
@@ -141,60 +142,45 @@ async function checkMove(engine: Evaluator, m: AnalyzedMove, depth: number): Pro
 }
 
 /**
- * The game as its checked values describe it. For each checked move: its scores, `bestUci` and
- * `bestLine` come from the check; the next ply's `bestLine` (and `bestUci`, its first move)
- * becomes `check.answerLine`, or the game's `finalLine` does when it is the last move. Scores
- * shared with neighbouring moves are updated so that one move's `scoreAfter` always equals the
- * next move's `scoreBefore`; where two adjacent moves were both checked, the shared position takes
- * the later move's own evaluation of it. Every affected move's win%, loss and judgment are then
- * recomputed with the usual rules. Moves next to no checked move are left untouched.
+ * The game as its checked values describe it. A checked move takes every checked value: both
+ * scores, both win%, the loss, the judgment, and `bestUci` and `bestLine` (dropped when the check
+ * has none). A move without its own `check` keeps every first-look number exactly as stored; the
+ * only thing a check may change on it is its `bestUci` and `bestLine`, which take the checked
+ * `answerLine` of the move just before it (the same position, searched deeper) when that line
+ * exists. The game's `finalLine` takes the `answerLine` of a checked last move, but only when the
+ * analysis holds both colours' moves, so that its last stored move is known to be the game's last.
  *
  * Returns a new game and keeps every `check` field, so applying it twice gives the same result.
- * When the check found no line from a position, the first-look line there is kept.
  */
 export function resolveChecked(analysis: AnalyzedGame): AnalyzedGame {
   const out = structuredClone(analysis);
   const moves = out.moves;
-  const touched = new Set<AnalyzedMove>();
-  const at = (i: number, ply: number): AnalyzedMove | undefined => (moves[i]?.ply === ply ? moves[i] : undefined);
+  const bothColors = moves.some((m) => m.color === "white") && moves.some((m) => m.color === "black");
 
   moves.forEach((m, i) => {
     const c = m.check;
     if (!c) return;
-    touched.add(m);
     m.scoreBefore = c.scoreBefore;
+    m.scoreAfter = c.scoreAfter;
+    m.winPctBefore = c.winPctBefore;
+    m.winPctAfter = c.winPctAfter;
+    m.winPctLoss = c.winPctLoss;
+    m.judgment = c.judgment;
     if (c.bestUci) m.bestUci = c.bestUci;
     else delete m.bestUci;
     if (c.bestLine) m.bestLine = c.bestLine;
     else delete m.bestLine;
-    m.scoreAfter = c.scoreAfter;
 
-    const next = at(i + 1, m.ply + 1);
-    if (next?.check) {
-      m.scoreAfter = next.check.scoreBefore;
-    } else if (next) {
-      next.scoreBefore = c.scoreAfter;
-      if (c.answerLine) {
+    if (!c.answerLine) return;
+    const next = moves[i + 1];
+    if (next?.ply === m.ply + 1) {
+      if (!next.check) {
         next.bestLine = c.answerLine;
         next.bestUci = c.answerLine[0];
       }
-      touched.add(next);
-    } else if (i === moves.length - 1 && c.answerLine) {
+    } else if (i === moves.length - 1 && bothColors) {
       out.finalLine = c.answerLine;
     }
-
-    const prev = at(i - 1, m.ply - 1);
-    if (prev && !prev.check) {
-      prev.scoreAfter = c.scoreBefore;
-      touched.add(prev);
-    }
   });
-
-  for (const m of touched) {
-    m.winPctBefore = moverWinPct(m.scoreBefore, m.color);
-    m.winPctAfter = moverWinPct(m.scoreAfter, m.color);
-    m.winPctLoss = m.bestUci === m.uci ? 0 : Math.max(0, m.winPctBefore - m.winPctAfter);
-    m.judgment = judge(m.winPctLoss);
-  }
   return out;
 }
