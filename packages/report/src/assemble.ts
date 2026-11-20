@@ -91,7 +91,7 @@ export async function cutGameIds(store: Store, track: Track, periodEnd: string):
 /**
  * Collect the games a report needs from the store: the period (`periodIds`, capped to `total`
  * with `selectGames`), the comparison window (weekly reports only) and the six weeks ending at
- * `periodEnd`. Games of the period never count in the comparison window too, and games that
+ * `periodEnd` (weekly reports only; a first report's weeks hold only its own games). Games of the period never count in the comparison window too, and games that
  * any report (this one or another) left out with `--max-games` never count. `pending` lists
  * those with no analysis matching `key`.
  */
@@ -126,7 +126,8 @@ export async function reportGames(input: {
   const weekGames = (await store.games({ ...q, from: oldest, to: iso(ms(periodEnd) + 1) })).filter(
     (g) => ms(g.playedAt) > ms(oldest) && ms(g.playedAt) <= ms(periodEnd),
   );
-  const weeksOutside = rated(weekGames);
+  // A first report looks back over its own period only: earlier games are never used.
+  const weeksOutside = input.kind === "first" ? [] : rated(weekGames);
 
   const needed = new Map<string, GameRecord>();
   for (const g of [...capped, ...comparison, ...weeksOutside]) needed.set(g.id, g);

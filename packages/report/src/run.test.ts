@@ -46,7 +46,8 @@ describe("runReport: first report", () => {
     });
     expect(r.gameIds).toHaveLength(25);
     expect(r.weeks).toHaveLength(6);
-    expect(r.weeks.reduce((s, w) => s + w.games, 0)).toBe(30);
+    // Only the period's games: the five older ones in the six weeks are not used.
+    expect(r.weeks.reduce((s, w) => s + w.games, 0)).toBe(25);
     expect(r.focus.length).toBeGreaterThan(0);
     expect(provider.calls).toBe(1);
     expect(r.wording).toMatchObject({ source: "template", calls: 1 });
@@ -61,6 +62,21 @@ describe("runReport: first report", () => {
     expect(h.quits).toBe(1);
     expect(complete).not.toHaveBeenCalled();
     expect(h.fetch.mock.calls[0]![2]).toMatchObject({ since: new Date("2026-08-21T12:00:00.000Z"), max: 20_000 });
+  });
+
+  it("analyses no game older than periodStart, so the oldest week is empty", async () => {
+    const period = games(30, 0.5, 29.5);
+    const older = games(10, 31, 41);
+    const h = harness([...period, ...older]);
+    const r = (await runReport(h.deps(), opts())).report!;
+    expect(r.periodStart).toBe("2026-10-20T12:00:00.000Z");
+    expect(r.weeks).toHaveLength(6);
+    expect(r.weeks[5]!.games).toBe(0);
+    expect(r.weeks.reduce((s, w) => s + w.games, 0)).toBe(30);
+    const analysed = await h.store.analysedIds([...period, ...older].map((g) => g.id), { analysisVersion: r.settings.analysisVersion, depth: 12 });
+    expect(older.filter((g) => analysed.has(g.id))).toEqual([]);
+    expect(analysed.size).toBe(30);
+    expect(h.evaluator.positions).toBe(30 * 5);
   });
 
   it("extends to 90 days when 30 hold only 12 games", async () => {
