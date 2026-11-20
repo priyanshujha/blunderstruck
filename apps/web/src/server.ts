@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { type Platform, type ReportTimeClass, type Track, type WeeklyReport, settingsKey, trackKey } from "@blunderstruck/contracts";
 import { SchemaVersionError, type Store, openSqliteStore } from "@blunderstruck/store";
+import { DEMO_NOTE, DEMO_TRACK, demoStore } from "./demo";
 import { pendingGames } from "./pending";
 import { pageSecurity, renderMessage, renderPage } from "./render";
 
@@ -12,6 +13,8 @@ export interface HandlerOptions {
   dbArg?: string;
   /** The port the server listens on; the `Host` header must name it. Any port when unset. */
   port?: number;
+  /** Trusted HTML put at the top of every report page (the demo's note). */
+  header?: string;
 }
 
 const LOCAL_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
@@ -84,6 +87,7 @@ export function createHandler(
     const others = await otherTracks(track);
     if (!latest) {
       const body = renderPage(undefined, { pending: 0, history: [] }, {
+        ...(opts.header ? { header: opts.header } : {}),
         track,
         reportCommand: command("cli report", track, opts, timeClassGiven || others.length > 0),
         otherTracks: others,
@@ -104,6 +108,7 @@ export function createHandler(
       store.gamesById([...new Set(report.focus.flatMap((f) => f.examples.map((e) => e.gameId)))]),
     ]);
     const body = renderPage(report, { pending, history }, {
+      ...(opts.header ? { header: opts.header } : {}),
       track,
       reports,
       latest: report === latest,
@@ -243,6 +248,8 @@ export interface StartOptions {
   dbPath: string;
   /** The `--db` flag as given, for the commands the pages show. */
   dbArg?: string;
+  /** Serve the made-up demo report from memory instead of opening `dbPath`. */
+  demo?: boolean;
 }
 
 export interface Started {
@@ -253,6 +260,42 @@ export interface Started {
   stop(): Promise<void>;
 }
 
+/** Listens with `handle`; the URL and the messages for the terminal come back with a way to stop. */
+async function listen(
+  o: StartOptions,
+  flags: HandlerOptions,
+  handle: (req: IncomingMessage, res: ServerResponse) => void,
+  what: string,
+  store: Store | undefined,
+  messages: string[],
+): Promise<Started> {
+  const server = createServer(handle);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(o.port, o.host, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const addr = server.address();
+  // With port 0 the real port is known only now; the Host check reads it per request.
+  flags.port = typeof addr === "object" && addr ? addr.port : o.port;
+  const url = `http://${o.host}:${flags.port}/`;
+  messages.push(`Serving ${what} at ${url}  (Ctrl-C to stop)`);
+  return {
+    server,
+    url,
+    messages,
+    async stop() {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      });
+      await store?.close();
+    },
+  };
+}
+
 /**
  * Opens the database, builds the handler, then listens. Any failure before listening closes
  * what was opened and rejects, so no socket is ever left bound without a handler.
@@ -260,6 +303,10 @@ export interface Started {
 export async function startServer(o: StartOptions): Promise<Started> {
   const flags: HandlerOptions = { timeClassGiven: o.timeClass !== undefined, port: o.port, ...(o.dbArg === undefined ? {} : { dbArg: o.dbArg }) };
   const asked: Track = { platform: o.platform, username: o.user, timeClass: o.timeClass ?? "rapid" };
+  if (o.demo) {
+    flags.header = DEMO_NOTE;
+    return listen(o, flags, createHandler(await demoStore(), DEMO_TRACK, flags), "a made-up example report", undefined, []);
+  }
   const opened = await openForWeb(o.dbPath, command("cli report", asked, flags, o.timeClass !== undefined));
   const store = "store" in opened ? opened.store : undefined;
   try {
@@ -284,31 +331,7 @@ export async function startServer(o: StartOptions): Promise<Started> {
         : `${track.username} (${track.platform}, no report stored yet)`;
     }
 
-    const server = createServer(handle);
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(o.port, o.host, () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-    const addr = server.address();
-    // With port 0 the real port is known only now; the Host check reads it per request.
-    flags.port = typeof addr === "object" && addr ? addr.port : o.port;
-    const url = `http://${o.host}:${flags.port}/`;
-    messages.push(`Serving ${what} at ${url}  (Ctrl-C to stop)`);
-    return {
-      server,
-      url,
-      messages,
-      async stop() {
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-          server.closeAllConnections();
-        });
-        await store?.close();
-      },
-    };
+    return await listen(o, flags, handle, what, store, messages);
   } catch (err) {
     await store?.close();
     throw err;

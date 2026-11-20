@@ -248,3 +248,15 @@ export async function fullReport(over: Record<string, unknown> = {}): Promise<{ 
   });
   return { report, games: new Map([p, e, f, o].map((s) => [s.gameId, s.record])) };
 }
+
+/**
+ * The demo's data, built through the real story builder: this week's report with two habits
+ * and four examples (one the game paid for, three it did not), last month's first report, and
+ * six weeks of counts. `demo-data.ts` is this, written out by `demo.test.ts`.
+ */
+export async function demoData(): Promise<{ reports: WeeklyReport[]; weeks: PeriodStats[] }> {
+  const { report } = await fullReport();
+  const { report: first } = await fullReport({ kind: "first", periodEnd: weekEnd(1), periodStart: weekEnd(5), progress: [], retired: [], comparison: null });
+  const weeks = [0, 1, 2, 3, 4, 5].map((i) => period(weekEnd(i), 14 + i, i === 5 ? 0.3 : 1));
+  return JSON.parse(JSON.stringify({ reports: [first, report], weeks }));
+}
