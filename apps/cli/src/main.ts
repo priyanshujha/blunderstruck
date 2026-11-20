@@ -20,7 +20,8 @@ const USAGE = `blunderstruck <command>
 
   patterns <games.json> --player <username> [--max N] [--depth 12] [--analyses <file>]
            [--examples 2] [--all] [--json]
-      Find the player's recurring mistakes and lead with the top three habits.
+      Find the player's recurring mistakes and lead with the top habits
+      (every pattern is still counted; --all lists them).
       Analyses are saved to <games>.analyses.json (or --analyses) and reused when the
       analysis version and depth match; only new or outdated games go through Stockfish.
       --max N        use the player's first N games in the file

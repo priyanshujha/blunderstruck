@@ -23,8 +23,9 @@ pnpm cli patterns data/lichess-<your-username>.json --player <your-username>
 ```
 
 `analyze` lists the mistakes in one game. `patterns` analyses every game in the file (results
-are cached next to it, so a second run is fast) and prints your top habits with example
-positions. Add `--all` to see every pattern and your repeated opening mistakes.
+are cached next to it, so a second run is fast) and prints your top two habits with example
+positions. Every pattern is still counted: add `--all` to see them all and your repeated
+opening mistakes.
 
 The output looks like this (illustrative):
 

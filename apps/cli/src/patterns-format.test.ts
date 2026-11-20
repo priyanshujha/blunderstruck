@@ -59,25 +59,24 @@ const lookup: GameLookup = (id) => ({
   },
 });
 
-const top3 = summary({
+const top2 = summary({
   top: [
     { patternId: "hung-piece", costPer100Moves: 6, gamesAffected: 3, examples: [finding("hung-piece", "g1", 23, 40), finding("hung-piece", "g2", 23, 30)] },
     { patternId: "allowed-tactic", costPer100Moves: 4, gamesAffected: 2, examples: [finding("allowed-tactic", "g3", 23, 20)] },
-    { patternId: "opening-trouble", costPer100Moves: 1.5, gamesAffected: 2, examples: [] },
   ],
 });
 
 describe("formatPatterns", () => {
   it("leads with a header and the top habits in summary order", () => {
-    const out = formatPatterns(top3, lookup);
+    const out = formatPatterns(top2, lookup);
     const lines = out.split("\n");
     expect(lines[0]).toBe("test-player: 4 games, 200 moves, 6.5 mistakes per 100 moves (Stub 1, depth 12)");
     const a = out.indexOf("1. Left a piece hanging (hung-piece)");
     const b = out.indexOf("2. Allowed a tactic (allowed-tactic)");
-    const c = out.indexOf("3. Same opening mistake again (opening-trouble)");
+    expect(lines[2]).toBe("Top 2 habits");
     expect(a).toBeGreaterThan(0);
     expect(b).toBeGreaterThan(a);
-    expect(c).toBeGreaterThan(b);
+    expect(out).not.toMatch(/^3\. /m);
     expect(out).toContain("costs 6.0 win% per 100 moves, in 3 of 4 games");
     expect(out).toContain("12.Nf7+  https://lichess.org/g1#23");
     expect(out).toContain(`FEN ${FEN}`);
@@ -93,16 +92,16 @@ describe("formatPatterns", () => {
 
   it("caps examples per habit", () => {
     const count = (out: string) => (out.match(/https:\/\/lichess\.org\/g/g) ?? []).length;
-    expect(count(formatPatterns(top3, lookup))).toBe(3);
-    expect(count(formatPatterns(top3, lookup, { examples: 1 }))).toBe(2);
-    expect(count(formatPatterns(top3, lookup, { examples: 0 }))).toBe(0);
-    expect(count(formatPatterns(top3, lookup, { examples: 5 }))).toBe(3);
+    expect(count(formatPatterns(top2, lookup))).toBe(3);
+    expect(count(formatPatterns(top2, lookup, { examples: 1 }))).toBe(2);
+    expect(count(formatPatterns(top2, lookup, { examples: 0 }))).toBe(0);
+    expect(count(formatPatterns(top2, lookup, { examples: 5 }))).toBe(3);
   });
 
   it("falls back to the game id when the record is unknown, and drops the ply for other platforms", () => {
-    expect(formatPatterns(top3, () => undefined)).toContain("12. (ply 23)  g1");
+    expect(formatPatterns(top2, () => undefined)).toContain("12. (ply 23)  g1");
     const cc: GameLookup = (id) => ({ record: { url: `https://www.chess.com/game/live/${id}`, platform: "chesscom" } });
-    expect(formatPatterns(top3, cc)).toContain("https://www.chess.com/game/live/g1\n");
+    expect(formatPatterns(top2, cc)).toContain("https://www.chess.com/game/live/g1\n");
   });
 
   it("with all, prints every pattern including zero rows and the no-opening message", () => {

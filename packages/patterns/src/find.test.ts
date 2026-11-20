@@ -137,6 +137,20 @@ describe("findPatterns", () => {
     expect(findPatterns([game("g1", losses, best)], hung).map((f) => f.ply)).toEqual([15, 23]);
   });
 
+  it("does not let a matching best move bridge an allowed-tactic streak", () => {
+    // allowed-tactic's subject is the opponent's key move; the player's best move at ply 21 happens
+    // to be the same UCI string, but the mistake there still ends the streak.
+    const allowed = [
+      fake("allowed-tactic", "tactical", (g) => [hit(g, 15, { subject: "d4f5" }), hit(g, 23, { subject: "d4f5" })]),
+    ];
+    const losses = { 15: 30, 21: 18.7, 23: 30 };
+    const best = { 21: "d4f5" };
+    expect(findPatterns([game("g1", losses, best)], allowed).map((f) => f.ply)).toEqual([15, 23]);
+    // The same moves with missed-tactic, whose subject is the player's best move, are one streak.
+    const missed = [fake("missed-tactic", "tactical", (g) => [hit(g, 15, { subject: "d4f5" }), hit(g, 23, { subject: "d4f5" })])];
+    expect(findPatterns([game("g1", losses, best)], missed).map((f) => f.ply)).toEqual([15]);
+  });
+
   it("a streak continuation still claims its move from lower-ranked labels", () => {
     const detectors = [
       fake("hung-piece", "tactical", (g) => [hit(g, 7, { subject: "rook@a1" }), hit(g, 9, { subject: "rook@a1" })]),

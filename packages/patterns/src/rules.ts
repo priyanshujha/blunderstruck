@@ -1,4 +1,4 @@
-import { type AnalyzedMove, JUDGMENT_THRESHOLDS } from "@blunderstruck/contracts";
+import { type AnalyzedMove, JUDGMENT_THRESHOLDS, MAX_FOCUS_ITEMS } from "@blunderstruck/contracts";
 
 /*
  * Every threshold the detectors use, in one place. Win% is the mover's win probability, 0-100,
@@ -45,8 +45,8 @@ export const TOP_MIN_OCCURRENCES = 2;
 /** ...spread over at least this many games. */
 export const TOP_MIN_GAMES = 2;
 
-/** At most this many top habits. */
-export const TOP_MAX = 3;
+/** At most this many top habits: the product-wide limit on things to work on at once. */
+export const TOP_MAX = MAX_FOCUS_ITEMS;
 
 /** `time-trouble`: the threshold is this share of the expected game time (base + 40 increments)... */
 export const TIME_TROUBLE_SHARE = 0.1;

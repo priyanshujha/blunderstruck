@@ -103,6 +103,12 @@ export const OpeningStat = z.object({
 });
 export type OpeningStat = z.infer<typeof OpeningStat>;
 
+/**
+ * The most things a player is given to work on at once: weekly focus items and the top habits
+ * a pattern summary leads with. Every pattern is still counted; only the highlight is capped.
+ */
+export const MAX_FOCUS_ITEMS = 2;
+
 /** One of the player's leading habits, ranked by the win% it costs that earlier picks do not explain. */
 export const TopHabit = z.object({
   patternId: z.string(),
@@ -128,8 +134,8 @@ export const PatternSummary = z.object({
   stats: z.array(PatternStat),
   findings: z.array(PatternFinding),
   openings: z.array(OpeningStat),
-  /** At most three habits to lead with; empty when none repeats in two or more games. */
-  top: z.array(TopHabit).max(3),
+  /** At most `MAX_FOCUS_ITEMS` habits to lead with; empty when none repeats in two or more games. */
+  top: z.array(TopHabit).max(MAX_FOCUS_ITEMS),
 });
 export type PatternSummary = z.infer<typeof PatternSummary>;
 
@@ -157,7 +163,7 @@ export const WeeklyReport = z.object({
   band: RatingBand,
   gamesAnalyzed: z.number().int().nonnegative(),
   /** Product rule: never more than two things to work on at once. */
-  focus: z.array(FocusItem).max(2),
+  focus: z.array(FocusItem).max(MAX_FOCUS_ITEMS),
   /** How the previous report's focus items moved in the games played since. */
   progress: z.array(
     z.object({

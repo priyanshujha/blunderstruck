@@ -1,8 +1,9 @@
-import { PATTERN_IDS, type PatternFinding, PatternSummary } from "@blunderstruck/contracts";
+import { MAX_FOCUS_ITEMS, PATTERN_IDS, type PatternFinding, PatternSummary } from "@blunderstruck/contracts";
 import { describe, expect, it } from "vitest";
 import { openingStats, patternStats, rankTop, summarize } from "./aggregate";
 import { positionKey } from "./board";
 import { moveAt, playerMoves } from "./game";
+import { TOP_MAX } from "./rules";
 import { fixtureGame } from "./test-fixtures";
 import type { GameDetector, PlayerGame, SetDetector } from "./types";
 
@@ -93,7 +94,7 @@ describe("rankTop", () => {
     expect(rankTop(stats, equal, MOVES).map((h) => h.patternId)).toEqual(["allowed-mate", "time-trouble"]);
   });
 
-  it("stops at three and picks examples from separate games first", () => {
+  it("stops at TOP_MAX (two) and picks examples from separate games first", () => {
     const findings = [
       ...["missed-mate", "allowed-mate", "hung-piece", "missed-tactic"].flatMap((id, i) => [
         f(id, "g1", 10 + 2 * i, 50 - i),
@@ -101,8 +102,14 @@ describe("rankTop", () => {
         f(id, "g2", 10 + 2 * i, 20 - i),
       ]),
     ];
+    expect(TOP_MAX).toBe(MAX_FOCUS_ITEMS);
     const t = top(findings);
-    expect(t.map((h) => h.patternId)).toEqual(["missed-mate", "allowed-mate", "hung-piece"]);
+    expect(t.map((h) => h.patternId)).toEqual(["missed-mate", "allowed-mate"]);
+    // The third and fourth eligible patterns are left out of the highlight, not out of the counts.
+    const stats = patternStats(5, MOVES, findings);
+    for (const id of ["hung-piece", "missed-tactic"]) {
+      expect(stats.find((st) => st.patternId === id)).toMatchObject({ occurrences: 3, gamesAffected: 2 });
+    }
     expect(t[0]!.examples.map((e) => `${e.gameId}:${e.ply}`)).toEqual(["g1:10", "g2:10"]);
   });
 

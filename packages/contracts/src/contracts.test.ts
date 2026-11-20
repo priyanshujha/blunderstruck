@@ -4,6 +4,7 @@ import {
   AnalyzedGame,
   AnalyzedMove,
   BEST_LINE_MAX_PLIES,
+  MAX_FOCUS_ITEMS,
   PATTERN_IDS,
   PATTERNS_VERSION,
   PatternFinding,
@@ -76,7 +77,8 @@ describe("pattern contracts", () => {
     expect(PatternStat.safeParse({ ...stat, moves: -1, gamesAffected: 2 }).success).toBe(false);
   });
 
-  it("caps top habits at three and examples at two", () => {
+  it("caps top habits at MAX_FOCUS_ITEMS and examples at two", () => {
+    expect(MAX_FOCUS_ITEMS).toBe(2);
     const habit = { patternId: "hung-piece", costPer100Moves: 4.2, gamesAffected: 2, examples: [finding, finding] };
     expect(TopHabit.safeParse(habit).success).toBe(true);
     expect(TopHabit.safeParse({ ...habit, examples: [finding, finding, finding] }).success).toBe(false);
@@ -103,9 +105,9 @@ describe("pattern contracts", () => {
           gameIds: ["g1", "g2"],
         },
       ],
-      top: [habit, habit, habit],
+      top: [habit, habit],
     };
     expect(PatternSummary.safeParse(summary).success).toBe(true);
-    expect(PatternSummary.safeParse({ ...summary, top: [habit, habit, habit, habit] }).success).toBe(false);
+    expect(PatternSummary.safeParse({ ...summary, top: [habit, habit, habit] }).success).toBe(false);
   });
 });

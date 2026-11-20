@@ -15,9 +15,11 @@ fetch games ──► analyse each game ──► detect patterns ──► aggr
 3. **Patterns** turns flagged moves into nine named mistake types (`PatternFinding`): missed
    mate, allowed mate, hung piece, allowed tactic, missed capture, missed tactic, thrown win,
    time trouble and opening trouble. Each finding carries a line of evidence text, and tactic
-   findings may carry a motif tag. The summary leads with at most three top habits, ranked by
-   the win probability given away per 100 of the player's moves, each mistake counted once,
-   with a floor of two occurrences in two games.
+   findings may carry a motif tag. The summary leads with at most two top habits
+   (`MAX_FOCUS_ITEMS`, the same limit as the coach's focus items), ranked by the win
+   probability given away per 100 of the player's moves, each mistake counted once, with a
+   floor of two occurrences in two games. Every pattern is still counted and has a stat;
+   `patterns --all` lists them all.
 4. **Progress** turns findings into rates per 100 of the player's moves (`PatternStat`) for a
    period, and compares the period since the last report with the one before it.
 5. **Coach** gives a model the stats, the player's rating band and a few example positions, and
@@ -71,9 +73,11 @@ not checking forcing moves.
 
 **Exclusivity and streaks.** The first six patterns are tactical: a move gets at most one
 tactical finding, and the earliest id in the table wins. `thrown-win`, `time-trouble` and
-`opening-trouble` describe the situation and may share a move with any other pattern. A hit
-on the player's next move from the same pattern with the same subject (the best move, the
-piece and square, or the position) continues the earlier one and is not counted again.
+`opening-trouble` describe the situation and may share a move with any other pattern. A
+later hit in the same game from the same pattern with the same subject (the best move, the
+piece and square, or the position) continues the earlier one and is counted once, as long as
+the player made no other mistake in between. For the three missed-move patterns, a mistake in
+between that missed the same best move keeps the streak going too.
 
 **Stats.** A `PatternStat` divides a pattern's occurrences by the player's own moves across
 all the analysed games, not by games or by all moves in them. Every pattern gets a stat, zeros

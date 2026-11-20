@@ -21,22 +21,27 @@ function toFinding(h: TaggedHit): PatternFinding {
   };
 }
 
+/** Detectors whose `subject` is the player's own best move, as a `bestUci` string. */
+const BEST_MOVE_SUBJECT: ReadonlySet<PatternId> = new Set<PatternId>(["missed-mate", "missed-capture", "missed-tactic"]);
+
 /**
  * The player's own moves strictly between two of their plies keep a streak about `subject`
- * alive: each lost less than the mistake threshold, or its `bestUci` is the subject. The second
- * case is the same missed move again (`missed-capture`, `missed-tactic` and `missed-mate` set
- * `subject` to the move's `bestUci`, same UCI notation), left unlabelled only because a
- * detector's gate failed on that move, e.g. the played move won some material back. Subjects
- * that are not a UCI move, such as hung-piece's "queen e5", never equal a `bestUci`, so for
- * them only the threshold applies.
+ * alive when each lost less than the mistake threshold. For `missed-mate`, `missed-capture` and
+ * `missed-tactic` only, whose `subject` is the player's best move (its `bestUci`), a move in
+ * between whose `bestUci` equals the subject also keeps it: the same missed move again, left
+ * unlabelled only because a detector's gate failed on that move, e.g. the played move won some
+ * material back. Every other detector gets only the threshold, including `allowed-tactic`,
+ * whose subject is a UCI move too but the opponent's, so a matching `bestUci` string would be
+ * a coincidence.
  */
-function streakHolds(g: PlayerGame, fromPly: number, toPly: number, subject: string): boolean {
+function streakHolds(g: PlayerGame, patternId: PatternId, fromPly: number, toPly: number, subject: string): boolean {
   const moves = g.analysis.moves;
   const first = moves[0]?.ply ?? 0;
+  const bestMoveSubject = BEST_MOVE_SUBJECT.has(patternId);
   for (let ply = fromPly + 2; ply < toPly; ply += 2) {
     const m = moves[ply - first];
     if (!m || m.ply !== ply) return false;
-    if (m.winPctLoss >= JUDGMENT_THRESHOLDS.mistake && m.bestUci !== subject) return false;
+    if (m.winPctLoss >= JUDGMENT_THRESHOLDS.mistake && !(bestMoveSubject && m.bestUci === subject)) return false;
   }
   return true;
 }
@@ -48,9 +53,10 @@ function streakHolds(g: PlayerGame, fromPly: number, toPly: number, subject: str
  * - **One count per streak:** a hit from the same detector with the same `subject` as that
  *   detector's previous claimed hit in the game continues it, and is not counted again, when
  *   every one of the player's own moves in between lost less than the mistake threshold
- *   (`JUDGMENT_THRESHOLDS.mistake`) or had the subject as its best move (see `streakHolds`). A clean move in between (say a forced recapture that was
- *   the engine's choice) leaves the same thing on the board, so it is still the same
- *   occurrence; any mistake in between, labelled or not, ends the streak, so the subject
+ *   (`JUDGMENT_THRESHOLDS.mistake`) or, for the detectors whose subject is the player's best
+ *   move, had the subject as its best move (see `streakHolds`). A clean move in between (say a
+ *   forced recapture that was the engine's choice) leaves the same thing on the board, so it is
+ *   still the same occurrence; any other mistake in between, labelled or not, ends the streak, so the subject
  *   recurring after it counts again. A move missing from the analysis also ends it. A
  *   continuation still claims its move, so a lower-ranked tactical label cannot count it
  *   instead. Hits without a `subject` always count.
@@ -86,7 +92,7 @@ export function findPatterns(
     const claim = (h: TaggedHit): void => {
       const last = lastClaim.get(h.patternId);
       const continues =
-        h.subject !== undefined && last !== undefined && last.subject === h.subject && streakHolds(g, last.ply, h.ply, h.subject);
+        h.subject !== undefined && last !== undefined && last.subject === h.subject && streakHolds(g, h.patternId, last.ply, h.ply, h.subject);
       lastClaim.set(h.patternId, { ply: h.ply, subject: h.subject });
       if (!continues) out.push(toFinding(h));
     };
