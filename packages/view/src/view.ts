@@ -581,7 +581,10 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
     ? undefined
     : sampleOnly
       ? `Based on a sample of ${count(analysed)} of ${count(total)} games; run report again to analyse the rest.`
-      : `Based on ${count(analysed)} of ${count(total)} games; ${count(pending)} still being analysed.`;
+      : pending === 0 && analysed >= total
+        ? // Every game of the period is in; what is left belongs to the earlier weeks or the comparison window.
+          `All ${plural(total, "game")} of this period are in; earlier games are still being checked, so some figures may change.`
+        : `Based on ${count(analysed)} of ${count(total)} games; ${count(pending)} still being analysed.`;
 
   let summary = tryRender(r.summary, summaryTokenValues(r))?.trim();
   if (summary === undefined) {

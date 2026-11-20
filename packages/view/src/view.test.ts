@@ -97,6 +97,16 @@ describe("reportView", () => {
     expect(reportView(report()).provisional).toBe(true);
   });
 
+  it("says the period is in, not that nothing is pending, when only earlier games are left", () => {
+    const coverage = { sampled: 30, analysed: 30, total: 30, complete: false, sampleOnly: false };
+    const v = reportView(report({ coverage, gamesFound: 30, gamesAnalyzed: 30 }));
+    expect(v.coverage).toBe("All 30 games of this period are in; earlier games are still being checked, so some figures may change.");
+    expect(v.provisional).toBe(true);
+    expect(reportView(report({ coverage }), { pending: 0 }).coverage).toMatch(/^All 30 games of this period are in/);
+    // Period games still pending keep the count sentence.
+    expect(reportView(report({ coverage: { ...coverage, analysed: 20 } })).coverage).toBe("Based on 20 of 30 games; 10 still being analysed.");
+  });
+
   it("builds the week table oldest first with a dash for an empty week", () => {
     const v = reportView(report({ kind: "weekly" }));
     expect(v.weeks.table.head).toEqual(["Week ending", "Games", "Mistakes /100"]);
