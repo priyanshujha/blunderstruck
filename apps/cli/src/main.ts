@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { once } from "node:events";
-import { createReadStream, existsSync } from "node:fs";
-import { mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
+import { type WriteStream, createReadStream, createWriteStream, existsSync } from "node:fs";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
@@ -19,17 +19,17 @@ import {
   GameRecord,
   Platform,
   RatingBand,
-  ReportTimeClass,
   type WeeklyReport,
   perspective,
 } from "@blunderstruck/contracts";
 import { UciEngine, analyzeGame } from "@blunderstruck/engine";
 import { fetchGames } from "@blunderstruck/ingest";
 import { summarize, toPlayerGame, type PlayerGame } from "@blunderstruck/patterns";
-import { DEFAULT_DEPTH, MAX_LOOKBACK_DAYS, MIN_REPORT_GAMES } from "@blunderstruck/progress";
-import { AnalysisAborted, ReportInputError, runReport, type ReportOptions } from "@blunderstruck/report";
+import { MAX_LOOKBACK_DAYS, MIN_REPORT_GAMES } from "@blunderstruck/progress";
+import { AnalysisAborted, ReportInputError, runReport } from "@blunderstruck/report";
 import { exportStore, importStore, openSqliteStore } from "@blunderstruck/store";
 import { defaultCachePath, loadCache, mergeCache, needsEngine, planCache, saveCache } from "./analysis-cache";
+import { MAX_DEPTH, intOption, parseDbArgs, parseReportArgs, type ReportArgs } from "./args";
 import { dbPath } from "./db-path";
 import { EnvFileError, loadEnv } from "./env";
 import { formatPatterns } from "./patterns-format";
@@ -75,10 +75,10 @@ const USAGE = `blunderstruck <command>
       --json         print the stored report as JSON on stdout (messages on stderr)
       --all          also print the week-by-week table and every pattern's trend
 
-  db export <file> [--db <path>] [--force]
+  db export <file> [--db <path>] [--force] [--env <path>]
       Write the whole database as NDJSON (refuses to overwrite a file without --force).
 
-  db import <file> [--db <path>]
+  db import <file> [--db <path>] [--env <path>]
       Read an export into the database; importing the same file twice changes nothing.
 
   eval "<fen>" [--depth 16]
@@ -98,7 +98,7 @@ async function evalCmd(args: string[]) {
   if (!fen) throw new Error('usage: eval "<fen>" [--depth 16]');
   const engine = await UciEngine.start();
   try {
-    const r = await engine.evaluate(fen, values.depth ? Number(values.depth) : 16);
+    const r = await engine.evaluate(fen, intOption("depth", values.depth, 16, 1, MAX_DEPTH));
     console.log(JSON.stringify({ engine: engine.name, ...r }));
   } finally {
     await engine.quit();
@@ -115,7 +115,7 @@ async function fetchCmd(args: string[]) {
   const username = positionals[1];
   if (!username) throw new Error("username is required");
   const games = await fetchGames(platform, username, {
-    max: values.max ? Number(values.max) : 20,
+    max: intOption("max", values.max, 20, 1),
     since: values.since ? new Date(values.since) : undefined,
   });
   const out = values.out ?? `data/${platform}-${username.toLowerCase()}.json`;
@@ -143,7 +143,7 @@ async function analyzeCmd(args: string[]) {
   const file = positionals[0];
   if (!file || !values.player) throw new Error("usage: analyze <games.json> --player <username>");
   const games = GameRecord.array().parse(JSON.parse(await readFile(file, "utf8")));
-  const game = games[Number(values.index ?? 0)];
+  const game = games[intOption("index", values.index, 0, 0)];
   if (!game) throw new Error(`no game at index ${values.index ?? 0} (file has ${games.length})`);
   const side = perspective(game, values.player);
   if (!side) throw new Error(`${values.player} did not play in ${game.id}`);
@@ -152,7 +152,7 @@ async function analyzeCmd(args: string[]) {
   try {
     const started = Date.now();
     // The full game is analysed (the pattern detectors need both sides); only the player's moves are listed.
-    const analysis = await analyzeGame(engine, game, { depth: values.depth ? Number(values.depth) : 12 });
+    const analysis = await analyzeGame(engine, game, { depth: intOption("depth", values.depth, 12, 1, MAX_DEPTH) });
     const own = analysis.moves.filter((m) => m.color === side.color);
     const flagged = own.filter((m) => m.judgment !== "ok");
     console.log(
@@ -173,13 +173,6 @@ async function analyzeCmd(args: string[]) {
   }
 }
 
-function intOption(name: string, value: string | undefined, fallback: number, min: number): number {
-  if (value === undefined) return fallback;
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < min) throw new Error(`--${name} must be an integer of at least ${min}`);
-  return n;
-}
-
 async function patternsCmd(args: string[]) {
   const { values, positionals } = parseArgs({
     args,
@@ -197,8 +190,8 @@ async function patternsCmd(args: string[]) {
   const file = positionals[0];
   const player = values.player;
   if (!file || !player) throw new Error("usage: patterns <games.json> --player <username>");
-  const depth = intOption("depth", values.depth, 12, 1);
-  const examples = intOption("examples", values.examples, 2, 0);
+  const depth = intOption("depth", values.depth, 12, 1, MAX_DEPTH);
+  const examples = intOption("examples", values.examples, 2, 0, 2);
   const log = (msg: string) => process.stderr.write(`${msg}\n`);
 
   const all = GameRecord.array().parse(JSON.parse(await readFile(file, "utf8")));
@@ -288,74 +281,6 @@ function minutes(seconds: number): string {
 const day = (iso: string) => iso.slice(0, 10);
 const games = (n: number) => `${n} game${n === 1 ? "" : "s"}`;
 
-interface ReportArgs {
-  opts: ReportOptions;
-  db?: string;
-  provider?: "anthropic" | "gemini" | "none";
-  envFile?: string;
-  json: boolean;
-  all: boolean;
-}
-
-/** Parse `report` arguments. Every problem is a `ConfigError` (exit 2). */
-function parseReportArgs(args: string[]): ReportArgs {
-  try {
-    const { values, positionals } = parseArgs({
-      args,
-      allowPositionals: true,
-      options: {
-        "time-class": { type: "string" },
-        depth: { type: "string" },
-        db: { type: "string" },
-        provider: { type: "string" },
-        env: { type: "string" },
-        band: { type: "string" },
-        "as-of": { type: "string" },
-        now: { type: "boolean" },
-        "sample-only": { type: "boolean" },
-        "max-games": { type: "string" },
-        json: { type: "boolean" },
-        all: { type: "boolean" },
-      },
-    });
-    const [platformArg, username, ...extra] = positionals;
-    const platform = Platform.safeParse(platformArg);
-    if (!platform.success || !username || extra.length > 0) {
-      throw new Error("usage: report <lichess|chesscom> <username> [options] (see blunderstruck --help)");
-    }
-    const pick = <T extends string>(name: string, value: string | undefined, allowed: readonly T[]): T | undefined => {
-      if (value === undefined) return undefined;
-      if (!(allowed as readonly string[]).includes(value)) throw new Error(`--${name} must be one of ${allowed.join(", ")}`);
-      return value as T;
-    };
-    const timeClass = pick("time-class", values["time-class"], ReportTimeClass.options);
-    const band = pick("band", values.band, RatingBand.options);
-    const provider = pick("provider", values.provider, ["anthropic", "gemini", "none"] as const);
-    const maxGames = values["max-games"] === undefined ? undefined : intOption("max-games", values["max-games"], 0, 1);
-    const opts: ReportOptions = {
-      platform: platform.data,
-      username,
-      depth: intOption("depth", values.depth, DEFAULT_DEPTH, 1),
-      force: values.now === true,
-      sampleOnly: values["sample-only"] === true,
-      ...(timeClass ? { timeClass } : {}),
-      ...(band ? { band } : {}),
-      ...(values["as-of"] !== undefined ? { asOf: values["as-of"] } : {}),
-      ...(maxGames !== undefined ? { maxGames } : {}),
-    };
-    return {
-      opts,
-      json: values.json === true,
-      all: values.all === true,
-      ...(values.db !== undefined ? { db: values.db } : {}),
-      ...(provider ? { provider } : {}),
-      ...(values.env !== undefined ? { envFile: values.env } : {}),
-    };
-  } catch (err) {
-    throw err instanceof ConfigError ? err : new ConfigError(err instanceof Error ? err.message : String(err));
-  }
-}
-
 function buildProvider(flag: ReportArgs["provider"]): { provider?: CoachProvider; noKey: boolean } {
   const r = resolveProvider({ env: process.env, ...(flag ? { flag } : {}) });
   if (r.kind === "none") return { noKey: r.message === NO_KEY_MESSAGE };
@@ -387,8 +312,6 @@ async function reportCmd(args: string[]) {
   let warnedNoKey = false;
   let provisionalShown = false;
   let secondsPerGame: number | undefined;
-  // What a stop message reports when the engine dies before the run can count the stop itself.
-  let counts = { done: 0, total: 0 };
 
   const controller = new AbortController();
   let engine: UciEngine | undefined;
@@ -400,7 +323,7 @@ async function reportCmd(args: string[]) {
       note("Stopping after the current game (press Ctrl-C again to quit now)...");
       return;
     }
-    void engine?.quit();
+    engine?.kill();
     process.exit(130);
   };
   process.on("SIGINT", onSigint);
@@ -419,7 +342,6 @@ async function reportCmd(args: string[]) {
           return { evaluator: e, name: e.name, quit: () => e.quit() };
         },
         onProgress: ({ phase, done, total, etaSeconds }) => {
-          counts = { done, total };
           if (phase === "sample" && total > done && etaSeconds !== null) secondsPerGame = etaSeconds / (total - done);
           const what = phase === "sample" ? "Analysing the sample" : "Analysing the remaining games";
           const eta = etaSeconds !== null && done < total ? `, ${minutes(etaSeconds)} left` : "";
@@ -435,7 +357,6 @@ async function reportCmd(args: string[]) {
             show(report);
             if (pending === 0) return;
             provisionalShown = true;
-            counts = { done: 0, total: pending };
             if (a.opts.sampleOnly) {
               note(`${games(pending)} not analysed yet (--sample-only); run report again without it to finish.`);
             } else {
@@ -460,7 +381,9 @@ async function reportCmd(args: string[]) {
     const n = outcome.newGames;
     const waitingLine = (since: string) =>
       `${n} new game${n === 1 ? "" : "s"} since ${day(since)}; a new report needs ${MIN_REPORT_GAMES} (${outcome.needed} more)`;
-    if (outcome.status === "unchanged" && r) {
+    if (outcome.lostRace) {
+      note("Another run stored a report for this period first; showing that one.");
+    } else if (outcome.status === "unchanged" && r) {
       note(`No new games since ${day(r.periodEnd)}; showing the latest report.`);
     }
     if (r && !shown(r)) show(r);
@@ -490,12 +413,6 @@ async function reportCmd(args: string[]) {
       process.exitCode = 130;
       return;
     }
-    if (controller.signal.aborted) {
-      // Ctrl-C reaches Stockfish too, which can end the game in progress before the run checks the signal.
-      say(`Stopped: ${counts.done} of ${counts.total} analysed; run report again to continue`);
-      process.exitCode = 130;
-      return;
-    }
     throw err;
   } finally {
     process.off("SIGINT", onSigint);
@@ -504,54 +421,60 @@ async function reportCmd(args: string[]) {
 }
 
 async function dbCmd(args: string[]) {
-  const { values, positionals } = parseArgs({
-    args,
-    allowPositionals: true,
-    options: { db: { type: "string" }, force: { type: "boolean" }, env: { type: "string" } },
-  });
-  const [action, file, ...extra] = positionals;
-  if ((action !== "export" && action !== "import") || !file || extra.length > 0) {
-    throw new ConfigError("usage: db export <file> [--db <path>] [--force] | db import <file> [--db <path>]");
-  }
-  loadEnv(values.env === undefined ? {} : { file: values.env });
-  const path = dbPath(values.db);
+  const a = parseDbArgs(args);
+  loadEnv(a.envFile === undefined ? {} : { file: a.envFile });
+  const path = dbPath(a.db);
+  if (a.action === "export") await dbExport(path, a.file, a.force);
+  else await dbImport(path, a.file);
+}
 
-  if (action === "export") {
-    const store = await openSqliteStore(path, { readOnly: true });
-    let handle;
-    try {
-      handle = await open(file, values.force ? "w" : "wx");
-    } catch (err) {
-      await store.close();
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new ConfigError(`${file} already exists; pass --force to overwrite it`);
-      }
-      throw err;
-    }
-    const counts: Record<string, number> = { track: 0, game: 0, analysis: 0, report: 0 };
-    const out = handle.createWriteStream();
-    try {
-      await exportStore(store, async (line) => {
-        const type = /^\{"type":"(\w+)"/.exec(line)?.[1];
-        if (type && type in counts) counts[type]! += 1;
-        if (!out.write(`${line}\n`)) await once(out, "drain");
-      });
-      await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
-    } catch (err) {
-      out.destroy();
-      await unlink(file).catch(() => {});
-      throw err;
-    } finally {
-      await store.close();
-    }
-    const total = Object.values(counts).reduce((s, n) => s + n, 0);
-    console.log(
-      `Exported ${total} records (${counts.track} tracks, ${counts.game} games, ${counts.analysis} analyses, ` +
-        `${counts.report} reports) from ${path} to ${file}`,
-    );
-    return;
+/**
+ * Write the database as NDJSON to `<file>.tmp`, then rename it over `file`, so a failure never
+ * leaves a partial file or wipes an existing one (even with `--force`).
+ */
+async function dbExport(path: string, file: string, force: boolean) {
+  if (!existsSync(path)) throw new ConfigError(`no database at ${path}`);
+  const exists = () => {
+    if (!force && existsSync(file)) throw new ConfigError(`${file} already exists; pass --force to overwrite it`);
+  };
+  exists();
+  const store = await openSqliteStore(path, { readOnly: true });
+  const tmp = `${file}.tmp`;
+  const counts: Record<string, number> = { track: 0, game: 0, analysis: 0, report: 0 };
+  let out: WriteStream | undefined;
+  let failed: Error | undefined;
+  try {
+    const stream = createWriteStream(tmp);
+    out = stream;
+    stream.on("error", (err) => {
+      failed ??= err;
+    });
+    await once(stream, "open");
+    await exportStore(store, async (line) => {
+      if (failed) throw failed;
+      const type = /^\{"type":"(\w+)"/.exec(line)?.[1];
+      if (type && type in counts) counts[type]! += 1;
+      if (!stream.write(`${line}\n`)) await once(stream, "drain");
+    });
+    await new Promise<void>((resolve, reject) => stream.end((err?: Error | null) => (err ? reject(err) : resolve())));
+    if (failed) throw failed;
+    exists();
+    await rename(tmp, file);
+  } catch (err) {
+    out?.destroy();
+    await unlink(tmp).catch(() => {});
+    throw err;
+  } finally {
+    await store.close();
   }
+  const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
+  console.log(
+    `Exported ${total} records (${counts.track} tracks, ${counts.game} games, ${counts.analysis} analyses, ` +
+      `${counts.report} reports) from ${path} to ${file}`,
+  );
+}
 
+async function dbImport(path: string, file: string) {
   if (!existsSync(file)) throw new ConfigError(`no file at ${file}`);
   const store = await openSqliteStore(path);
   try {

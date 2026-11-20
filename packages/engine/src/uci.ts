@@ -47,7 +47,23 @@ export function parseInfoLine(line: string): InfoLine | undefined {
   return info;
 }
 
-/** One Stockfish process, driven over UCI. Calls must not overlap: await each one. */
+/** Every engine process still running, so none outlives this process. */
+const live = new Set<ChildProcessByStdio<Writable, Readable, null>>();
+let exitHookInstalled = false;
+
+function killAll(): void {
+  for (const proc of live) proc.kill("SIGKILL");
+  live.clear();
+}
+
+/**
+ * One Stockfish process, driven over UCI. Calls must not overlap: await each one.
+ *
+ * On POSIX the process runs in its own process group, so a Ctrl-C in the terminal reaches only
+ * this program, which can then stop between games and `quit()` the engine itself. It is never
+ * left behind: it is killed when this process exits, and Stockfish quits on end of input if
+ * this process dies without exiting cleanly.
+ */
 export class UciEngine {
   name = "stockfish";
   private onLine: ((line: string) => void) | undefined;
@@ -57,6 +73,7 @@ export class UciEngine {
     createInterface({ input: proc.stdout }).on("line", (line) => this.onLine?.(line.trim()));
     proc.on("exit", () => {
       this.exited = true;
+      live.delete(proc);
     });
     // A write to a dead engine must surface as the pending call's rejection, not crash the process.
     proc.stdin.on("error", () => {});
@@ -64,9 +81,16 @@ export class UciEngine {
 
   static async start(opts: EngineOptions = {}): Promise<UciEngine> {
     const path = opts.path ?? process.env.STOCKFISH_PATH ?? "stockfish";
-    const proc = spawn(path, [], { stdio: ["pipe", "pipe", "ignore"] });
+    const proc = spawn(path, [], { stdio: ["pipe", "pipe", "ignore"], detached: process.platform !== "win32" });
     await new Promise<void>((resolve, reject) => {
-      proc.once("spawn", resolve);
+      proc.once("spawn", () => {
+        live.add(proc);
+        if (!exitHookInstalled) {
+          process.once("exit", killAll);
+          exitHookInstalled = true;
+        }
+        resolve();
+      });
       proc.once("error", (err) =>
         reject(new Error(`could not start Stockfish at "${path}" (set STOCKFISH_PATH): ${err.message}`)),
       );
@@ -122,6 +146,13 @@ export class UciEngine {
     if (this.exited) return;
     this.send("quit");
     await new Promise<void>((resolve) => this.proc.once("exit", () => resolve()));
+  }
+
+  /** Stop the engine at once, without waiting for it; for a forced exit. */
+  kill(): void {
+    if (this.exited) return;
+    this.proc.kill("SIGKILL");
+    live.delete(this.proc);
   }
 
   private send(cmd: string): void {
