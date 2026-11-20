@@ -74,7 +74,8 @@ If both keys are set, Claude is used. To choose, pass `--provider anthropic|gemi
 `BLUNDERSTRUCK_PROVIDER`; the flag wins over the variable. Naming a provider whose key is
 missing is an error.
 
-One report is one model call (two if a reply has to be repaired), of roughly 5,000 input
+One report is one model call, and at most three (one repair, and one reword when a large
+account's focus changes after the full analysis), each of roughly 5,000 input
 tokens, most of them a fixed prefix the provider caches, and 1,000 output tokens; set
 `BLUNDERSTRUCK_MODEL_WEEKLY_PLAN` to use a different model, for example a cheaper Claude model.
 

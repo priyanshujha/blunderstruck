@@ -135,7 +135,7 @@ describe("parseWording", () => {
     ["About 1.5 per hundred.", X, X],
     ["Once every 30 moves.", R, R],
     ["You made 4.25 mistakes per hundred moves.", X, X],
-    ["That happened 12 separate times.", X, X],
+    ["That happened 12 separate times.", X, R],
     ["You blundered 9 pieces in 31 outings.", X, X],
     ["Solve 3 per day.", R, R],
     ["Your 1500 rating says otherwise.", R, R],
@@ -230,7 +230,7 @@ describe("parseWording", () => {
     ["Nine times you walked into a fork", X, R],
     ["You made the same mistake 6 times", R, R],
     ["You lost on time in 4 games", R, R],
-    ["With 9 games affected out of 14", X, X],
+    ["With 9 games affected out of 14", X, R],
     ["Half your games had a hanging piece", R, R],
     ["In a third of your games…", X, X],
     ["You gave up 5 pieces", R, R],
@@ -327,13 +327,13 @@ describe("parseWording", () => {
 
     // Rule A: a value the report showed (31 games, 9 affected, 12 occurrences) copied next to a record noun.
     ["You hung a piece in 9 games.", X, X],
-    ["It came up 12 times.", X, X],
-    ["Across 31 games the same thing happened.", X, X],
+    ["It came up 12 times.", X, R],
+    ["Across 31 games the same thing happened.", X, R],
     ["9 of your games had a loose knight.", X, X],
-    ["That happened on 12 occasions.", X, X],
-    ["Loose pieces cost you 9 losses.", X, X],
+    ["That happened on 12 occasions.", X, R],
+    ["Loose pieces cost you 9 losses.", X, R],
     ["In 9 separate games the queen was lost.", X, X],
-    ["Look back at those 9 games tonight.", X, X],
+    ["Look back at those 9 games tonight.", R, R],
     ["It turned up in 9 of your 31 games.", X, X],
 
     // Rule B: statistic forms, whatever the numbers.
@@ -373,6 +373,13 @@ describe("parseWording", () => {
     ["In 1+1 bullet, 9 seconds is a long think.", R, R],
     ["Nf5 and Qg4 hit two weak squares at once in your game.", R, R],
     ["In {gamesAffected} of your {games} games you dropped a piece, {occurrences} times in all.", R, R],
+    ["After 31 moves the game was lost.", R, R],
+    ["After 14 moves the game was lost.", R, R],
+    ["You missed a mate in two in a game you then lost.", R, R],
+    ["You missed mate in 9 in that game.", R, R],
+    ["Play 9 games this week with the London.", R, R],
+    ["Win 9 games in a row against the engine.", R, R],
+    ["Play 12 games tonight at 10+0.", R, R],
   ] as const)("%j: record fields %s, drill %s", (text, inRecord, inDrill) => {
     const cases: [string, string, boolean][] = [
       ["why", answer({ focus: [{ why: text }, {}] }), inRecord],
@@ -384,6 +391,34 @@ describe("parseWording", () => {
       const errors = errorsOf(json);
       expect(errors.length === 0, `${field}: ${errors.join("\n")}`).toBe(passes);
     }
+  });
+
+  it.each([
+    // [sentence, passes in record fields, passes in drill], with shown values 1 to 5 and 14
+    ["Play 5 games this week with the London", R, R],
+    ["Play 2 games, then review them", X, R],
+    ["Win 2 games in a row", R, R],
+    ["Repeat it 3 times", X, R],
+    ["Spend 2 times as long", X, R],
+    ["Review your 3 most recent losses", X, R],
+    ["Solve 2 sets each week, 10 puzzles each", R, R],
+    ["After 14 moves the game was lost", R, R],
+    ["Play 4 games today", R, R],
+    ["You hung a piece in 2 games, so slow down", X, X],
+    ["Look again at 2 of your games", X, X],
+    ["Go through the 3 games you lost on time", X, X],
+    ["It came up in 3 out of 5 games", X, X],
+  ] as const)("%j with few games: record fields %s, drill %s", (text, inRecord, inDrill) => {
+    const shown = new Set([1, 2, 3, 4, 5, 14]);
+    expect(countSentences(text, { shown, record: true }).length === 0).toBe(inRecord);
+    expect(countSentences(text, { shown, record: false }).length === 0).toBe(inDrill);
+  });
+
+  it("unwraps a code fence in linear time", () => {
+    const t0 = performance.now();
+    expect(parseWording(`\`\`\`json\n${" ".repeat(4_000)}`, TWO).ok).toBe(false);
+    expect(parseWording(`\`\`\`json\n${" ".repeat(4_000)}\`\`\`x`, TWO).ok).toBe(false);
+    expect(performance.now() - t0).toBeLessThan(50);
   });
 
   it("checks copied values against the draft it is given", () => {

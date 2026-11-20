@@ -38,7 +38,16 @@ export const SCHEDULE_LEADS: ReadonlySet<string> = new Set(["a", "per", "each", 
 /** The periods a schedule runs over. */
 export const SCHEDULE_PERIODS: ReadonlySet<string> = new Set(["day", "week", "session", "sitting"]);
 /** Single words that make a schedule on their own: "3 games daily". */
-export const SCHEDULE_WORDS: ReadonlySet<string> = new Set(["daily", "weekly"]);
+export const SCHEDULE_WORDS: ReadonlySet<string> = new Set(["daily", "weekly", "today", "tonight"]);
+/** Two-word schedules after a record noun: "5 games this week", "2 games in a row" (three words). */
+export const SCHEDULE_PHRASES: readonly (readonly string[])[] = [["this", "week"], ["in", "a", "row"]];
+
+/** Words just before a shown value that make a drill sentence a statement about the record: "in 9 games", "9 of your games". */
+export const RECORD_LEADS: ReadonlySet<string> = new Set(["in", "of"]);
+/** Verbs that, within three words after "you", make a drill sentence a statement about what the player did. */
+export const RECORD_VERBS: ReadonlySet<string> = new Set([
+  "hung", "lost", "blundered", "missed", "dropped", "left", "allowed", "made", "gave",
+]);
 
 /** Words before a number that make it a move number ("by move 12 of the game"), not a count. */
 export const MOVE_WORDS: ReadonlySet<string> = new Set(["move", "moves"]);
@@ -154,7 +163,10 @@ const isNumber = (w: string) => digitValue(w) !== undefined || isNumberWord(w);
 
 /** Whether a record noun is among the `n` words after `i`. */
 function nounWithin(ws: readonly string[], i: number, n: number): number {
-  for (let j = i + 1; j <= i + n && j < ws.length; j++) if (RECORD_NOUNS.has(ws[j]!)) return j;
+  for (let j = i + 1; j <= i + n && j < ws.length; j++) {
+    // "each week", "this week": the period of a schedule, not what is counted
+    if (RECORD_NOUNS.has(ws[j]!) && !SCHEDULE_LEADS.has(ws[j - 1]!) && ws[j - 1] !== "this") return j;
+  }
   return -1;
 }
 
@@ -172,16 +184,38 @@ function nounAfterFillers(ws: readonly string[], i: number, n: number): boolean 
 /** Whether the words after a record noun at `k` make it a schedule: "a day", "per session", "daily". */
 function isSchedule(ws: readonly string[], k: number): boolean {
   const next = ws[k + 1] ?? "";
-  return SCHEDULE_WORDS.has(next) || (SCHEDULE_LEADS.has(next) && SCHEDULE_PERIODS.has(ws[k + 2] ?? ""));
+  if (SCHEDULE_WORDS.has(next) || (SCHEDULE_LEADS.has(next) && SCHEDULE_PERIODS.has(ws[k + 2] ?? ""))) return true;
+  return SCHEDULE_PHRASES.some((p) => p.every((w, n) => ws[k + 1 + n] === w));
 }
 
-/** Rule A: a value the model was shown, copied in digits before a record noun ("in 9 games"), unless it is a schedule. */
-export function copiesShownValue(ws: readonly string[], shown: ReadonlySet<number>): boolean {
+/** "mate in 2", "mate in two": the length of a forced line, never a count. */
+const isMateIn = (ws: readonly string[], i: number) => ws[i - 1] === "in" && ws[i - 2] === "mate";
+
+/** Whether "you" is followed within three words by a verb from `RECORD_VERBS`: "you hung a piece". */
+function youDid(ws: readonly string[]): boolean {
+  return ws.some((w, i) => w === "you" && ws.slice(i + 1, i + 4).some((v) => RECORD_VERBS.has(v)));
+}
+
+/** Whether "in", "of" or "out of" comes within four words before `i`: "in 9 games", "out of 12 games". */
+function ledByRecord(ws: readonly string[], i: number): boolean {
+  return ws.slice(Math.max(0, i - 4), i).some((w) => RECORD_LEADS.has(w));
+}
+
+/**
+ * Rule A: a value the model was shown, copied in digits before a record noun ("in 9 games"),
+ * unless it is a schedule. In a drill, where numbers are mostly practice ("play 5 games, then
+ * review them"), only when the sentence also states the record: the value comes after "in",
+ * "of" or "out of", is followed by "of" ("9 of your games"), or "you" did something.
+ */
+export function copiesShownValue(ws: readonly string[], shown: ReadonlySet<number>, record: boolean): boolean {
+  const did = !record && youDid(ws);
   return ws.some((w, i) => {
     const v = digitValue(w);
-    if (v === undefined || !shown.has(v) || MOVE_WORDS.has(ws[i - 1] ?? "")) return false;
+    if (v === undefined || !shown.has(v) || isMateIn(ws, i)) return false;
+    if (MOVE_WORDS.has(ws[i - 1] ?? "") || MOVE_WORDS.has(ws[i + 1] ?? "")) return false; // "move 12", "after 14 moves"
     const k = nounWithin(ws, i, 3);
-    return k >= 0 && !isSchedule(ws, k);
+    if (k < 0 || isSchedule(ws, k)) return false;
+    return record || did || ledByRecord(ws, i) || ws[i + 1] === "of";
   });
 }
 
@@ -224,7 +258,7 @@ export function countsInWords(ws: readonly string[]): boolean {
     // "at once" means at the same time, not one time.
     const repeat = (w === "once" && ws[i - 1] !== "at") || w === "twice";
     const counts = COUNT_WORDS.has(w) || (repeat && REPEAT_BEFORE.has(ws[i + 1] ?? ""));
-    return counts && nounAfterFillers(ws, i, 3);
+    return counts && !isMateIn(ws, i) && nounAfterFillers(ws, i, 2);
   });
 }
 
@@ -237,7 +271,7 @@ export interface CountContext {
 /** Whether one sentence states a count about the player's games. */
 export function statesCount(sentence: string, ctx: CountContext): boolean {
   const ws = wordsOf(sentence);
-  return copiesShownValue(ws, ctx.shown) || isStatistic(ws) || (ctx.record && countsInWords(ws));
+  return copiesShownValue(ws, ctx.shown, ctx.record) || isStatistic(ws) || (ctx.record && countsInWords(ws));
 }
 
 /** The sentences of `text` that state a count about the player's games. */
@@ -297,8 +331,11 @@ function readShape(json: unknown): { value?: WordingText; errors: string[] } {
 
 /** Strips a Markdown code fence some models put around JSON. */
 function unfence(text: string): string {
-  const m = /^\s*```(?:json)?\s*\n?([\s\S]*?)\n?\s*```\s*$/i.exec(text);
-  return m ? m[1]! : text;
+  const t = text.trim();
+  if (!t.startsWith("```") || t.length < 6 || !t.endsWith("```")) return text;
+  let body = t.slice(3, t.lastIndexOf("```"));
+  if (body.slice(0, 4).toLowerCase() === "json") body = body.slice(4);
+  return body;
 }
 
 const quote = (s: string) => (s.length > 120 ? `${s.slice(0, 117)}...` : s);
