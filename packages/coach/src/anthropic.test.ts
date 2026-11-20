@@ -68,7 +68,7 @@ describe("anthropicProvider request", () => {
   it("sends the documented headers and body", async () => {
     const { fetchImpl, calls } = stubFetch([json(200, okMessage())]);
     const provider = anthropicProvider({ apiKey: KEY, choice, fetchImpl, sleep: stubSleep().sleep });
-    expect(provider).toMatchObject({ name: "anthropic", model: "claude-sonnet-5-5" });
+    expect(provider).toMatchObject({ name: "anthropic", model: "claude-opus-5-5" });
 
     const result = await provider.complete(req);
 
@@ -81,8 +81,8 @@ describe("anthropicProvider request", () => {
       "content-type": "application/json",
     });
     expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
-      model: "claude-sonnet-5-5",
-      max_tokens: 2000,
+      model: "claude-opus-5-5",
+      max_tokens: 4000,
       system: [{ type: "text", text: "STABLE PREFIX", cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: "player numbers" }],
       output_config: { effort: "medium", format: { type: "json_schema", schema } },

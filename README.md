@@ -64,8 +64,8 @@ Copy `.env.example` to `.env` and set one of:
 
 | Variable | Provider |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude |
-| `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Gemini; also set `BLUNDERSTRUCK_GEMINI_SMART_MODEL` to the model id to use |
+| `ANTHROPIC_API_KEY` | Claude (`claude-opus-5-5`) |
+| `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Gemini (`gemini-3.8-flash`; `BLUNDERSTRUCK_GEMINI_SMART_MODEL` picks another) |
 
 `report`, `db` and `pnpm web` read `.env` from the working directory; `--env <path>` reads
 another file instead. A variable already set in your shell wins over the file.
@@ -73,6 +73,10 @@ another file instead. A variable already set in your shell wins over the file.
 If both keys are set, Claude is used. To choose, pass `--provider anthropic|gemini|none` or set
 `BLUNDERSTRUCK_PROVIDER`; the flag wins over the variable. Naming a provider whose key is
 missing is an error.
+
+One report is one model call (two if a reply has to be repaired), of roughly 5,000 input
+tokens, most of them a fixed prefix the provider caches, and 1,000 output tokens; set
+`BLUNDERSTRUCK_MODEL_WEEKLY_PLAN` to use a different model, for example a cheaper Claude model.
 
 Keep `.env` out of folders that sync to the cloud or to other people: anyone who can read the
 file can use your key.

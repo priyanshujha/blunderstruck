@@ -32,22 +32,14 @@ function resolved(
   apiKey: string,
   env: Record<string, string | undefined>,
 ): ResolvedProvider {
-  let choice: ModelChoice;
-  try {
-    choice = pickModel("weekly-plan", kind, env);
-  } catch {
-    // pickModel only throws for a Gemini tier id missing from the environment.
-    throw new ConfigError(
-      "BLUNDERSTRUCK_GEMINI_SMART_MODEL is not set: name the Gemini model to use for the weekly plan",
-    );
-  }
+  const choice: ModelChoice = pickModel("weekly-plan", kind, env);
   return { kind, apiKey, choice };
 }
 
 /**
  * Choose the provider: the flag, then `BLUNDERSTRUCK_PROVIDER`, then Anthropic if its key is
  * set, then Gemini if its key is set, else none. Throws `ConfigError` when a provider named
- * explicitly has no key, or Gemini has no model variable.
+ * explicitly has no key, or `BLUNDERSTRUCK_PROVIDER` is not a known provider.
  */
 export function resolveProvider(input: {
   env: Record<string, string | undefined>;

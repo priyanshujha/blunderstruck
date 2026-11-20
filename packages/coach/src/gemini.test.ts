@@ -75,7 +75,7 @@ describe("geminiProvider", () => {
       generationConfig: {
         responseMimeType: "application/json",
         responseJsonSchema: schema,
-        maxOutputTokens: 2000,
+        maxOutputTokens: 4000,
         thinkingConfig: { thinkingLevel: "LOW" },
       },
     });

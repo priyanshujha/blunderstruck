@@ -32,7 +32,7 @@ describe("resolveProvider", () => {
     expect(r).toMatchObject({
       kind: "anthropic",
       apiKey: A_KEY,
-      choice: { model: "claude-sonnet-5-5", effort: "medium", maxOutputTokens: 2000 },
+      choice: { model: "claude-opus-5-5", effort: "medium", maxOutputTokens: 4000 },
     });
   });
 
@@ -71,15 +71,16 @@ describe("resolveProvider", () => {
     expect(byEnv.message).not.toContain(A_KEY);
   });
 
-  it("throws ConfigError naming BLUNDERSTRUCK_GEMINI_SMART_MODEL when Gemini has no model", () => {
+  it("uses the default Gemini model when only the Gemini key is set", () => {
     for (const input of [
       { env: { GEMINI_API_KEY: G_KEY } },
       { env: { GEMINI_API_KEY: G_KEY }, flag: "gemini" as const },
     ]) {
-      const err = thrown(() => resolveProvider(input));
-      expect(err).toBeInstanceOf(ConfigError);
-      expect(err.message).toContain("BLUNDERSTRUCK_GEMINI_SMART_MODEL");
-      expect(err.message).not.toContain(G_KEY);
+      expect(resolveProvider(input)).toMatchObject({
+        kind: "gemini",
+        apiKey: G_KEY,
+        choice: { model: "gemini-3.8-flash", maxOutputTokens: 4000 },
+      });
     }
   });
 

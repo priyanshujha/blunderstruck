@@ -298,12 +298,13 @@ call when a provisional report's completed revision has focus items the first pa
 (the reword gets no repair). That is at most three, counted in `wording.calls`. A completed
 revision with the same items makes no call. Never a call per move or per game.
 
-- **Route:** `weekly-plan` in `coach/src/models.ts`: `claude-sonnet-5-5` at effort medium with
-  at most 2,000 output tokens; for Gemini the id comes from `BLUNDERSTRUCK_GEMINI_SMART_MODEL`.
+- **Route:** `weekly-plan` in `coach/src/models.ts`: `claude-opus-5-5` at effort medium with
+  at most 4,000 output tokens, thinking included (a measured plan used about 1,000); for Gemini
+  `gemini-3.8-flash`, or the id in `BLUNDERSTRUCK_GEMINI_SMART_MODEL`.
   `BLUNDERSTRUCK_MODEL_WEEKLY_PLAN` overrides the id for either.
 - **Keys:** `resolveProvider` takes `--provider`, then `BLUNDERSTRUCK_PROVIDER`, then
   Anthropic if `ANTHROPIC_API_KEY` is set, then Gemini if `GEMINI_API_KEY` or `GOOGLE_API_KEY`
-  is set, else none. A named provider without its key, or Gemini without its model variable,
+  is set, else none. A named provider without its key, or an unknown `BLUNDERSTRUCK_PROVIDER`,
   is a configuration error. Keys never appear in messages, the database or reports.
 - **Transport:** plain `fetch`, injected for tests. 429, 500, 502, 503, 504 and 529 are retried
   up to twice, after 2 s then 8 s, or `retry-after` capped at 60 s. Any other failure, or a

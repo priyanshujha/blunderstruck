@@ -5,8 +5,8 @@
  * few kilobytes of aggregated numbers and a handful of example positions, once per player
  * per week. Nothing here may be called per move or per game.
  *
- * Changing a route changes cost and output quality for every self-hoster and for the hosted
- * service. Update models.test.ts in the same change.
+ * Changing a route changes cost and output quality for everyone who runs this. Update
+ * models.test.ts in the same change.
  */
 
 export type Provider = "anthropic" | "gemini";
@@ -31,22 +31,31 @@ export interface ModelChoice {
 type Tier = "smart" | "fast";
 
 const TASKS: Record<CoachTask, { tier: Tier; effort: ModelChoice["effort"]; maxOutputTokens: number }> = {
-  "weekly-plan": { tier: "smart", effort: "medium", maxOutputTokens: 2000 },
+  // Thinking counts toward the output limit; a measured plan used about 1,000 tokens in all.
+  "weekly-plan": { tier: "smart", effort: "medium", maxOutputTokens: 4000 },
   "position-explainer": { tier: "fast", effort: "low", maxOutputTokens: 400 },
   "progress-note": { tier: "fast", effort: "low", maxOutputTokens: 500 },
 };
 
 const ANTHROPIC: Record<Tier, string> = {
-  smart: "claude-sonnet-5-5",
+  smart: "claude-opus-5-5",
   fast: "claude-haiku-5-5",
+};
+
+/**
+ * Gemini defaults. A tier without one must be named in `BLUNDERSTRUCK_GEMINI_<TIER>_MODEL`;
+ * that variable also overrides a default, for keys pinned to another model.
+ */
+const GEMINI: Partial<Record<Tier, string>> = {
+  smart: "gemini-3.8-flash",
 };
 
 const ENV_KEY = (task: CoachTask) => `BLUNDERSTRUCK_MODEL_${task.toUpperCase().replace(/-/g, "_")}`;
 
 /**
- * Resolve the model for a task. Precedence: per-task env override, then the provider's tier.
- * Gemini ids are read from the environment rather than hard-coded, because self-hosters pin
- * whatever their key has access to.
+ * Resolve the model for a task. Precedence: per-task env override, then for Gemini the
+ * `BLUNDERSTRUCK_GEMINI_<TIER>_MODEL` variable, then the provider's default for the tier.
+ * Gemini tiers without a default throw until the variable is set.
  */
 export function pickModel(
   task: CoachTask,
@@ -61,7 +70,7 @@ export function pickModel(
       model = ANTHROPIC[t.tier];
     } else {
       const key = `BLUNDERSTRUCK_GEMINI_${t.tier.toUpperCase()}_MODEL`;
-      model = env[key];
+      model = env[key] || GEMINI[t.tier];
       if (!model) throw new Error(`${key} is not set (needed for "${task}" with provider gemini)`);
     }
   }
@@ -70,5 +79,12 @@ export function pickModel(
 
 /** The default table, for docs and for `blunderstruck models`. */
 export const COACH_ROUTES = Object.fromEntries(
-  (Object.keys(TASKS) as CoachTask[]).map((task) => [task, { ...TASKS[task], anthropic: ANTHROPIC[TASKS[task].tier] }]),
-) as Record<CoachTask, (typeof TASKS)[CoachTask] & { anthropic: string }>;
+  (Object.keys(TASKS) as CoachTask[]).map((task) => [
+    task,
+    {
+      ...TASKS[task],
+      anthropic: ANTHROPIC[TASKS[task].tier],
+      gemini: GEMINI[TASKS[task].tier] ?? `BLUNDERSTRUCK_GEMINI_${TASKS[task].tier.toUpperCase()}_MODEL`,
+    },
+  ]),
+) as Record<CoachTask, (typeof TASKS)[CoachTask] & { anthropic: string; gemini: string }>;
