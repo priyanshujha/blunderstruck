@@ -47,6 +47,14 @@ export function parseInfoLine(line: string): InfoLine | undefined {
   return info;
 }
 
+/** The engine process ended while a call was waiting for it, or before the call was made. */
+export class EngineExitedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EngineExitedError";
+  }
+}
+
 /** Every engine process still running, so none outlives this process. */
 const live = new Set<ChildProcessByStdio<Writable, Readable, null>>();
 let exitHookInstalled = false;
@@ -160,9 +168,9 @@ export class UciEngine {
   }
 
   private until(cmd: string, done: (line: string) => boolean): Promise<void> {
-    if (this.exited) return Promise.reject(new Error("Stockfish has exited"));
+    if (this.exited) return Promise.reject(new EngineExitedError("Stockfish has exited"));
     return new Promise<void>((resolve, reject) => {
-      const onExit = () => reject(new Error(`Stockfish exited during "${cmd}"`));
+      const onExit = () => reject(new EngineExitedError(`Stockfish exited during "${cmd}"`));
       this.proc.once("exit", onExit);
       this.onLine = (line) => {
         if (!done(line)) return;

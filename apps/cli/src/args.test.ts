@@ -1,6 +1,15 @@
 import { ConfigError } from "@blunderstruck/coach";
 import { describe, expect, it } from "vitest";
-import { MAX_DEPTH, intOption, parseDbArgs, parseReportArgs } from "./args";
+import {
+  MAX_DEPTH,
+  intOption,
+  parseAnalyzeArgs,
+  parseDbArgs,
+  parseEvalArgs,
+  parseFetchArgs,
+  parsePatternsArgs,
+  parseReportArgs,
+} from "./args";
 
 const configError = (fn: () => unknown, message?: RegExp) => {
   expect(fn).toThrow(ConfigError);
@@ -150,5 +159,57 @@ describe("parseDbArgs", () => {
     configError(() => parseDbArgs(["export"]), /usage: db/);
     configError(() => parseDbArgs(["export", "f", "g"]), /usage: db/);
     configError(() => parseDbArgs(["import", "f", "--force"]), /--force/);
+  });
+});
+
+describe("the other commands", () => {
+  it("parse their flags", () => {
+    expect(parseEvalArgs(["8/8/8/8/8/8/8/K6k w - - 0 1", "--depth", "10"])).toEqual({
+      fen: "8/8/8/8/8/8/8/K6k w - - 0 1",
+      depth: 10,
+    });
+    expect(parseEvalArgs(["fen"]).depth).toBe(16);
+    expect(parseFetchArgs(["lichess", "someone", "--max", "5", "--since", "2026-11-01", "--out", "x.json"])).toEqual({
+      platform: "lichess",
+      username: "someone",
+      max: 5,
+      since: new Date("2026-11-01"),
+      out: "x.json",
+    });
+    expect(parseAnalyzeArgs(["g.json", "--player", "p", "--index", "2"])).toEqual({
+      file: "g.json",
+      player: "p",
+      index: 2,
+      depth: 12,
+    });
+    expect(parsePatternsArgs(["--all", "g.json", "--player", "p", "--max", "30", "--examples", "1"])).toEqual({
+      file: "g.json",
+      player: "p",
+      max: 30,
+      depth: 12,
+      examples: 1,
+      all: true,
+      json: false,
+    });
+  });
+
+  it.each([
+    ["eval unknown flag", () => parseEvalArgs(["fen", "--bogus"])],
+    ["eval bad depth", () => parseEvalArgs(["fen", "--depth", "1e3"])],
+    ["eval depth too deep", () => parseEvalArgs(["fen", "--depth", "31"])],
+    ["eval missing fen", () => parseEvalArgs([])],
+    ["fetch unknown flag", () => parseFetchArgs(["lichess", "someone", "--bogus"])],
+    ["fetch bad platform", () => parseFetchArgs(["chess24", "someone"])],
+    ["fetch bad max", () => parseFetchArgs(["lichess", "someone", "--max", "0x10"])],
+    ["fetch bad since", () => parseFetchArgs(["lichess", "someone", "--since", "soon"])],
+    ["analyze unknown flag", () => parseAnalyzeArgs(["g.json", "--player", "p", "--bogus"])],
+    ["analyze missing player", () => parseAnalyzeArgs(["g.json"])],
+    ["analyze player looks like a flag", () => parseAnalyzeArgs(["g.json", "--player", "--depth"])],
+    ["analyze bad index", () => parseAnalyzeArgs(["g.json", "--player", "p", "--index", "-1"])],
+    ["patterns unknown flag", () => parsePatternsArgs(["g.json", "--player", "p", "--bogus"])],
+    ["patterns too many examples", () => parsePatternsArgs(["g.json", "--player", "p", "--examples", "3"])],
+    ["patterns missing value", () => parsePatternsArgs(["g.json", "--player"])],
+  ])("refuse %s", (_name, fn) => {
+    configError(fn);
   });
 });

@@ -2,9 +2,9 @@
 import { once } from "node:events";
 import { type WriteStream, createReadStream, createWriteStream, existsSync } from "node:fs";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { randomBytes } from "node:crypto";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { parseArgs } from "node:util";
 import {
   COACH_ROUTES,
   ConfigError,
@@ -17,7 +17,6 @@ import {
 import {
   type AnalyzedGame,
   GameRecord,
-  Platform,
   RatingBand,
   type WeeklyReport,
   perspective,
@@ -26,14 +25,23 @@ import { UciEngine, analyzeGame } from "@blunderstruck/engine";
 import { fetchGames } from "@blunderstruck/ingest";
 import { summarize, toPlayerGame, type PlayerGame } from "@blunderstruck/patterns";
 import { MAX_LOOKBACK_DAYS, MIN_REPORT_GAMES } from "@blunderstruck/progress";
-import { AnalysisAborted, ReportInputError, runReport } from "@blunderstruck/report";
+import { ReportInputError, runReport } from "@blunderstruck/report";
 import { exportStore, importStore, openSqliteStore } from "@blunderstruck/store";
 import { defaultCachePath, loadCache, mergeCache, needsEngine, planCache, saveCache } from "./analysis-cache";
-import { MAX_DEPTH, intOption, parseDbArgs, parseReportArgs, type ReportArgs } from "./args";
+import {
+  type ReportArgs,
+  parseAnalyzeArgs,
+  parseDbArgs,
+  parseEvalArgs,
+  parseFetchArgs,
+  parsePatternsArgs,
+  parseReportArgs,
+} from "./args";
 import { dbPath } from "./db-path";
 import { EnvFileError, loadEnv } from "./env";
 import { formatPatterns } from "./patterns-format";
 import { formatReport } from "./report-format";
+import { type StopCounts, stopMessage } from "./stop";
 
 const USAGE = `blunderstruck <command>
 
@@ -89,16 +97,10 @@ const USAGE = `blunderstruck <command>
 `;
 
 async function evalCmd(args: string[]) {
-  const { values, positionals } = parseArgs({
-    args,
-    allowPositionals: true,
-    options: { depth: { type: "string" } },
-  });
-  const fen = positionals[0];
-  if (!fen) throw new Error('usage: eval "<fen>" [--depth 16]');
+  const { fen, depth } = parseEvalArgs(args);
   const engine = await UciEngine.start();
   try {
-    const r = await engine.evaluate(fen, intOption("depth", values.depth, 16, 1, MAX_DEPTH));
+    const r = await engine.evaluate(fen, depth);
     console.log(JSON.stringify({ engine: engine.name, ...r }));
   } finally {
     await engine.quit();
@@ -106,19 +108,9 @@ async function evalCmd(args: string[]) {
 }
 
 async function fetchCmd(args: string[]) {
-  const { values, positionals } = parseArgs({
-    args,
-    allowPositionals: true,
-    options: { max: { type: "string" }, since: { type: "string" }, out: { type: "string" } },
-  });
-  const platform = Platform.parse(positionals[0]);
-  const username = positionals[1];
-  if (!username) throw new Error("username is required");
-  const games = await fetchGames(platform, username, {
-    max: intOption("max", values.max, 20, 1),
-    since: values.since ? new Date(values.since) : undefined,
-  });
-  const out = values.out ?? `data/${platform}-${username.toLowerCase()}.json`;
+  const { platform, username, max, since, out: outArg } = parseFetchArgs(args);
+  const games = await fetchGames(platform, username, { max, since });
+  const out = outArg ?? `data/${platform}-${username.toLowerCase()}.json`;
   await mkdir(dirname(out), { recursive: true });
   await writeFile(out, JSON.stringify(games, null, 2));
   const tally = { win: 0, loss: 0, draw: 0 };
@@ -130,21 +122,10 @@ async function fetchCmd(args: string[]) {
 }
 
 async function analyzeCmd(args: string[]) {
-  const { values, positionals } = parseArgs({
-    args,
-    allowPositionals: true,
-    options: {
-      player: { type: "string" },
-      index: { type: "string" },
-      depth: { type: "string" },
-      out: { type: "string" },
-    },
-  });
-  const file = positionals[0];
-  if (!file || !values.player) throw new Error("usage: analyze <games.json> --player <username>");
-  const games = GameRecord.array().parse(JSON.parse(await readFile(file, "utf8")));
-  const game = games[intOption("index", values.index, 0, 0)];
-  if (!game) throw new Error(`no game at index ${values.index ?? 0} (file has ${games.length})`);
+  const values = parseAnalyzeArgs(args);
+  const games = GameRecord.array().parse(JSON.parse(await readFile(values.file, "utf8")));
+  const game = games[values.index];
+  if (!game) throw new Error(`no game at index ${values.index} (file has ${games.length})`);
   const side = perspective(game, values.player);
   if (!side) throw new Error(`${values.player} did not play in ${game.id}`);
 
@@ -152,7 +133,7 @@ async function analyzeCmd(args: string[]) {
   try {
     const started = Date.now();
     // The full game is analysed (the pattern detectors need both sides); only the player's moves are listed.
-    const analysis = await analyzeGame(engine, game, { depth: intOption("depth", values.depth, 12, 1, MAX_DEPTH) });
+    const analysis = await analyzeGame(engine, game, { depth: values.depth });
     const own = analysis.moves.filter((m) => m.color === side.color);
     const flagged = own.filter((m) => m.judgment !== "ok");
     console.log(
@@ -174,30 +155,14 @@ async function analyzeCmd(args: string[]) {
 }
 
 async function patternsCmd(args: string[]) {
-  const { values, positionals } = parseArgs({
-    args,
-    allowPositionals: true,
-    options: {
-      player: { type: "string" },
-      max: { type: "string" },
-      depth: { type: "string" },
-      analyses: { type: "string" },
-      examples: { type: "string" },
-      all: { type: "boolean" },
-      json: { type: "boolean" },
-    },
-  });
-  const file = positionals[0];
-  const player = values.player;
-  if (!file || !player) throw new Error("usage: patterns <games.json> --player <username>");
-  const depth = intOption("depth", values.depth, 12, 1, MAX_DEPTH);
-  const examples = intOption("examples", values.examples, 2, 0, 2);
+  const values = parsePatternsArgs(args);
+  const { file, player, depth, examples } = values;
   const log = (msg: string) => process.stderr.write(`${msg}\n`);
 
   const all = GameRecord.array().parse(JSON.parse(await readFile(file, "utf8")));
   const mine = all.filter((g) => perspective(g, player));
   if (mine.length < all.length) log(`skipped ${all.length - mine.length} games ${player} did not play`);
-  const games = values.max ? mine.slice(0, intOption("max", values.max, 0, 1)) : mine;
+  const games = values.max !== undefined ? mine.slice(0, values.max) : mine;
   if (games.length === 0) throw new Error(`no games for ${player} in ${file}`);
 
   const cachePath = values.analyses ?? defaultCachePath(file);
@@ -312,6 +277,8 @@ async function reportCmd(args: string[]) {
   let warnedNoKey = false;
   let provisionalShown = false;
   let secondsPerGame: number | undefined;
+  // The current pass's progress, for a stop the run itself cannot count.
+  let counts: StopCounts = { done: 0, total: 0 };
 
   const controller = new AbortController();
   let engine: UciEngine | undefined;
@@ -342,6 +309,7 @@ async function reportCmd(args: string[]) {
           return { evaluator: e, name: e.name, quit: () => e.quit() };
         },
         onProgress: ({ phase, done, total, etaSeconds }) => {
+          counts = { done, total };
           if (phase === "sample" && total > done && etaSeconds !== null) secondsPerGame = etaSeconds / (total - done);
           const what = phase === "sample" ? "Analysing the sample" : "Analysing the remaining games";
           const eta = etaSeconds !== null && done < total ? `, ${minutes(etaSeconds)} left` : "";
@@ -357,6 +325,7 @@ async function reportCmd(args: string[]) {
             show(report);
             if (pending === 0) return;
             provisionalShown = true;
+            counts = { done: 0, total: pending };
             if (a.opts.sampleOnly) {
               note(`${games(pending)} not analysed yet (--sample-only); run report again without it to finish.`);
             } else {
@@ -408,8 +377,9 @@ async function reportCmd(args: string[]) {
     if (a.json) process.stdout.write(`${JSON.stringify(r ?? null, null, 2)}\n`);
   } catch (err) {
     progress.clear();
-    if (err instanceof AnalysisAborted) {
-      say(`${err.message}; run report again to continue`);
+    const stopped = stopMessage(err, controller.signal.aborted, counts);
+    if (stopped) {
+      say(stopped);
       process.exitCode = 130;
       return;
     }
@@ -439,17 +409,20 @@ async function dbExport(path: string, file: string, force: boolean) {
   };
   exists();
   const store = await openSqliteStore(path, { readOnly: true });
-  const tmp = `${file}.tmp`;
+  // A name of our own next to the target, created with `wx` so no existing file is touched.
+  const tmp = join(dirname(file), `.${basename(file)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
   const counts: Record<string, number> = { track: 0, game: 0, analysis: 0, report: 0 };
   let out: WriteStream | undefined;
   let failed: Error | undefined;
+  let opened = false;
   try {
-    const stream = createWriteStream(tmp);
+    const stream = createWriteStream(tmp, { flags: "wx" });
     out = stream;
     stream.on("error", (err) => {
       failed ??= err;
     });
     await once(stream, "open");
+    opened = true;
     await exportStore(store, async (line) => {
       if (failed) throw failed;
       const type = /^\{"type":"(\w+)"/.exec(line)?.[1];
@@ -462,7 +435,8 @@ async function dbExport(path: string, file: string, force: boolean) {
     await rename(tmp, file);
   } catch (err) {
     out?.destroy();
-    await unlink(tmp).catch(() => {});
+    // Only a file this run created is removed.
+    if (opened) await unlink(tmp).catch(() => {});
     throw err;
   } finally {
     await store.close();

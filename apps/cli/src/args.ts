@@ -137,3 +137,141 @@ export function parseDbArgs(args: string[]): DbArgs {
     };
   });
 }
+
+export interface EvalArgs {
+  fen: string;
+  depth: number;
+}
+
+/** Parse `eval "<fen>" [--depth 16]`. */
+export function parseEvalArgs(args: string[]): EvalArgs {
+  return asConfigError(() => {
+    const { values, positionals } = parseArgs({
+      args,
+      allowPositionals: true,
+      strict: true,
+      options: { depth: { type: "string" } },
+    });
+    const [fen, ...extra] = positionals;
+    if (!fen || extra.length > 0) throw new ConfigError('usage: eval "<fen>" [--depth 16]');
+    return { fen, depth: intOption("depth", values.depth, 16, 1, MAX_DEPTH) };
+  });
+}
+
+export interface FetchArgs {
+  platform: Platform;
+  username: string;
+  max: number;
+  since?: Date;
+  out?: string;
+}
+
+/** Parse `fetch <platform> <username> [--max 20] [--since <date>] [--out <file>]`. */
+export function parseFetchArgs(args: string[]): FetchArgs {
+  return asConfigError(() => {
+    const { values, positionals } = parseArgs({
+      args,
+      allowPositionals: true,
+      strict: true,
+      options: { max: { type: "string" }, since: { type: "string" }, out: { type: "string" } },
+    });
+    const [platformArg, username, ...extra] = positionals;
+    const platform = Platform.safeParse(platformArg);
+    if (!platform.success || !username || extra.length > 0) {
+      throw new ConfigError("usage: fetch <lichess|chesscom> <username> [--max 20] [--since 2026-11-01] [--out file]");
+    }
+    let since: Date | undefined;
+    if (values.since !== undefined) {
+      since = new Date(values.since);
+      if (Number.isNaN(since.getTime())) throw new ConfigError(`--since is not a date: ${values.since}`);
+    }
+    return {
+      platform: platform.data,
+      username,
+      max: intOption("max", values.max, 20, 1),
+      ...(since ? { since } : {}),
+      ...(values.out !== undefined ? { out: values.out } : {}),
+    };
+  });
+}
+
+export interface AnalyzeArgs {
+  file: string;
+  player: string;
+  index: number;
+  depth: number;
+  out?: string;
+}
+
+/** Parse `analyze <games.json> --player <username> [--index 0] [--depth 12] [--out file]`. */
+export function parseAnalyzeArgs(args: string[]): AnalyzeArgs {
+  return asConfigError(() => {
+    const { values, positionals } = parseArgs({
+      args,
+      allowPositionals: true,
+      strict: true,
+      options: {
+        player: { type: "string" },
+        index: { type: "string" },
+        depth: { type: "string" },
+        out: { type: "string" },
+      },
+    });
+    const [file, ...extra] = positionals;
+    if (!file || !values.player || extra.length > 0) {
+      throw new ConfigError("usage: analyze <games.json> --player <username>");
+    }
+    return {
+      file,
+      player: values.player,
+      index: intOption("index", values.index, 0, 0),
+      depth: intOption("depth", values.depth, 12, 1, MAX_DEPTH),
+      ...(values.out !== undefined ? { out: values.out } : {}),
+    };
+  });
+}
+
+export interface PatternsArgs {
+  file: string;
+  player: string;
+  max?: number;
+  depth: number;
+  analyses?: string;
+  examples: number;
+  all: boolean;
+  json: boolean;
+}
+
+/** Parse `patterns <games.json> --player <username> [...]`. */
+export function parsePatternsArgs(args: string[]): PatternsArgs {
+  return asConfigError(() => {
+    const { values, positionals } = parseArgs({
+      args,
+      allowPositionals: true,
+      strict: true,
+      options: {
+        player: { type: "string" },
+        max: { type: "string" },
+        depth: { type: "string" },
+        analyses: { type: "string" },
+        examples: { type: "string" },
+        all: { type: "boolean" },
+        json: { type: "boolean" },
+      },
+    });
+    const [file, ...extra] = positionals;
+    if (!file || !values.player || extra.length > 0) {
+      throw new ConfigError("usage: patterns <games.json> --player <username>");
+    }
+    return {
+      file,
+      player: values.player,
+      depth: intOption("depth", values.depth, 12, 1, MAX_DEPTH),
+      examples: intOption("examples", values.examples, 2, 0, 2),
+      all: values.all === true,
+      json: values.json === true,
+      ...(values.max !== undefined ? { max: intOption("max", values.max, 0, 1) } : {}),
+      ...(values.analyses !== undefined ? { analyses: values.analyses } : {}),
+    };
+  });
+}
