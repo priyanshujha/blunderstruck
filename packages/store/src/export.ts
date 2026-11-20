@@ -1,4 +1,4 @@
-import { EXPORT_FORMAT, ExportLine, type GameRecord } from "@blunderstruck/contracts";
+import { EXPORT_FORMAT, ExportLine, Track, trackKey, type GameRecord } from "@blunderstruck/contracts";
 import { SCHEMA_VERSION } from "./migrations";
 import type { Store } from "./store";
 
@@ -7,9 +7,10 @@ const GAME_BATCH = 500;
 
 /**
  * Write the whole store as NDJSON: a header line, then tracks, games, analyses and reports.
- * Each call of `write` gets one line without its newline. Reports are written per stored track,
- * so a report is exported only when its track was stored with `putTrack`. Period stats are not
- * exported; they are rebuilt from the games and analyses.
+ * Each call of `write` gets one line without its newline. A track that has reports but was never
+ * stored with `putTrack` is written too, taken from its reports, with `createdAt` set to its
+ * earliest report's period end; so an export always imports into a complete store. Period stats
+ * are not exported; they are rebuilt from the games and analyses.
  */
 export async function exportStore(store: Store, write: (line: string) => Promise<void>): Promise<void> {
   const emit = (line: ExportLine) => write(JSON.stringify(line));
@@ -19,13 +20,24 @@ export async function exportStore(store: Store, write: (line: string) => Promise
     schemaVersion: SCHEMA_VERSION,
     exportedAt: new Date().toISOString(),
   });
-  const tracks = await store.tracks();
-  for (const t of tracks) await emit({ type: "track", data: t });
+
+  const tracks = new Map<string, Track & { createdAt: string }>();
+  for (const t of await store.tracks()) tracks.set(trackKey(t), t);
+  for await (const r of store.allReports()) {
+    const key = trackKey(r.track);
+    const end = new Date(r.periodEnd).toISOString();
+    const known = tracks.get(key);
+    if (!known) tracks.set(key, { ...Track.parse(r.track), createdAt: end });
+  }
+  const keys = [...tracks.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const k of keys) {
+    const t = tracks.get(k);
+    if (t) await emit({ type: "track", data: t });
+  }
+
   for await (const g of store.allGames()) await emit({ type: "game", data: g });
   for await (const a of store.allAnalyses()) await emit({ type: "analysis", data: a });
-  for (const t of tracks) {
-    for (const r of await store.reports(t)) await emit({ type: "report", data: r });
-  }
+  for await (const r of store.allReports()) await emit({ type: "report", data: r });
 }
 
 function summarise(error: unknown): string {

@@ -88,6 +88,26 @@ describe("export and import", () => {
     expect((await dump(mem)).join("\n")).toBe(first.join("\n"));
   });
 
+  it("writes a track line for a report whose track was never stored", async () => {
+    const source = memoryStore();
+    const orphan = { platform: "chesscom" as const, username: "OtherPlayer", timeClass: "rapid" as const };
+    await source.putReport(fixtureReport("2026-11-19T00:00:00Z", 0, orphan));
+    await source.putReport(fixtureReport("2026-11-12T00:00:00.000Z", 0, orphan));
+    const lines = await dump(source);
+    expect(JSON.parse(lines[1] ?? "")).toEqual({
+      type: "track",
+      data: { ...orphan, createdAt: "2026-11-12T00:00:00.000Z" },
+    });
+    expect(lines.slice(2).map((l) => JSON.parse(l).type)).toEqual(["report", "report"]);
+
+    const target = await openSqliteStore(":memory:");
+    await importStore(target, from(lines));
+    expect(await target.tracks()).toEqual([{ ...orphan, createdAt: "2026-11-12T00:00:00.000Z" }]);
+    expect(await target.reports(orphan)).toHaveLength(2);
+    expect((await dump(target)).join("\n")).toBe(lines.join("\n"));
+    await target.close();
+  });
+
   it("keeps the higher report revision on import", async () => {
     const target = memoryStore();
     await target.putReport(fixtureReport("2026-11-19T00:00:00.000Z", 5));

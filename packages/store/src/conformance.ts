@@ -297,6 +297,16 @@ export function storeConformance(make: () => Promise<Store>): void {
       expect(got.get(ends[1] ?? "")?.games).toBe(20);
     });
 
+    it("finds a week by the same instant written another way", async () => {
+      const tk = "lichess:testplayer:blitz";
+      const w = fixturePeriodStats("2026-11-12T00:00:00.000Z", "2026-11-19T00:00:00.000Z");
+      await store.putPeriodStats(tk, "k1", w);
+      const asked = "2026-11-19T00:00:00Z";
+      const got = await store.getPeriodStats(tk, "k1", [asked, "2026-11-19T01:00:00+01:00"]);
+      expect([...got.keys()]).toEqual([asked, "2026-11-19T01:00:00+01:00"]);
+      expect(got.get(asked)).toEqual(w);
+    });
+
     it("lists every week for one track and settings key, end ascending", async () => {
       const tk = "lichess:testplayer:blitz";
       const w1 = fixturePeriodStats("2026-11-05T00:00:00.000Z", "2026-11-12T00:00:00.000Z");
@@ -336,6 +346,38 @@ export function storeConformance(make: () => Promise<Store>): void {
       expect((await store.latestReport(TRACK))?.periodEnd).toBe("2026-11-19T00:00:00.000Z");
       expect(await store.latestReport({ ...TRACK, timeClass: "classical" })).toBeUndefined();
       expect(await store.reports(other)).toEqual([fixtureReport("2026-11-26T00:00:00.000Z", 0, other)]);
+    });
+  });
+
+  describe("streams", () => {
+    it("pages allGames and allAnalyses past 500 rows, in order", async () => {
+      const games = Array.from({ length: 1203 }, (_, i) => fixtureGame(1202 - i));
+      await store.putGames(games);
+      for (const g of games) await store.putAnalysis(fixtureAnalysis(g.id));
+      const ids = (await collect(store.allGames())).map((g) => g.id);
+      expect(ids).toHaveLength(1203);
+      expect(ids).toEqual([...ids].sort());
+      expect(new Set(ids).size).toBe(1203);
+      const analysed = (await collect(store.allAnalyses())).map((a) => a.gameId);
+      expect(analysed).toEqual(ids);
+    });
+
+    it("streams every report by (track key, period end), whether or not its track was stored", async () => {
+      const rapid: Track = { ...TRACK, timeClass: "rapid" };
+      const chess: Track = { platform: "chesscom", username: "OtherPlayer", timeClass: "blitz" };
+      await store.putTrack(TRACK, "2026-11-01T00:00:00.000Z");
+      await store.putReport(fixtureReport("2026-11-19T00:00:00.000Z", 0, rapid));
+      await store.putReport(fixtureReport("2026-11-19T00:00:00.000Z"));
+      await store.putReport(fixtureReport("2026-11-12T00:00:00.000Z"));
+      await store.putReport(fixtureReport("2026-11-12T00:00:00.000Z", 0, chess));
+      const got = (await collect(store.allReports())).map((r) => `${r.track.platform}/${r.track.timeClass}/${r.periodEnd}`);
+      expect(got).toEqual([
+        "chesscom/blitz/2026-11-12T00:00:00.000Z",
+        "lichess/blitz/2026-11-12T00:00:00.000Z",
+        "lichess/blitz/2026-11-19T00:00:00.000Z",
+        "lichess/rapid/2026-11-19T00:00:00.000Z",
+      ]);
+      expect(await store.tracks()).toHaveLength(1);
     });
   });
 

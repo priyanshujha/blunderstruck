@@ -56,5 +56,7 @@ export interface Store {
   latestReport(t: Track): Promise<WeeklyReport | undefined>;
   allGames(): AsyncIterable<GameRecord>;
   allAnalyses(): AsyncIterable<AnalyzedGame>;
+  /** Every stored report, ordered by (track key, period end). */
+  allReports(): AsyncIterable<WeeklyReport>;
   close(): Promise<void>;
 }

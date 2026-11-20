@@ -185,6 +185,14 @@ export function memoryStore(): Store {
       }
     },
 
+    async *allReports() {
+      open();
+      const sorted = [...reports.values()].sort(
+        (a, b) => cmp(trackKey(a.track), trackKey(b.track)) || cmp(instant(a.periodEnd), instant(b.periodEnd)),
+      );
+      for (const r of sorted) yield structuredClone(r);
+    },
+
     async *allAnalyses() {
       open();
       const sorted = [...analyses.values()].sort(compareAnalyses);

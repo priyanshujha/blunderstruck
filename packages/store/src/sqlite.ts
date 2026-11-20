@@ -9,7 +9,7 @@ import {
   WeeklyReport,
   trackKey,
 } from "@blunderstruck/contracts";
-import { BUSY_TIMEOUT_MS, migrate } from "./migrations";
+import { BUSY_TIMEOUT_MS, migrate, rollbackQuietly } from "./migrations";
 import type { AnalysisKey, Store } from "./store";
 
 /** Placeholders per `IN (...)` list, well under SQLite's variable limit. */
@@ -48,8 +48,8 @@ export async function openSqliteStore(path: string): Promise<Store> {
   if (path !== ":memory:" && !path.startsWith("file:")) mkdirSync(dirname(resolve(path)), { recursive: true });
   const db = new DatabaseSync(path);
   try {
-    db.exec("PRAGMA journal_mode = DELETE");
     db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    db.exec("PRAGMA journal_mode = DELETE");
     db.exec("PRAGMA foreign_keys = ON");
     migrate(db);
   } catch (err) {
@@ -66,7 +66,7 @@ export async function openSqliteStore(path: string): Promise<Store> {
       db.exec("COMMIT");
       return out;
     } catch (err) {
-      db.exec("ROLLBACK");
+      rollbackQuietly(db);
       throw err;
     }
   }
@@ -300,6 +300,27 @@ export async function openSqliteStore(path: string): Promise<Store> {
         for (const row of rows) yield read(GameRecord, row.json, `game ${String(row.id)}`);
         if (rows.length < PAGE) return;
         after = String(rows[rows.length - 1]?.id);
+      }
+    },
+
+    async *allReports() {
+      let after: SQLInputValue[] | null = null;
+      for (;;) {
+        const rows: Record<string, SQLInputValue>[] =
+          after === null
+            ? all("SELECT track_key, period_end, json FROM reports ORDER BY track_key, period_end LIMIT ?", PAGE)
+            : all(
+                "SELECT track_key, period_end, json FROM reports WHERE (track_key, period_end) > (?, ?) ORDER BY track_key, period_end LIMIT ?",
+                ...after,
+                PAGE,
+              );
+        for (const row of rows) {
+          yield read(WeeklyReport, row.json, `report ${String(row.track_key)} ${String(row.period_end)}`);
+        }
+        if (rows.length < PAGE) return;
+        const last = rows[rows.length - 1];
+        if (!last) return;
+        after = [last.track_key ?? null, last.period_end ?? null];
       }
     },
 

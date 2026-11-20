@@ -88,26 +88,47 @@ export function migrate(db: DatabaseSync): void {
   if (MIGRATIONS.length !== SCHEMA_VERSION) {
     throw new Error(`expected ${SCHEMA_VERSION} migrations, found ${MIGRATIONS.length}`);
   }
-  let version = schemaVersion(db);
-  if (version > SCHEMA_VERSION) {
-    throw new Error(
-      `this database was written by a newer version of blunderstruck (schema ${version}; this version reads up to ${SCHEMA_VERSION})`,
-    );
-  }
-  while (version < SCHEMA_VERSION) {
-    const step = MIGRATIONS[version];
-    if (!step) throw new Error(`missing migration ${version + 1}`);
+  checkNotNewer(schemaVersion(db));
+  for (;;) {
     db.exec("BEGIN IMMEDIATE");
     try {
+      // Read again under the write lock: another connection may have migrated meanwhile.
+      const version = schemaVersion(db);
+      checkNotNewer(version);
+      if (version === SCHEMA_VERSION) {
+        db.exec("COMMIT");
+        return;
+      }
+      const step = MIGRATIONS[version];
+      if (!step) throw new Error(`missing migration ${version + 1}`);
       step(db);
       db.prepare(
         "INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
       ).run(String(version + 1));
       db.exec("COMMIT");
     } catch (err) {
-      db.exec("ROLLBACK");
+      rollbackQuietly(db);
       throw err;
     }
-    version += 1;
+  }
+}
+
+function checkNotNewer(version: number): void {
+  if (version > SCHEMA_VERSION) {
+    throw new Error(
+      `this database was written by a newer version of blunderstruck (schema ${version}; this version reads up to ${SCHEMA_VERSION})`,
+    );
+  }
+}
+
+/**
+ * Roll back after a failed statement. SQLite may already have rolled back on its own (a full
+ * disk, an I/O error), in which case `ROLLBACK` fails; the caller rethrows the original error.
+ */
+export function rollbackQuietly(db: DatabaseSync): void {
+  try {
+    db.exec("ROLLBACK");
+  } catch {
+    // No transaction was active any more.
   }
 }
