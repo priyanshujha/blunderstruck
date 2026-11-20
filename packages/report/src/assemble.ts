@@ -237,12 +237,14 @@ export function bandOf(
 
 /**
  * The span blind spots are computed over: from the earlier of the period's start and six weeks
- * before its end, to its end. A weekly report uses its six weeks; a longer first report uses
- * its whole period.
+ * before its end, but never before `usedFrom` (the track's first period start, before which no
+ * game is used), to the period's end. So a first report uses its period, and a weekly report its
+ * six weeks or back to the track's first period start, whichever is later.
  */
-export function blindSpotSpan(periodStart: string, periodEnd: string): { start: string; end: string } {
+export function blindSpotSpan(periodStart: string, periodEnd: string, usedFrom?: string): { start: string; end: string } {
   const sixWeeks = weekBuckets(iso(periodEnd)).at(-1)!.start;
-  return { start: iso(Math.min(ms(periodStart), ms(sixWeeks))), end: iso(periodEnd) };
+  const start = Math.min(ms(periodStart), ms(sixWeeks));
+  return { start: iso(usedFrom === undefined ? start : Math.max(start, ms(usedFrom))), end: iso(periodEnd) };
 }
 
 /** The games played within `span`, both ends included. */
@@ -342,7 +344,12 @@ export async function buildDraft(input: DraftInput): Promise<Draft> {
     if (a) periodAnalyses.set(g.id, a);
   }
   // Blind spots and example stories read the window's games: every analysed game of the player in it.
-  const span = blindSpotSpan(periodStart, end);
+  // The track's games are used from its first period start (this one's, for a first report).
+  const usedFrom = Math.min(
+    ...input.history.map((r) => ms(r.periodStart)),
+    ...(input.kind === "first" ? [ms(periodStart)] : []),
+  );
+  const span = blindSpotSpan(periodStart, end, Number.isFinite(usedFrom) ? iso(usedFrom) : undefined);
   const windowGames: PlayerGame[] = [];
   for (const g of inSpan(weekGamesPool, span)) {
     const a = analyses.get(g.id);

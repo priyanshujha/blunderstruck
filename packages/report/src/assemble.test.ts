@@ -14,6 +14,14 @@ describe("blindSpotSpan", () => {
     expect(blindSpotSpan(AS_OF, WEEK_LATER)).toEqual({ start: iso(Date.parse(WEEK_LATER) - 42 * DAY), end: WEEK_LATER });
   });
 
+  it("never starts before the track's first period start", () => {
+    const first = iso(Date.parse(AS_OF) - 30 * DAY);
+    expect(blindSpotSpan(first, AS_OF, first)).toEqual({ start: first, end: AS_OF });
+    expect(blindSpotSpan(AS_OF, WEEK_LATER, first)).toEqual({ start: first, end: WEEK_LATER });
+    const long = iso(Date.parse(AS_OF) - 90 * DAY);
+    expect(blindSpotSpan(AS_OF, WEEK_LATER, long)).toEqual({ start: iso(Date.parse(WEEK_LATER) - 42 * DAY), end: WEEK_LATER });
+  });
+
   it("inSpan keeps the games played in it, both ends included", () => {
     const span = { start: iso(Date.parse(AS_OF) - 10 * DAY), end: AS_OF };
     const xs = [game(0), game(10), game(5), game(10.5)];
@@ -35,10 +43,27 @@ describe("buildDraft: the blind-spot window", () => {
     }
   });
 
-  it("a weekly report computes blind spots over its six weeks", async () => {
+  it("a 30-day first report's window is its period, and the next weekly one reaches back to it", async () => {
     const h = harness(games(30, 1, 29));
+    const a = (await runReport(h.deps(), opts())).report!;
+    expect(a.kind).toBe("first");
+    expect(Date.parse(a.periodStart)).toBeGreaterThan(Date.parse(AS_OF) - 42 * DAY);
+    expect(a.focus.length).toBeGreaterThan(0);
+    for (const f of a.focus) expect(f.blindSpotWindow).toMatchObject({ start: a.periodStart, end: a.periodEnd, games: 30 });
+
+    h.available.push(...games(12, 0.5, 6.5, { asOf: WEEK_LATER }));
+    const b = (await runReport(h.deps(), opts({ asOf: WEEK_LATER }))).report!;
+    expect(b.kind).toBe("weekly");
+    expect(b.focus.length).toBeGreaterThan(0);
+    // Six weeks before WEEK_LATER is earlier than the first report's start, so the window starts there.
+    for (const f of b.focus) expect(f.blindSpotWindow).toMatchObject({ start: a.periodStart, end: b.periodEnd, games: 42 });
+  });
+
+  it("a weekly report after a long first report computes blind spots over its six weeks", async () => {
+    // The first report reaches back about 80 days, so six weeks before WEEK_LATER is later.
+    const h = harness(games(20, 20, 80));
     await runReport(h.deps(), opts());
-    // Next week: 12 new games; the six weeks before WEEK_LATER also hold the 30 earlier ones.
+    // Next week: 12 new games; the six weeks also hold the earlier games played within them.
     h.available.push(...games(12, 0.5, 6.5, { asOf: WEEK_LATER }));
     const r = (await runReport(h.deps(), opts({ asOf: WEEK_LATER }))).report!;
     expect(r.kind).toBe("weekly");
@@ -49,5 +74,6 @@ describe("buildDraft: the blind-spot window", () => {
       expect(f.blindSpotWindow).toMatchObject({ start, end: r.periodEnd, games: inWindow.length });
     }
     expect(inWindow.length).toBe(r.weeks.reduce((n, w) => n + w.games, 0));
+    expect(inWindow.length).toBeLessThan(h.available.length);
   });
 });
