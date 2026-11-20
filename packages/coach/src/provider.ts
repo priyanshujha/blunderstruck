@@ -8,6 +8,20 @@ export class ConfigError extends Error {
   }
 }
 
+/**
+ * The provider answered, but the answer cannot be used: cut off at the token limit, refused,
+ * blocked, or missing its text. Callers fall back to template wording.
+ */
+export class ProviderResponseError extends Error {
+  constructor(
+    readonly reason: "truncated" | "refused" | "empty" | "malformed",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ProviderResponseError";
+  }
+}
+
 export interface CompleteRequest {
   system: string;
   user: string;
@@ -18,6 +32,10 @@ export interface CompleteRequest {
 
 export interface CompleteResult {
   text: string;
+  /**
+   * `inputTokens` is every prompt token, cached or not; `cachedInputTokens` is the part of it
+   * read from the provider's cache. `outputTokens` includes any reasoning tokens.
+   */
   usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number };
 }
 
@@ -33,4 +51,9 @@ export interface ProviderOptions {
   fetchImpl?: typeof fetch;
   /** Waits this many milliseconds; replaced in tests. */
   sleep?: (ms: number) => Promise<void>;
+}
+
+/** A non-negative integer from an untyped JSON value, else 0. */
+export function tokenCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
