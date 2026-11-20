@@ -1,5 +1,6 @@
 import { PATTERN_IDS, type FocusItem, type PatternStat, type PeriodStats, WeeklyReport } from "@blunderstruck/contracts";
 import { describe, expect, it } from "vitest";
+import { formatReport } from "../../cli/src/report-format";
 import { esc, renderPage } from "./render";
 
 // Invented players and games only.
@@ -188,5 +189,77 @@ describe("renderPage", () => {
     });
     expect(html).toContain(`<a href="/report/${encodeURIComponent(older)}">First report ending 2026-11-12</a>`);
     expect(html).toContain("Week ending 2026-11-19 (latest) (this one)");
+  });
+
+  it("falls back to a neutral sentence when stored wording no longer renders", () => {
+    const r = report({ summary: "{old} games", focus: [focusItem({ title: "Fix {gone}", drill: "Drill {x" })] });
+    const html = renderPage(r, { pending: 0, history: [] });
+    expect(html).toContain("Wording for this item could not be shown.");
+    expect(html).toContain("The summary could not be shown.");
+    expect(html).toContain("Some stored wording could not be shown, so a plain sentence stands in its place.");
+    expect(html.replace(/<style>[\s\S]*?<\/style>/, "")).not.toMatch(/[{}]/);
+  });
+
+  it("says no data, not zero, for a focus pattern missing from this period", () => {
+    const current = { ...period(END, 31), stats: period(END, 31).stats.filter((s) => s.patternId !== "hung-piece") };
+    const html = renderPage(report({ current }), { pending: 0, history: [] });
+    expect(html).toContain("Now: no data this period; started at 3.00 per 100 moves; target 2.25.");
+    expect(html).not.toContain("Now 0.00");
+    // The why template quotes this period's rate, so it is not filled with a made-up zero.
+    expect(html).toContain("Wording for this item could not be shown.");
+  });
+});
+
+/** Visible text of a page, entities decoded, whitespace collapsed. */
+function pageText(html: string): { text: string; cells: Set<string> } {
+  const decode = (t: string): string =>
+    t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+  const body = html.replace(/<style>[\s\S]*?<\/style>/, "").replace(/<title>[\s\S]*?<\/title>/, "");
+  const cells = new Set([...body.matchAll(/<t[dh][^>]*>([^<]*)<\/t[dh]>/g)].map((m) => decode(m[1]!).trim()));
+  const text = decode(body.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
+  return { text, cells };
+}
+
+describe("parity with the text report", () => {
+  it("shows every sentence and table cell the CLI prints", () => {
+    const r = report({
+      notes: ["no-key", "settings-changed"],
+      coverage: { sampled: 20, analysed: 20, total: 31, complete: false, sampleOnly: false },
+      gamesAnalyzed: 20,
+      comparison: period("2026-11-12T00:00:00.000Z", 120, 3.0),
+      trends: PATTERN_IDS.map((id) => ({
+        patternId: id,
+        previous: stat(id, 120, 4200, 3.0),
+        current: stat(id, 31, 1085, 2.1),
+        verdict: id === "hung-piece" ? "improved" : "flat",
+        pValue: id === "hung-piece" ? 0.04 : null,
+      })),
+      progress: [
+        { patternId: "hung-piece", previous: stat("hung-piece", 120, 4200, 3.0), current: stat("hung-piece", 31, 1085, 2.1), verdict: "improved", pValue: 0.04 },
+      ],
+      retired: [
+        { patternId: "thrown-win", why: "graduated", since: "2026-09-24T00:00:00.000Z", baseline: stat("thrown-win", 28, 980, 1.5), current: stat("thrown-win", 31, 1085, 0.9) },
+      ],
+      focus: [
+        focusItem({
+          examples: [
+            { patternId: "hung-piece", gameId: "lichess:g1", ply: 23, winPctLoss: 32.4, fen: FEN, played: "Qxf7", best: "Nf3", evidence: "queen on f7 taken next move", motif: "fork" },
+          ],
+        }),
+      ],
+    });
+    for (const variant of [r, { ...r, focus: [], notes: ["few-games" as const] }]) {
+      const cli = formatReport(variant, { all: true });
+      const { text, cells } = pageText(renderPage(variant, { pending: 11, history: [] }));
+      for (const raw of cli.split("\n")) {
+        const line = raw.trim().replace(/^- /, "");
+        if (!line) continue;
+        if (/\S\s{2,}\S/.test(line)) {
+          for (const cell of line.split(/\s{2,}/)) expect(cells, `cell "${cell}" of "${line}"`).toContain(cell);
+        } else {
+          expect(text, line).toContain(line.replace(/\s+/g, " "));
+        }
+      }
+    }
   });
 });

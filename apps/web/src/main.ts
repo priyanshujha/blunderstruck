@@ -1,11 +1,10 @@
-import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { Platform, ReportTimeClass, type Track, trackKey } from "@blunderstruck/contracts";
-import { type Store, memoryStore, openSqliteStore } from "@blunderstruck/store";
-import { createHandler } from "./server";
+import type { Store } from "@blunderstruck/store";
+import { command, createHandler, openForWeb, problemHandler } from "./server";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 4321;
@@ -65,35 +64,43 @@ async function main(): Promise<void> {
   const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("--port must be a whole number from 0 to 65535");
 
-  // A missing database is not created: the page then says to run the report command first.
-  const path = dbPath(values.db);
-  const store = existsSync(path) ? await openSqliteStore(path) : memoryStore();
-
-  const { track, others } = await pickTrack(store, platform.data, user, timeClass);
-  if (!timeClass && others.length > 0) {
-    console.error(
-      `Showing ${track.timeClass}. Also stored: ${others.map((t) => t.timeClass).join(", ")} (use --time-class to pick one).`,
-    );
-  }
-
-  const server = createServer(
-    createHandler(store, track, { timeClassGiven: timeClass !== undefined, dbArg: values.db }),
-  );
+  const server = createServer();
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, HOST, () => resolve());
   });
   const addr = server.address();
   const actual = typeof addr === "object" && addr ? addr.port : port;
-  const what = (await store.latestReport(track))
-    ? `${track.username} (${track.platform}, ${track.timeClass})`
-    : `${track.username} (${track.platform}, no report stored yet)`;
-  console.error(`Serving ${what} at http://${HOST}:${actual}/  (Ctrl-C to stop)`);
+  const url = `http://${HOST}:${actual}/`;
+  const flags = { timeClassGiven: timeClass !== undefined, port: actual, ...(values.db === undefined ? {} : { dbArg: values.db }) };
+
+  // Read-only: the server never creates, migrates or writes the database.
+  const path = dbPath(values.db);
+  const asked: Track = { platform: platform.data, username: user, timeClass: timeClass ?? "rapid" };
+  const opened = await openForWeb(path, command("cli report", asked, flags, timeClass !== undefined));
+  let store: Store | undefined;
+  if ("problem" in opened) {
+    server.on("request", problemHandler(opened.problem, flags));
+    console.error(`${opened.problem.message}\nServing that message at ${url}  (Ctrl-C to stop)`);
+  } else {
+    store = opened.store;
+    const { track, others } = await pickTrack(store, platform.data, user, timeClass);
+    if (!timeClass && others.length > 0) {
+      console.error(
+        `Showing ${track.timeClass}. Also stored: ${others.map((t) => t.timeClass).join(", ")} (use --time-class to pick one).`,
+      );
+    }
+    server.on("request", createHandler(store, track, flags));
+    const what = (await store.latestReport(track))
+      ? `${track.username} (${track.platform}, ${track.timeClass})`
+      : `${track.username} (${track.platform}, no report stored yet)`;
+    console.error(`Serving ${what} at ${url}  (Ctrl-C to stop)`);
+  }
 
   const stop = (): void => {
     server.close();
     server.closeAllConnections();
-    void store.close();
+    void store?.close();
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);

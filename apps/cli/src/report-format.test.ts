@@ -146,7 +146,7 @@ describe("formatReport", () => {
     expect(text).toContain("Rating band: club, from your median rating of 1420 in these games");
     expect(text).toContain("Period: 2026-11-12 to 2026-11-19");
     expect(text).toContain("Games: 31 found, all analysed");
-    expect(text).not.toContain("still analysing");
+    expect(text).not.toContain("still being analysed");
     expect(text).toContain("31 games, 6.50 mistakes per 100 moves. 1 thing to work on.");
     expect(text).toContain("1. Look before you let go of a piece");
     expect(text).toContain("You left a piece hanging in 23 of 31 games, 2.10 per 100 moves.");
@@ -239,7 +239,7 @@ describe("formatReport", () => {
         notes: ["few-games", "no-key"],
       }),
     );
-    expect(text).toContain("Too few games to pick focus items (7 games found, at least 10 needed).");
+    expect(text).toContain("Too few games to pick focus items (7 games found).");
     expect(text).toContain("7 games so far, 6.50 mistakes per 100 moves.");
     expect(text).toContain("The numbers");
     expect(text).toMatch(/Left a piece hanging\s+1\.50\s+/);
@@ -261,13 +261,13 @@ describe("formatReport", () => {
       { pending: 1350 },
     );
     expect(text).toContain("Games: 1,500 found, 150 analysed");
-    expect(text).toContain("Based on 150 of 1,500 games; 1,350 still analysing.");
+    expect(text).toContain("Based on 150 of 1,500 games; 1,350 still being analysed.");
     // Without `pending`, it is worked out from the coverage.
     expect(
       formatReport(
         weekly({ gamesFound: 1500, gamesAnalyzed: 150, coverage: { sampled: 150, analysed: 150, total: 1500, complete: false, sampleOnly: false } }),
       ),
-    ).toContain("1,350 still analysing.");
+    ).toContain("1,350 still being analysed.");
   });
 
   it("words a sample-only report and the note", () => {
@@ -280,7 +280,7 @@ describe("formatReport", () => {
       }),
     );
     expect(text).toContain("Based on a sample of 150 of 400 games; run report again to analyse the rest.");
-    expect(text).not.toContain("still analysing");
+    expect(text).not.toContain("still being analysed");
     expect(text).toContain("Stopped after the sample, as asked");
   });
 
@@ -298,5 +298,33 @@ describe("formatReport", () => {
     );
     expect(text).toContain("another habit now costs more");
     expect(text).toContain("no longer a priority at your rating band");
+  });
+
+  it("never throws on stored wording that no longer renders, and shows no braces", () => {
+    const text = formatReport(weekly({ summary: "{oldToken} games", focus: [focusItem("hung-piece", { why: "In {renamed} games.", title: "Unpaired {" })] }));
+    expect(text).toContain("Wording for this item could not be shown.");
+    expect(text).toContain("The summary could not be shown.");
+    expect(text).toContain("- Some stored wording could not be shown, so a plain sentence stands in its place.");
+    expect(text).not.toMatch(/[{}]/);
+  });
+
+  it("says no data, not zero, when the focus pattern is missing from this period", () => {
+    const current = period("2026-11-19T00:00:00.000Z", 31);
+    current.stats = current.stats.filter((s) => s.patternId !== "hung-piece");
+    const text = formatReport(weekly({ current }), { all: true });
+    expect(text).toContain("Now: no data this period; started at 3.00 per 100 moves; target 2.25.");
+    expect(text).not.toContain("Now 0.00");
+  });
+
+  it("prints focus items on a weekly report with no earlier focus", () => {
+    const text = formatReport(weekly({ progress: [], retired: [] }));
+    expect(text).toContain("Focus\n1. Look before you let go of a piece [Left a piece hanging]");
+    expect(text).not.toContain("Last report's focus");
+  });
+
+  it("decides too few games from the note alone", () => {
+    const text = formatReport(weekly({ focus: [], gamesFound: 5, notes: [] }));
+    expect(text).toContain("No habit repeated often enough to pick a focus item this week.");
+    expect(text).not.toContain("Too few games");
   });
 });

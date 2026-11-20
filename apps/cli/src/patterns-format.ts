@@ -1,21 +1,9 @@
 import type { AnalyzedGame, GameRecord, PatternFinding, PatternSummary } from "@blunderstruck/contracts";
+import { patternName } from "@blunderstruck/view";
 
-/** Plain-language names for pattern ids, as a player would say them. */
-export const PATTERN_NAMES: Record<string, string> = {
-  "missed-mate": "Missed a mate",
-  "allowed-mate": "Walked into a mate",
-  "hung-piece": "Left a piece hanging",
-  "allowed-tactic": "Allowed a tactic",
-  "missed-capture": "Missed a winning capture",
-  "missed-tactic": "Missed a winning tactic",
-  "thrown-win": "Let a winning position slip",
-  "time-trouble": "Mistakes when short of time",
-  "opening-trouble": "Same opening mistake again",
-};
+export { PATTERN_NAMES, patternName } from "@blunderstruck/view";
 
 export const NOTHING_ELIGIBLE = "No habit repeated in two or more games yet.";
-
-export const patternName = (id: string): string => PATTERN_NAMES[id] ?? id;
 
 /** What the formatter knows about one game: the record for its link, the analysis for move and FEN. */
 export interface GameInfo {

@@ -1,67 +1,10 @@
 import { createHash } from "node:crypto";
-import {
-  type FocusExample,
-  type FocusItem,
-  type GameRecord,
-  type PatternProgress,
-  type PeriodStats,
-  type ProgressVerdict,
-  type RetiredFocus,
-  type Track,
-  type WeeklyReport,
-  focusTokenValues,
-  renderText,
-  summaryTokenValues,
-} from "@blunderstruck/contracts";
+import type { GameRecord, PeriodStats, Track, WeeklyReport } from "@blunderstruck/contracts";
+import { type ExampleView, type FocusView, type ReportView, type SectionView, type TableView, reportView } from "@blunderstruck/view";
 
-// The wording below follows apps/cli/src/report-format.ts and patterns-format.ts line for line,
-// so the page and the text report say the same thing. Apps do not import from each other.
-
-const PATTERN_NAMES: Record<string, string> = {
-  "missed-mate": "Missed a mate",
-  "allowed-mate": "Walked into a mate",
-  "hung-piece": "Left a piece hanging",
-  "allowed-tactic": "Allowed a tactic",
-  "missed-capture": "Missed a winning capture",
-  "missed-tactic": "Missed a winning tactic",
-  "thrown-win": "Let a winning position slip",
-  "time-trouble": "Mistakes when short of time",
-  "opening-trouble": "Same opening mistake again",
-};
-const patternName = (id: string): string => PATTERN_NAMES[id] ?? id;
-
-/** Fewest games a report needs before it picks focus items. */
-const MIN_GAMES_FOR_FOCUS = 10;
-/** The persistence line is only worth saying when at least this many weeks were counted. */
-const MIN_WEEKS_TO_QUOTE = 3;
 /** Seconds between reloads while games are still being analysed. */
 export const REFRESH_SECONDS = 30;
 
-const VERDICT_WORDS: Record<ProgressVerdict, string> = {
-  improved: "improved",
-  flat: "no clear change",
-  worse: "worse",
-  "insufficient-data": "not enough games yet",
-};
-
-const RETIRED_WHY: Record<RetiredFocus["why"], string> = {
-  graduated: "reached its target and stayed there",
-  rotated: "worked on for a while, and another habit now costs more",
-  outgrown: "no longer a priority at your rating band",
-};
-
-const BAND_SOURCE: Record<WeeklyReport["bandSource"], (r: WeeklyReport) => string> = {
-  ratings: (r) =>
-    r.rating === null ? "from the ratings in these games" : `from your median rating of ${r.rating} in these games`,
-  override: () => "set by you",
-  previous: () => "carried over from the last report, as these games carry no ratings",
-  default: () => "assumed, as these games carry no ratings",
-};
-
-const f2 = (n: number): string => n.toFixed(2);
-const f1 = (n: number): string => n.toFixed(1);
-const count = (n: number): string => n.toLocaleString("en-US");
-const plural = (n: number, one: string, many = `${one}s`): string => `${count(n)} ${n === 1 ? one : many}`;
 const day = (iso: string): string => iso.slice(0, 10);
 
 /** Escapes text for HTML element content and for quoted attribute values. */
@@ -81,15 +24,6 @@ function safeHref(url: string): string | undefined {
     return u.protocol === "https:" || u.protocol === "http:" ? u.href : undefined;
   } catch {
     return undefined;
-  }
-}
-
-/** Model-written templates are validated before they are stored; if one still fails, show it as written. */
-function tokens(template: string, values: Record<string, string>): string {
-  try {
-    return renderText(template, values);
-  } catch {
-    return template;
   }
 }
 
@@ -164,30 +98,14 @@ function page(title: string, body: string, refresh: boolean): string {
     .join("\n");
 }
 
-function headerHtml(r: WeeklyReport): string {
-  const analysed = r.gamesAnalyzed === r.gamesFound ? "" : `, ${count(r.gamesAnalyzed)} analysed`;
-  return [
-    `<h1>${esc(`${r.kind === "first" ? "First report" : "Weekly report"} for ${r.player} (${r.track.platform}, ${r.track.timeClass})`)}</h1>`,
-    `<p>${esc(`Rating band: ${r.band}, ${BAND_SOURCE[r.bandSource](r)}`)}</p>`,
-    `<p>${esc(`Period: ${day(r.periodStart)} to ${day(r.periodEnd)}`)}</p>`,
-    `<p>${esc(`Games: ${count(r.gamesFound)} found${analysed || ", all analysed"}`)}</p>`,
-  ].join("\n");
+const tableHtml = (t: TableView): string => table(t.head, t.rows);
+
+function sectionHtml(s: SectionView | undefined): string | undefined {
+  if (!s || s.lines.length === 0) return undefined;
+  return `<h2>${esc(s.heading)}</h2>\n<ul>${s.lines.map((l) => `<li>${esc(l)}</li>`).join("\n")}</ul>`;
 }
 
-function coverageHtml(r: WeeklyReport, pending: number): string | undefined {
-  const { analysed, total, complete, sampleOnly } = r.coverage;
-  if (complete) return undefined;
-  const text = sampleOnly
-    ? `Based on a sample of ${count(analysed)} of ${count(total)} games; run report again to analyse the rest.`
-    : `Based on ${count(analysed)} of ${count(total)} games; ${count(pending)} still being analysed.`;
-  return `<p class="banner" role="status">${esc(text)}</p>`;
-}
-
-function exampleHtml(ex: FocusExample, games: PageOptions["games"]): string {
-  const better = ex.best ? `; better was ${ex.best}` : "";
-  const parts = [`You played ${ex.played}${better} (-${f1(ex.winPctLoss)} win%)`];
-  const why = [ex.evidence, ex.motif ? `motif: ${ex.motif}` : undefined].filter(Boolean).join("; ");
-  if (why) parts.push(why);
+function exampleHtml(ex: ExampleView, games: PageOptions["games"]): string {
   const game = games?.get(ex.gameId);
   const opening = [game?.opening?.eco, game?.opening?.name].filter(Boolean).join(" ");
   let link = "";
@@ -195,122 +113,33 @@ function exampleHtml(ex: FocusExample, games: PageOptions["games"]): string {
     const href = safeHref(game.platform === "lichess" ? `${game.url}#${ex.ply}` : game.url);
     if (href) link = ` <a href="${esc(href)}" rel="noreferrer">Open the game</a>`;
   }
-  return (
-    `<li>${esc(parts.join(". "))}${opening ? ` <span class="muted">[${esc(opening)}]</span>` : ""}${link}` +
-    `<br><span class="muted">Position (FEN):</span> <code>${esc(ex.fen)}</code></li>`
-  );
+  return [
+    `<li>Position (FEN): <code>${esc(ex.position)}</code>`,
+    `<br>${esc(ex.line)}${opening ? ` <span class="muted">[${esc(opening)}]</span>` : ""}${link}`,
+    ex.evidence ? `<br><span class="muted">${esc(ex.evidence)}</span>` : "",
+    "</li>",
+  ].join("");
 }
 
-function focusHtml(item: FocusItem, index: number, r: WeeklyReport, games: PageOptions["games"]): string {
-  const values = focusTokenValues(item, r);
+function focusHtml(item: FocusView, games: PageOptions["games"]): string {
   const out = [
-    `<h3>${esc(`${index + 1}. ${tokens(item.title, values)}`)} <span class="muted">[${esc(patternName(item.patternId))}]</span></h3>`,
-    `<p>${esc(tokens(item.why, values))}</p>`,
-    `<p>${esc(`Drill: ${tokens(item.drill, values)}`)}</p>`,
+    `<h3>${esc(`${item.number}. ${item.title}`)} <span class="muted">[${esc(item.patternName)}]</span></h3>`,
+    `<p>${esc(item.why)}</p>`,
+    `<p>${esc(`Drill: ${item.drill}`)}</p>`,
+    `<p>${esc(item.reason)}</p>`,
+    `<p>${esc(item.figures)}</p>`,
   ];
-
-  const { weeksRecurred, weeksCounted, kind } = item.reason;
-  const bits: string[] = [];
-  if (weeksCounted >= MIN_WEEKS_TO_QUOTE) bits.push(`It came up in ${weeksRecurred} of your last ${weeksCounted} weeks.`);
-  if (kind === "kept") bits.push(`Kept from your last report (since ${day(item.since)}).`);
-  else if (kind === "returned") bits.push("Back on the list after a break.");
-  else if (kind === "rose") bits.push("It has moved up the list.");
-  else bits.push("New on your list.");
-  out.push(`<p>${esc(bits.join(" "))}</p>`);
-
-  const now = r.current.stats.find((s) => s.patternId === item.patternId);
-  out.push(
-    `<p>${esc(
-      `Now ${f2(now?.per100Moves ?? 0)} per 100 moves; started at ${f2(item.baseline.per100Moves)}; target ${f2(item.target)}.`,
-    )}</p>`,
-  );
   if (item.examples.length > 0) {
     out.push("<p>Examples:</p>", `<ul>${item.examples.map((ex) => exampleHtml(ex, games)).join("\n")}</ul>`);
   }
   return out.join("\n");
 }
 
-function numbersHtml(r: WeeklyReport): string {
-  const rows = r.current.stats.map((s) => [
-    patternName(s.patternId),
-    f2(s.per100Moves),
-    String(s.occurrences),
-    `${s.gamesAffected}/${s.games}`,
-  ]);
-  return `<h2>The numbers</h2>\n${table(["Pattern", "Per 100 moves", "Count", "Games"], rows)}`;
-}
-
-function progressHtml(progress: readonly PatternProgress[]): string {
-  const items = progress.map((p) => {
-    const p3 = p.pValue === null ? "" : `, p = ${p.pValue.toFixed(3)}`;
-    return `<li>${esc(
-      `${patternName(p.patternId)}: ${VERDICT_WORDS[p.verdict]} ` +
-        `(${f2(p.previous.per100Moves)} before, ${f2(p.current.per100Moves)} now, per 100 moves${p3})`,
-    )}</li>`;
-  });
-  return `<h2>Last report's focus, since then</h2>\n<ul>${items.join("\n")}</ul>`;
-}
-
-function retiredHtml(retired: readonly RetiredFocus[]): string {
-  const items = retired.map(
-    (x) =>
-      `<li>${esc(
-        `${patternName(x.patternId)}: ${RETIRED_WHY[x.why]}. ` +
-          `${f2(x.baseline.per100Moves)} per 100 moves on ${day(x.since)}, ${f2(x.current.per100Moves)} now.`,
-      )}</li>`,
-  );
-  return `<h2>Retired from your list</h2>\n<ul>${items.join("\n")}</ul>`;
-}
-
-/** Every stored week, oldest first; the report's own six weeks when nothing else is stored. */
-function weeklyHtml(r: WeeklyReport, history: readonly PeriodStats[]): string {
-  const weeks = history.length > 0 ? [...history].sort((a, b) => Date.parse(a.end) - Date.parse(b.end)) : [...r.weeks].reverse();
-  const ids = r.focus.map((f) => f.patternId);
-  const head = ["Week ending", "Games", "Mistakes /100", ...ids.map((id) => `${patternName(id)} /100`)];
-  const rows = weeks.map((w) => [
-    day(w.end),
-    String(w.games),
-    w.games === 0 ? "-" : f2(w.mistakesPer100Moves),
-    ...ids.map((id) => {
-      const s = w.stats.find((x) => x.patternId === id);
-      return w.games === 0 || !s ? "-" : f2(s.per100Moves);
-    }),
-  ]);
-  return `<h2>Week by week (rates per 100 moves)</h2>\n${table(head, rows)}`;
-}
-
-function trendsHtml(r: WeeklyReport): string {
-  if (r.trends.length === 0) return "<h2>All patterns</h2>\n<p>No earlier games to compare with yet.</p>";
-  const rows = r.trends.map((t) => [
-    patternName(t.patternId),
-    f2(t.previous.per100Moves),
-    f2(t.current.per100Moves),
-    VERDICT_WORDS[t.verdict],
-    t.pValue === null ? "-" : t.pValue.toFixed(3),
-  ]);
-  return (
-    "<h2>All patterns against the 30 days before this period (rates per 100 moves)</h2>\n" +
-    table(["Pattern", "Before", "Now", "Verdict", "p"], rows)
-  );
-}
-
-function notesHtml(r: WeeklyReport, showFewGames: boolean): string | undefined {
-  const out: string[] = [];
-  for (const n of r.notes) {
-    if (n === "few-games") {
-      if (showFewGames) out.push(`Fewer than ${MIN_GAMES_FOR_FOCUS} games in this period, so no focus items were picked.`);
-    } else if (n === "no-key") {
-      out.push("No model key was set, so the wording comes from built-in templates.");
-    } else if (n === "model-failed") {
-      out.push("The model did not give usable wording, so the text comes from built-in templates.");
-    } else if (n === "settings-changed") {
-      out.push("Analysis settings changed since the last report. Games were analysed again; older reports were left as they were.");
-    } else if (n === "sample-only") {
-      out.push("Stopped after the sample, as asked; run report again to analyse the rest.");
-    }
+function bodyHtml(v: ReportView, games: PageOptions["games"]): string {
+  if (v.body.kind === "numbers") {
+    return `<p>${esc(v.body.intro)}</p>\n<h2>${esc(v.body.heading)}</h2>\n${tableHtml(v.body.table)}`;
   }
-  if (out.length === 0) return undefined;
-  return `<h2>Notes</h2>\n<ul>${out.map((n) => `<li>${esc(n)}</li>`).join("\n")}</ul>`;
+  return [`<h2>${esc(v.body.heading)}</h2>`, ...v.body.items.map((i) => focusHtml(i, games))].join("\n");
 }
 
 function reportsNav(r: WeeklyReport, reports: PageOptions["reports"]): string | undefined {
@@ -331,17 +160,24 @@ function otherTracksHtml(others: PageOptions["otherTracks"]): string | undefined
   return `<h2>Your other time classes</h2>\n<p>This page shows one time class. To see another, stop this server and run:</p>\n<ul>${items.join("\n")}</ul>`;
 }
 
+const join = (parts: readonly (string | undefined)[]): string => parts.filter((p): p is string => p !== undefined).join("\n");
+
+/** A plain page with a heading, a sentence and an optional command; used before there is a report to show. */
+export function renderMessage(title: string, message: string, command?: string): string {
+  return page(title, join([`<h1>${esc(title)}</h1>`, `<p>${esc(message)}</p>`, command ? `<p><code>${esc(command)}</code></p>` : undefined]), false);
+}
+
 function emptyPage(opts: PageOptions): string {
   const t = opts.track;
   const command = opts.reportCommand ?? (t ? `pnpm cli report ${t.platform} ${t.username}` : "pnpm cli report <platform> <user>");
   const who = t ? ` for ${t.username} (${t.platform})` : "";
-  const body = [
+  const body = join([
     `<h1>${esc(`No report yet${who}`)}</h1>`,
     "<p>Run the report command first, then reload this page:</p>",
     `<p><code>${esc(command)}</code></p>`,
     otherTracksHtml(opts.otherTracks),
-  ];
-  return page("No report yet", body.filter((x): x is string => x !== undefined).join("\n"), false);
+  ]);
+  return page("No report yet", body, false);
 }
 
 /**
@@ -354,41 +190,25 @@ export function renderPage(
   opts: PageOptions = {},
 ): string {
   if (!report) return emptyPage(opts);
-  const r = report;
-  const parts: (string | undefined)[] = [headerHtml(r)];
-
-  const provisional = !r.coverage.complete && !r.coverage.sampleOnly;
-  parts.push(coverageHtml(r, ctx.pending));
-
-  const summary = tokens(r.summary, summaryTokenValues(r)).trim();
-  if (summary) parts.push(`<p>${esc(summary)}</p>`);
-
-  const numbersOnly = r.focus.length === 0;
-  if (numbersOnly) {
-    const fewGames = r.notes.includes("few-games") || r.gamesFound < MIN_GAMES_FOR_FOCUS;
-    parts.push(
-      `<p>${esc(
-        fewGames
-          ? `Too few games to pick focus items (${plural(r.gamesFound, "game")} found, at least ${MIN_GAMES_FOR_FOCUS} needed). Here are the numbers.`
-          : "No habit repeated often enough to pick a focus item this week. Here are the numbers.",
-      )}</p>`,
-      numbersHtml(r),
-    );
-  } else {
-    parts.push(`<h2>${esc(r.focus.length === 1 ? "Focus" : `Focus (${r.focus.length} things)`)}</h2>`);
-    r.focus.forEach((item, i) => parts.push(focusHtml(item, i, r, opts.games)));
-  }
-
-  if (r.progress.length > 0) parts.push(progressHtml(r.progress));
-  if (r.retired.length > 0) parts.push(retiredHtml(r.retired));
-  parts.push(weeklyHtml(r, ctx.history));
-  parts.push(trendsHtml(r));
-  parts.push(notesHtml(r, !numbersOnly));
-  parts.push(reportsNav(r, opts.reports));
-  parts.push(otherTracksHtml(opts.otherTracks));
-  parts.push('<nav><p><a href="/report.json">The latest report as JSON</a></p></nav>');
-
-  const title = `${r.player}: ${r.track.timeClass}, week ending ${day(r.periodEnd)}`;
-  const refresh = provisional && (opts.latest ?? true);
-  return page(title, parts.filter((p): p is string => p !== undefined).join("\n"), refresh);
+  const v = reportView(report, { pending: ctx.pending, ...(ctx.history.length > 0 ? { weeks: ctx.history } : {}) });
+  const h = v.header;
+  const body = join([
+    `<h1>${esc(h.title)}</h1>`,
+    `<p>${esc(h.band)}</p>`,
+    `<p>${esc(h.period)}</p>`,
+    `<p>${esc(h.games)}</p>`,
+    v.coverage ? `<p class="banner" role="status">${esc(v.coverage)}</p>` : undefined,
+    v.summary ? `<p>${esc(v.summary)}</p>` : undefined,
+    bodyHtml(v, opts.games),
+    sectionHtml(v.progress),
+    sectionHtml(v.retired),
+    `<h2>${esc(v.weeks.heading)}</h2>\n${tableHtml(v.weeks.table)}`,
+    `<h2>${esc(v.trends.heading)}</h2>\n${v.trends.table ? tableHtml(v.trends.table) : `<p>${esc(v.trends.empty ?? "")}</p>`}`,
+    sectionHtml(v.notes),
+    reportsNav(report, opts.reports),
+    otherTracksHtml(opts.otherTracks),
+    '<nav><p><a href="/report.json">The latest report as JSON</a></p></nav>',
+  ]);
+  const title = `${report.player}: ${report.track.timeClass}, week ending ${day(report.periodEnd)}`;
+  return page(title, body, v.provisional && (opts.latest ?? true));
 }

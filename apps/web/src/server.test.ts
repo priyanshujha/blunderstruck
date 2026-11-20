@@ -12,7 +12,12 @@ import {
 } from "@blunderstruck/contracts";
 import { type Store, memoryStore } from "@blunderstruck/store";
 import { describe, expect, it } from "vitest";
-import { createHandler, handler } from "./server";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll } from "vitest";
+import { createHandler, handler, openForWeb, problemHandler } from "./server";
 
 // Invented players and games only. No socket: the handler is called with fake objects.
 const XSS = `<script>alert(1)</script>`;
@@ -27,7 +32,12 @@ interface Reply {
   body: string;
 }
 
-function call(h: (req: IncomingMessage, res: ServerResponse) => void, method: string, url: string): Promise<Reply> {
+function call(
+  h: (req: IncomingMessage, res: ServerResponse) => void,
+  method: string,
+  url: string,
+  host: string | null = "127.0.0.1:4321",
+): Promise<Reply> {
   return new Promise((resolve) => {
     const reply: Reply = { status: 0, headers: {}, body: "" };
     const res = {
@@ -44,7 +54,7 @@ function call(h: (req: IncomingMessage, res: ServerResponse) => void, method: st
         return this;
       },
     };
-    h({ method, url, headers: {} } as unknown as IncomingMessage, res as unknown as ServerResponse);
+    h({ method, url, headers: host === null ? {} : { host } } as unknown as IncomingMessage, res as unknown as ServerResponse);
   });
 }
 
@@ -261,5 +271,92 @@ describe("handler", () => {
     const r = await call(handler(await seeded(), TRACK), "POST", "/");
     expect(r.status).toBe(405);
     expect(r.headers.allow).toBe("GET, HEAD");
+  });
+
+  it("answers only to a loopback Host on its own port", async () => {
+    const h = createHandler(await seeded(), TRACK, { port: 4321 });
+    for (const host of ["127.0.0.1:4321", "localhost:4321", "[::1]:4321", "LOCALHOST:4321"]) {
+      expect((await call(h, "GET", "/", host)).status).toBe(200);
+    }
+    for (const host of [null, "evil.test:4321", "127.0.0.1:9999", "127.0.0.1", "localhost.evil.test:4321", "127.0.0.1:4321@evil"]) {
+      expect((await call(h, "GET", "/", host)).status).toBe(421);
+    }
+  });
+
+  it("returns 404, not an error, for a malformed percent-escape", async () => {
+    const r = await call(handler(await seeded(), TRACK), "GET", "/report/%E0%A4%A");
+    expect(r.status).toBe(404);
+  });
+
+  it("lists only weeks up to an earlier report's end", async () => {
+    const store = await seeded();
+    const older = "2026-11-12T00:00:00.000Z";
+    await store.putReport(report(TRACK, { periodEnd: older, kind: "first" }));
+    for (let i = 0; i < 3; i++) await store.putPeriodStats(trackKey(TRACK), settingsKey(SETTINGS), period(weekEnd(END, i), 3));
+    const r = await call(handler(store, TRACK), "GET", `/report/${encodeURIComponent(older)}`);
+    expect(r.body).toContain("<td>2026-11-12</td>");
+    expect(r.body).toContain("<td>2026-11-05</td>");
+    expect(r.body).not.toContain("<td>2026-11-19</td>");
+  });
+
+  it("shows a neutral sentence and a note when stored wording no longer renders", async () => {
+    const store = await seeded();
+    const base = report(TRACK);
+    await store.putReport({ ...base, revision: 2, summary: "{oldToken} games", focus: [{ ...base.focus[0]!, why: "In {renamed} games." }] });
+    const r = await call(handler(store, TRACK), "GET", "/");
+    expect(r.status).toBe(200);
+    expect(r.body).toContain("Wording for this item could not be shown.");
+    expect(r.body).toContain("The summary could not be shown.");
+    expect(r.body).toContain("Some stored wording could not be shown");
+    expect(r.body.replace(/<style>[\s\S]*?<\/style>/, "")).not.toMatch(/[{}]/);
+  });
+
+  it("shows focus items on a report with no earlier focus to compare", async () => {
+    const r = await call(handler(await seeded(), TRACK), "GET", "/");
+    expect(r.body).toContain("<h2>Focus</h2>");
+    expect(r.body).not.toContain("Last report&#39;s focus");
+  });
+});
+
+describe("opening the database for the page", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bs-web-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const CMD = "pnpm cli report lichess quiet_rook_test";
+
+  const show = async (path: string): Promise<Reply> => {
+    const opened = await openForWeb(path, CMD);
+    if (!("problem" in opened)) throw new Error("expected a problem");
+    return call(problemHandler(opened.problem), "GET", "/anything");
+  };
+
+  it("says to run the report command when the file is missing, and does not create it", async () => {
+    const path = join(dir, "missing.db");
+    const r = await show(path);
+    expect(r.status).toBe(200);
+    expect(r.body).toContain("Run the report command first");
+    expect(r.body).toContain(`<code>${CMD}</code>`);
+    expect(r.headers["content-security-policy"]).toMatch(/^default-src 'none'/);
+    await expect(openForWeb(path, CMD)).resolves.toHaveProperty("problem");
+  });
+
+  it("asks for one report run on an older database", async () => {
+    const path = join(dir, "old.db");
+    const db = new DatabaseSync(path);
+    db.exec("CREATE TABLE unrelated (x INTEGER)");
+    db.close();
+    const r = await show(path);
+    expect(r.body).toContain("run the report command once");
+    expect(r.body).toContain(`<code>${CMD}</code>`);
+  });
+
+  it("names a newer database plainly", async () => {
+    const path = join(dir, "newer.db");
+    const db = new DatabaseSync(path);
+    db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
+    db.exec("INSERT INTO meta (key, value) VALUES ('schema_version', '99')");
+    db.close();
+    const r = await show(path);
+    expect(r.body).toContain("this database was written by a newer version of blunderstruck");
+    expect(r.body).not.toContain("<code>");
   });
 });
