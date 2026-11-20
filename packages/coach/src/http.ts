@@ -7,15 +7,28 @@ export const RETRY_DELAYS_MS: readonly number[] = [2000, 8000];
 /** A `retry-after` wait is capped at this many seconds. */
 export const RETRY_AFTER_CAP_SECONDS = 60;
 
+/** Each attempt is aborted after this many milliseconds and then retried like a 5xx. */
+export const REQUEST_TIMEOUT_MS = 60_000;
+
 export interface PostOptions {
   url: string;
   headers: Record<string, string>;
   body: unknown;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
+  /** Per-attempt timeout; defaults to `REQUEST_TIMEOUT_MS`. */
+  timeoutMs?: number;
 }
 
-/** A request that failed: a non-retried or exhausted HTTP status, a network error or a bad body. */
+/** True for the error `fetch` rejects with when an `AbortSignal.timeout` fires. */
+function isTimeout(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { name?: unknown }).name === "TimeoutError";
+}
+
+/**
+ * A request that failed: a non-retried or exhausted HTTP status, a timeout, a network error or
+ * a bad body. Its `message` never contains a header value, so it is safe to show.
+ */
 export class HttpError extends Error {
   constructor(
     message: string,
@@ -85,17 +98,37 @@ export async function postWithRetry(opts: PostOptions): Promise<unknown> {
   })();
   const payload = JSON.stringify(opts.body);
 
+  const timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const backoff = (attempt: number) => RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)] ?? 0;
+
   for (let attempt = 0; ; attempt++) {
+    const tries = attempt + 1;
     let res: Response;
+    let text: string;
     try {
-      res = await fetchImpl(opts.url, { method: "POST", headers: opts.headers, body: payload });
+      // The timeout covers the whole attempt, body included.
+      res = await fetchImpl(opts.url, {
+        method: "POST",
+        headers: opts.headers,
+        body: payload,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      text = await res.text();
     } catch (err) {
+      if (isTimeout(err)) {
+        if (attempt < RETRY_MAX) {
+          await sleep(backoff(attempt));
+          continue;
+        }
+        throw new HttpError(
+          `request to ${host} timed out after ${Math.round(timeoutMs / 1000)} s${tries > 1 ? ` (${tries} attempts)` : ""}`,
+        );
+      }
       const detail = err instanceof Error ? err.message : String(err);
       throw new HttpError(redact(`request to ${host} failed: ${detail}`, opts.headers));
     }
 
     if (res.ok) {
-      const text = await res.text();
       try {
         return JSON.parse(text) as unknown;
       } catch {
@@ -103,16 +136,11 @@ export async function postWithRetry(opts: PostOptions): Promise<unknown> {
       }
     }
 
-    const text = await res.text().catch(() => "");
     if (RETRY_STATUSES.includes(res.status) && attempt < RETRY_MAX) {
-      const wait =
-        retryAfterMs(res.headers.get("retry-after"), Date.now()) ??
-        (RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)] ?? 0);
-      await sleep(wait);
+      await sleep(retryAfterMs(res.headers.get("retry-after"), Date.now()) ?? backoff(attempt));
       continue;
     }
 
-    const tries = attempt + 1;
     const detail = describeBody(text);
     throw new HttpError(
       redact(

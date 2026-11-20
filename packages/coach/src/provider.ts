@@ -10,7 +10,8 @@ export class ConfigError extends Error {
 
 /**
  * The provider answered, but the answer cannot be used: cut off at the token limit, refused,
- * blocked, or missing its text. Callers fall back to template wording.
+ * blocked, or missing its text. Callers fall back to template wording. Its `message` is fixed
+ * text plus a provider status word, never response content or a key, so it is safe to show.
  */
 export class ProviderResponseError extends Error {
   constructor(
@@ -51,6 +52,8 @@ export interface ProviderOptions {
   fetchImpl?: typeof fetch;
   /** Waits this many milliseconds; replaced in tests. */
   sleep?: (ms: number) => Promise<void>;
+  /** Per-attempt request timeout in milliseconds; defaults to `REQUEST_TIMEOUT_MS`. */
+  timeoutMs?: number;
 }
 
 /** A non-negative integer from an untyped JSON value, else 0. */

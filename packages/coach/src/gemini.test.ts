@@ -76,7 +76,7 @@ describe("geminiProvider", () => {
         responseMimeType: "application/json",
         responseJsonSchema: schema,
         maxOutputTokens: 2000,
-        thinkingConfig: { thinkingLevel: "MEDIUM" },
+        thinkingConfig: { thinkingLevel: "LOW" },
       },
     });
     expect(result).toEqual({

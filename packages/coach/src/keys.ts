@@ -60,9 +60,8 @@ export function resolveProvider(input: {
     const fromEnv = value(env, "BLUNDERSTRUCK_PROVIDER")?.toLowerCase();
     if (fromEnv !== undefined) {
       if (!(PROVIDERS as readonly string[]).includes(fromEnv)) {
-        throw new ConfigError(
-          `BLUNDERSTRUCK_PROVIDER must be one of ${PROVIDERS.join(", ")} (got "${fromEnv.slice(0, 40)}")`,
-        );
+        // Never echo the value: a key pasted into the wrong variable would be printed.
+        throw new ConfigError(`BLUNDERSTRUCK_PROVIDER must be one of ${PROVIDERS.join(", ")}`);
       }
       named = fromEnv as (typeof PROVIDERS)[number];
       source = "BLUNDERSTRUCK_PROVIDER";

@@ -117,26 +117,59 @@ describe("parseWording", () => {
   });
 
   it.each([
-    "That was 9/31.",
-    "It cost 40% of the time.",
-    "It cost 12 percent.",
-    "It happened 3 times.",
-    "For 2 weeks running.",
-    "In 12 games out of the lot.",
-    "About 1.5 per hundred.",
-    "Once every 30 moves.",
-    "Nine, or 9 out of ten.",
-  ])("rejects the bare count in %j", (why) => {
-    expect(errorsOf(withWhy(why)).join("\n")).toMatch(/writes a number/);
+    ["You hung a piece in 9 of 31 games.", /writes a number/],
+    ["That was 9/31.", /writes a number/],
+    ["It cost 40% of the time.", /writes a number/],
+    ["It cost 12 percent.", /writes a number/],
+    ["It happened 3 times.", /writes a number/],
+    ["For 2 weeks running.", /writes a number/],
+    ["In 12 games out of the lot.", /writes a number/],
+    ["About 1.5 per hundred.", /writes a number/],
+    ["Once every 30 moves.", /writes a number/],
+    ["You made 4.25 mistakes per hundred moves.", /writes a number/],
+    ["That happened 12 separate times.", /writes a number/],
+    ["You blundered 9 pieces in 31 outings.", /writes a number/],
+    ["Solve 3 per day.", /writes a number/],
+    ["Your 1500 rating says otherwise.", /writes a number/],
+    ["Keep 90 seconds in reserve.", /writes a number/],
+    ["You hung a piece in nine of thirty-one games.", /count in words/],
+    ["It happened twelve separate times.", /count in words/],
+    ["In half the games the queen went first.", /count in words/],
+    ["Twice in a dozen outings.", /count in words/],
+    ["For three weeks running.", /count in words/],
+  ])("rejects %j", (why, error) => {
+    expect(errorsOf(withWhy(why)).join("\n")).toMatch(error);
   });
 
   it.each([
+    "Nf3",
+    "1.e4",
+    "move 12",
+    "2 rooks",
+    "O-O",
+    "e4",
+    "mate in 2",
+    "Qxh7+",
+    "20...Qxh2",
+    "{gamesAffected} of {games} games",
+    "Calculate 2 moves deep.",
+    "Watch the first 12 moves.",
+    "By move 12 of the game the plan was gone.",
+    "Look again at moves 10 to 15.",
+    "Find 3 candidate moves before you choose.",
+    "Solve 5 puzzles, then play.",
+    "Ten minutes a day, or 10 minutes if you prefer digits.",
+    "Below 30 seconds, play safe moves.",
+    "In 3+2 blitz the clock bites early.",
+    "A rook on the 7th rank is worth 2 pawns.",
     "The knight on f6 was loose after e4.",
     "Nf3 of all moves left the bishop on b5 hanging.",
     "After 1. e4 e5 2. Nf3 the queen on d1 does nothing.",
-    "Qxh7+ was mate in the example; O-O-O walked into it.",
+    "Qxh7+ was mate in the example; O-O-O walked into it; exd5 and e8=Q# came later.",
     "Move 12 was where it went wrong.",
-  ])("lets squares and moves through: %j", (why) => {
+    "Pick one habit and keep it for the week.",
+    "It happened twice. Once is a slip.",
+  ])("lets %j through", (why) => {
     expect(errorsOf(withWhy(why))).toEqual([]);
   });
 

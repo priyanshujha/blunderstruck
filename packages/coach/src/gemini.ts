@@ -16,14 +16,21 @@ export function geminiUrl(model: string): string {
   return `${GEMINI_API_BASE}/models/${encodeURIComponent(id)}:generateContent`;
 }
 
+/**
+ * Thinking tokens count inside `maxOutputTokens`, so thinking is held at the lowest level that
+ * every current Gemini 3 Flash and Flash-Lite model accepts (some reject `MINIMAL`), whatever the
+ * route's effort. This keeps the token limit for the visible JSON.
+ */
+export const GEMINI_THINKING_LEVEL = "LOW";
+
 /** The request body for one structured-output call; exported for tests and inspection. */
 export function geminiRequestBody(req: CompleteRequest): Record<string, unknown> {
   const generationConfig: Record<string, unknown> = {
     responseMimeType: "application/json",
     responseJsonSchema: req.schema,
     maxOutputTokens: req.choice.maxOutputTokens,
+    thinkingConfig: { thinkingLevel: GEMINI_THINKING_LEVEL },
   };
-  if (req.choice.effort) generationConfig.thinkingConfig = { thinkingLevel: req.choice.effort.toUpperCase() };
   return {
     systemInstruction: { parts: [{ text: req.system }] },
     contents: [{ role: "user", parts: [{ text: req.user }] }],
@@ -79,7 +86,7 @@ export function readGeminiResponse(raw: unknown): CompleteResult {
 
 /** `generateContent` over plain `fetch`, with JSON-schema output. */
 export function geminiProvider(opts: ProviderOptions): CoachProvider {
-  const { apiKey, fetchImpl, sleep } = opts;
+  const { apiKey, fetchImpl, sleep, timeoutMs } = opts;
   return {
     name: "gemini",
     model: opts.choice.model,
@@ -90,6 +97,7 @@ export function geminiProvider(opts: ProviderOptions): CoachProvider {
         body: geminiRequestBody(req),
         fetchImpl,
         sleep,
+        timeoutMs,
       });
       return readGeminiResponse(raw);
     },

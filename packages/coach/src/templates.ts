@@ -75,7 +75,7 @@ const TEXT: Record<PatternId, PatternText> = {
       club:
         "Before each move, look for the opponent's forcing replies: checks, captures and double attacks. Practise puzzles from the defending side, where you must spot the threat first.",
       training:
-        "Make a two-move blunder check part of every decision: their forcing replies, then your answers. Replay your own positions from this period and find the reply you did not see.",
+        "Make a blunder check part of every decision, looking at their forcing replies and then your answers. Replay your own positions from this period and find the reply you did not see.",
     },
   },
   "missed-capture": {
@@ -175,7 +175,7 @@ function summary(draft: ReportDraft): string {
   const parts: string[] = [];
   if (draft.notes.includes("few-games")) {
     parts.push(
-      "Only {games} games in this period, so here are the numbers on their own. Focus items start once there are ten games to go on.",
+      "Only {games} games in this period, so here are the numbers on their own. Focus items start once there are enough games to go on.",
     );
   } else {
     parts.push("Over {games} games you made {mistakeRate} mistakes per hundred moves.");

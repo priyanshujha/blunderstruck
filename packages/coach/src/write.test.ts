@@ -7,8 +7,9 @@ import {
   WeeklyReport,
 } from "@blunderstruck/contracts";
 import { describe, expect, it } from "vitest";
+import { HttpError } from "./http";
 import { buildPrompt, WORDING_SCHEMA } from "./prompt";
-import type { CoachProvider, CompleteRequest } from "./provider";
+import { type CoachProvider, type CompleteRequest, ProviderResponseError } from "./provider";
 import { templateWording } from "./templates";
 import { writeReport } from "./write";
 
@@ -169,11 +170,42 @@ describe("writeReport", () => {
 
   it("does not repair after a transport error", async () => {
     const d = draft(["hung-piece"]);
-    const p = stub([new Error("HTTP 400"), good(["hung-piece"])]);
+    const p = stub([new HttpError("HTTP 400", 400), good(["hung-piece"])]);
     const r = await writeReport(d, p);
     expect(p.requests).toHaveLength(1);
     expect(r.wording).toEqual({ source: "template", wordedFor: [], calls: 1 });
     expect(r.notes).toEqual(["model-failed"]);
+  });
+
+  it("passes a 401 to onModelError and still returns template wording", async () => {
+    const d = draft(["hung-piece"]);
+    const messages: string[] = [];
+    const p = stub([new HttpError("anthropic answered 401: invalid x-api-key", 401)]);
+    const r = await writeReport(d, p, undefined, { onModelError: (m) => messages.push(m) });
+    expect(messages).toEqual(["anthropic answered 401: invalid x-api-key"]);
+    expect(r.wording).toEqual({ source: "template", wordedFor: [], calls: 1 });
+    expect(r.notes).toEqual(["model-failed"]);
+    expect(r.focus[0]!.title).toBe(templateWording(d).focus[0]!.title);
+  });
+
+  it("treats a truncated reply as a provider failure", async () => {
+    const messages: string[] = [];
+    const p = stub([new ProviderResponseError("truncated", "the reply was cut off at the token limit")]);
+    const r = await writeReport(draft(["hung-piece"]), p, undefined, { onModelError: (m) => messages.push(m) });
+    expect(messages).toEqual(["the reply was cut off at the token limit"]);
+    expect(r.notes).toEqual(["model-failed"]);
+  });
+
+  it("lets any other error from the provider propagate", async () => {
+    const p = stub([new TypeError("cannot read properties of undefined")]);
+    await expect(writeReport(draft(["hung-piece"]), p)).rejects.toThrow(TypeError);
+  });
+
+  it("reports two failed validations with the first error", async () => {
+    const messages: string[] = [];
+    const p = stub(["not json", "still not json"]);
+    await writeReport(draft(["hung-piece"]), p, undefined, { onModelError: (m) => messages.push(m) });
+    expect(messages).toEqual(["the reply failed validation twice: the answer is not valid JSON"]);
   });
 
   it("makes no call for a few-games draft", async () => {
@@ -222,6 +254,18 @@ describe("writeReport", () => {
     expect(r.wording).toMatchObject({ source: "model", wordedFor: ["hung-piece"], calls: 3 });
     expect(r.notes).toEqual(["model-failed"]);
     expect(() => WeeklyReport.parse(r)).not.toThrow();
+  });
+
+  it("makes no call when an item is only dropped, keeping the other item's text", async () => {
+    const first = await writeReport(draft(["hung-piece", "missed-tactic"]), stub([good(["hung-piece", "missed-tactic"])]));
+    const next = draft(["missed-tactic"], 1);
+    const p = stub([good(["missed-tactic"], "reword")]);
+    const r = await writeReport(next, p, first);
+    expect(p.requests).toHaveLength(0);
+    expect(r.focus.map((f) => f.title)).toEqual(["model title missed-tactic"]);
+    expect(r.summary).toBe(templateWording(next).summary);
+    expect(r.wording).toMatchObject({ source: "model", wordedFor: ["missed-tactic"], calls: 1 });
+    expect(r.notes).toEqual([]);
   });
 
   it("never goes past three calls for a period", async () => {

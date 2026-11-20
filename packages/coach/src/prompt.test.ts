@@ -129,6 +129,9 @@ describe("buildPrompt", () => {
     expect(example).toBeDefined();
     const result = parseWording(example!, draft({ username: "x", focus: ["hung-piece", "missed-tactic"] }));
     expect(result).toMatchObject({ ok: true });
+    const parsed = JSON.parse(example!) as { summary: string };
+    expect(parsed.summary).not.toMatch(/\b(one|two|both|pair|couple)\b/i);
+    expect(system).toMatch(/illustrative only: never reuse them/);
   });
 
   it("puts the band, reasons, targets and example positions in the user part, not the username", () => {

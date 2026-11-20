@@ -10,10 +10,71 @@ export type WordingResult = { ok: true; value: WordingText } | { ok: false; erro
 
 const LIMITS = { title: 60, why: 400, drill: 400, summary: 600 } as const;
 
-/** A count written as a number ("9 games", "3 times", "40%", "2 of"): the player's numbers come from tokens. */
-const BARE_COUNT = /\b\d+(\.\d+)?\s*(%|percent|out of|of\b|games?\b|times\b|weeks?\b|moves?\b|per\b)/i;
-/** A ratio written as numbers ("9/31"). */
+/*
+ * Numbers. The player's numbers reach the text only through tokens, which code fills in. So
+ * any digit is rejected unless it sits inside one of the chess notations below, each of
+ * which names a move, a square or a study quantity rather than a fact about the player's
+ * record. They are removed in order, then any digit left fails the check.
+ */
+
+/** A ratio written as numbers ("9/31"). Checked before anything is removed. */
 const BARE_RATIO = /\b\d+\s*\/\s*\d+/;
+
+/**
+ * A move in SAN, with an optional move number: "Nf3", "Qxh7+", "exd5", "e8=Q#", "O-O-O",
+ * "1.e4", "1. e4", "20...Qxh2". A bare square ("e4", "f7") matches as a pawn move. Safe: the
+ * digits are ranks and move numbers of a position, not counts.
+ */
+const SAN_MOVE =
+  /(?:\b\d{1,3}\.(?:\.\.)?\s*)?(?:\bO-O(?:-O)?|\b[KQRBN][a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?|\b[a-h](?:x[a-h])?[1-8](?:=[QRBN])?)[+#]?(?![\w-])/g;
+
+/** "the 7th rank", "2nd rank". Safe: a line of the board. */
+const RANK_ORDINAL = /\b[1-8](?:st|nd|rd|th)[\s-]+ranks?\b/gi;
+
+/** "move 12", "moves 10 to 15", "move 8-12". Safe: a point in a game, not how often something happened. */
+const MOVE_REFERENCE = /\bmoves?\s+\d{1,3}(?:\s*(?:to|-|–|and)\s*\d{1,3})?\b/gi;
+
+/** "mate in 2", "mate-in-3". Safe: the length of a forced line. */
+const MATE_IN = /\bmate[\s-]+in[\s-]+\d\b/gi;
+
+/**
+ * A small whole number (up to 20) right before a study or look-ahead unit: "2 moves deep",
+ * "the first 12 moves", "5 puzzles", "3 candidate moves". Safe: it sizes a drill. Larger
+ * numbers, and "times", "games" or "weeks", are never allowed here.
+ */
+const STUDY_QUANTITY = /\b(?:[1-9]|1\d|20)\s+(?:moves?|puzzles?|candidates?|candidate\s+moves?|plies|ply)\b/gi;
+
+/** Up to sixty minutes or seconds: "10 minutes a day", "keep 30 seconds". Safe: a drill's time or a clock rule. */
+const CLOCK_QUANTITY = /\b(?:[1-9]|[1-5]\d|60)\s+(?:minutes?|seconds?|mins?|secs?)\b/gi;
+
+/** "2 rooks", "3 pawns". Safe: material on the board. Up to eight; "pieces" is left out, since "9 pieces" reads as a tally. */
+const PIECE_COUNT = /\b[1-8]\s+(?:pawns?|knights?|bishops?|rooks?|queens?)\b/gi;
+
+/** A time control: "3+2", "15+10". Safe: the kind of game, not a result. */
+const TIME_CONTROL = /\b\d{1,3}\+\d{1,2}\b/g;
+
+const PERMITTED = [SAN_MOVE, RANK_ORDINAL, MOVE_REFERENCE, MATE_IN, STUDY_QUANTITY, CLOCK_QUANTITY, PIECE_COUNT, TIME_CONTROL];
+
+/** Numbers spelled out, which would slip past the digit check. */
+const NUMBER_WORD =
+  "(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|twice|thrice|dozen|half|hundred)";
+/** Nouns that count the player's record rather than a position or a drill. */
+const RECORD_NOUN = "(?:games?|times|weeks?|mistakes?|blunders?|outings?|occasions?|match(?:es)?)";
+/** A number word followed, within two words, by a record noun: "nine of thirty-one games", "twelve times". */
+const WORDED_COUNT = new RegExp(`\\b${NUMBER_WORD}\\b(?:[\\s-]+[\\w']+){0,2}?[\\s-]+${RECORD_NOUN}\\b`, "i");
+
+/** The first count found in `text`, or undefined. Tokens must already be removed. */
+function findCount(text: string): { kind: "digits" | "words"; match: string } | undefined {
+  const ratio = BARE_RATIO.exec(text);
+  if (ratio) return { kind: "digits", match: ratio[0] };
+  let rest = text;
+  for (const re of PERMITTED) rest = rest.replace(re, " ");
+  const digit = /[^\s]*\d[^\s]*(?:\s+\S+)?/.exec(rest);
+  if (digit) return { kind: "digits", match: digit[0] };
+  const worded = WORDED_COUNT.exec(text);
+  if (worded) return { kind: "words", match: worded[0] };
+  return undefined;
+}
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -70,9 +131,10 @@ function checkField(where: string, text: string, max: number, allowed: readonly 
   }
   const rest = text.replace(/\{[^{}]*\}/g, "");
   if (/[{}]/.test(rest)) errors.push(`${where} has an unmatched brace; braces are only for tokens`);
-  const count = BARE_COUNT.exec(text) ?? BARE_RATIO.exec(text);
+  const count = findCount(rest);
   if (count) {
-    errors.push(`${where} writes a number ("${count[0]}"); use a token such as {gamesAffected} instead of any count`);
+    const how = count.kind === "digits" ? "writes a number" : "writes a count in words";
+    errors.push(`${where} ${how} ("${count.match}"); use a token such as {gamesAffected} instead of any count`);
   }
   return errors;
 }

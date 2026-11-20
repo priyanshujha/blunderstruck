@@ -86,4 +86,13 @@ describe("resolveProvider", () => {
   it("rejects an unknown BLUNDERSTRUCK_PROVIDER value", () => {
     expect(() => resolveProvider({ env: { BLUNDERSTRUCK_PROVIDER: "other" } })).toThrow(ConfigError);
   });
+
+  it("does not echo an invalid BLUNDERSTRUCK_PROVIDER value, such as a key pasted there", () => {
+    const err = thrown(() => resolveProvider({ env: { BLUNDERSTRUCK_PROVIDER: A_KEY } }));
+    expect(err).toBeInstanceOf(ConfigError);
+    expect(err.message).toContain("BLUNDERSTRUCK_PROVIDER");
+    expect(err.message).toContain("anthropic, gemini, none");
+    expect(err.message).not.toContain(A_KEY);
+    expect(err.message).not.toContain(A_KEY.slice(0, 12).toLowerCase());
+  });
 });

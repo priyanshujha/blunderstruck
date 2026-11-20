@@ -66,7 +66,7 @@ export function readAnthropicResponse(raw: unknown): CompleteResult {
 
 /** Messages API over plain `fetch`, with a cached system prefix and JSON-schema output. */
 export function anthropicProvider(opts: ProviderOptions): CoachProvider {
-  const { apiKey, fetchImpl, sleep } = opts;
+  const { apiKey, fetchImpl, sleep, timeoutMs } = opts;
   return {
     name: "anthropic",
     model: opts.choice.model,
@@ -81,6 +81,7 @@ export function anthropicProvider(opts: ProviderOptions): CoachProvider {
         body: anthropicRequestBody(req),
         fetchImpl,
         sleep,
+        timeoutMs,
       });
       return readAnthropicResponse(raw);
     },

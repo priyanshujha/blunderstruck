@@ -72,7 +72,7 @@ const SUMMARY_TOKEN_MEANING: Record<(typeof SUMMARY_TOKENS)[number], string> = {
 /** A worked example of a good answer. It passes `parseWording` for focus ids hung-piece, missed-tactic. */
 const EXAMPLE = {
   summary:
-    "Over {games} games you made {mistakeRate} mistakes per hundred moves. Two habits did most of the damage, and both are very fixable.",
+    "Over {games} games you made {mistakeRate} mistakes per hundred moves. The habits below did most of the damage, and they are very fixable.",
   focus: [
     {
       patternId: "hung-piece",
@@ -131,8 +131,9 @@ const SYSTEM = [
   "Rules:",
   "- Use only the tokens listed for that field, spelled exactly, in single braces. No other braces anywhere.",
   "- Good: \"in {gamesAffected} of your {games} games\", \"in {weeksRecurred} of your last {weeksCounted} weeks\", \"{rate} times per hundred moves\", \"down to {target} per hundred moves\".",
-  "- Bad: \"in 9 of 31 games\", \"9/31\", \"40%\", \"3 times\", \"per 100 moves\". Write \"per hundred moves\" in words.",
-  "- Squares and moves are not counts and are fine: e4, f7, Nf3, Qxh7+, O-O.",
+  "- Bad: \"in 9 of 31 games\", \"9/31\", \"40%\", \"3 times\", \"per 100 moves\", \"in nine of your games\", \"twelve times\". Write \"per hundred moves\" in words.",
+  "- Do not write how many items there are (\"two habits\", \"both\"); use {focusCount} in the summary if you need the number.",
+  "- Digits are allowed only in chess notation and drill sizes: squares and moves (e4, Nf3, Qxh7+, O-O, 1.e4, 20...Qxh2), \"move 12\", \"mate in 2\", \"2 rooks\", a small number of moves, puzzles or candidates (\"2 moves deep\", \"5 puzzles\"), minutes or seconds (\"10 minutes a day\"), and time controls (3+2). Anything else with a digit makes the answer invalid.",
   "- Rates are decimals per hundred moves, so write \"{rate} times per hundred moves\", not \"{rate}%\".",
   "",
   "# Output",
@@ -145,7 +146,7 @@ const SYSTEM = [
   "  - drill: one concrete drill sized to the band, at most 400 characters.",
   "Sometimes only some focus items are asked for, because the others already have their text; word only those, and still write the summary for the whole report.",
   "",
-  "Example of a good answer for a club player whose focus items are hung-piece then missed-tactic:",
+  "Example of a good answer for a club player whose focus items are hung-piece then missed-tactic. Its squares, moves and examples are illustrative only: never reuse them; refer only to the positions you are given.",
   "```json",
   JSON.stringify(EXAMPLE, null, 2),
   "```",
