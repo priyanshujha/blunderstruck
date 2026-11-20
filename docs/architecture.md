@@ -166,9 +166,10 @@ game is looked for, by the first rule that applies:
 2. the punishing line ends in mate, and the game mated the player within as many plies;
 3. the opponent's very next move took the named lost piece on its square, and the captures on
    that square ended within 8 plies;
-4. the opponent's next move was the first move of the punishing line, the player answered
-   without capturing and left the lost piece where it stood, and the opponent's very next
-   move took it there.
+4. the opponent's next move was the first move of the punishing line and was not itself a
+   capture, the player answered without capturing and left the lost piece where it stood,
+   the opponent's very next move took it there, and the captures on that square ended within
+   8 plies.
 
 A piece that is taken later than that is not counted: by then another move of the player's
 may be the reason, and that move has its own example.
