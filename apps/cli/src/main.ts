@@ -1,14 +1,39 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { once } from "node:events";
+import { createReadStream, existsSync } from "node:fs";
+import { mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
-import { COACH_ROUTES } from "@blunderstruck/coach";
-import { type AnalyzedGame, GameRecord, Platform, perspective } from "@blunderstruck/contracts";
+import {
+  COACH_ROUTES,
+  ConfigError,
+  NO_KEY_MESSAGE,
+  anthropicProvider,
+  geminiProvider,
+  resolveProvider,
+  type CoachProvider,
+} from "@blunderstruck/coach";
+import {
+  type AnalyzedGame,
+  GameRecord,
+  Platform,
+  RatingBand,
+  ReportTimeClass,
+  type WeeklyReport,
+  perspective,
+} from "@blunderstruck/contracts";
 import { UciEngine, analyzeGame } from "@blunderstruck/engine";
 import { fetchGames } from "@blunderstruck/ingest";
 import { summarize, toPlayerGame, type PlayerGame } from "@blunderstruck/patterns";
+import { DEFAULT_DEPTH, MAX_LOOKBACK_DAYS, MIN_REPORT_GAMES } from "@blunderstruck/progress";
+import { AnalysisAborted, ReportInputError, runReport, type ReportOptions } from "@blunderstruck/report";
+import { exportStore, importStore, openSqliteStore } from "@blunderstruck/store";
 import { defaultCachePath, loadCache, mergeCache, needsEngine, planCache, saveCache } from "./analysis-cache";
+import { dbPath } from "./db-path";
+import { EnvFileError, loadEnv } from "./env";
 import { formatPatterns } from "./patterns-format";
+import { formatReport } from "./report-format";
 
 const USAGE = `blunderstruck <command>
 
@@ -28,6 +53,33 @@ const USAGE = `blunderstruck <command>
       --examples N   example positions per habit (0-2)
       --all          also print every pattern and the repeated opening mistakes
       --json         print the full pattern summary as JSON on stdout (progress on stderr)
+
+  report <lichess|chesscom> <username> [--time-class <class>] [--depth 12] [--db <path>]
+         [--provider anthropic|gemini|none] [--env <path>] [--band <band>]
+         [--as-of <ISO date>] [--now] [--sample-only] [--max-games N] [--json] [--all]
+      Fetch the games played since the last report, analyse them, and print what to work on
+      and how the previous focus items moved. Games and reports are kept in a local database.
+      A large period is analysed as a sample first; the rest follows in the same run and can
+      be stopped with Ctrl-C at any time (run report again to continue).
+      --time-class   bullet, blitz, rapid or classical (default: the track used before, or
+                     the class with the most recent rated games)
+      --db           database file (default: $BLUNDERSTRUCK_DB, else ~/.blunderstruck/blunderstruck.db)
+      --provider     model used for the wording; none prints numbers with template text
+      --env          read settings from this file (default: ./.env when present); variables
+                     already set in the environment win
+      --band         rating band to coach for: ${RatingBand.options.join(", ")}
+      --as-of        end the period at this time instead of now
+      --now          make a new report even with fewer than ${MIN_REPORT_GAMES} new games
+      --sample-only  stop after the sample; a later run finishes the analysis
+      --max-games N  analyse at most N of the period's games
+      --json         print the stored report as JSON on stdout (messages on stderr)
+      --all          also print the week-by-week table and every pattern's trend
+
+  db export <file> [--db <path>] [--force]
+      Write the whole database as NDJSON (refuses to overwrite a file without --force).
+
+  db import <file> [--db <path>]
+      Read an export into the database; importing the same file twice changes nothing.
 
   eval "<fen>" [--depth 16]
       Ask Stockfish about one position (score is for the side to move).
@@ -203,18 +255,332 @@ async function patternsCmd(args: string[]) {
   );
 }
 
+const say = (msg: string) => process.stderr.write(`${msg}\n`);
+
+/** One progress line that rewrites itself on a terminal, or plain lines at most every few seconds otherwise. */
+class ProgressLine {
+  private shown = false;
+  private lastPlain = 0;
+  constructor(private readonly tty: boolean) {}
+
+  update(text: string, last: boolean): void {
+    if (this.tty) {
+      process.stderr.write(`\r\x1b[2K${text}`);
+      this.shown = true;
+    } else if (last || Date.now() - this.lastPlain >= 5000) {
+      say(text);
+      this.lastPlain = Date.now();
+    }
+  }
+
+  /** Call before writing anything else, so the line never mixes with other output. */
+  clear(): void {
+    if (!this.shown) return;
+    process.stderr.write("\r\x1b[2K");
+    this.shown = false;
+  }
+}
+
+function minutes(seconds: number): string {
+  return `about ${Math.max(1, Math.ceil(seconds / 60))} min`;
+}
+
+const day = (iso: string) => iso.slice(0, 10);
+const games = (n: number) => `${n} game${n === 1 ? "" : "s"}`;
+
+interface ReportArgs {
+  opts: ReportOptions;
+  db?: string;
+  provider?: "anthropic" | "gemini" | "none";
+  envFile?: string;
+  json: boolean;
+  all: boolean;
+}
+
+/** Parse `report` arguments. Every problem is a `ConfigError` (exit 2). */
+function parseReportArgs(args: string[]): ReportArgs {
+  try {
+    const { values, positionals } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: {
+        "time-class": { type: "string" },
+        depth: { type: "string" },
+        db: { type: "string" },
+        provider: { type: "string" },
+        env: { type: "string" },
+        band: { type: "string" },
+        "as-of": { type: "string" },
+        now: { type: "boolean" },
+        "sample-only": { type: "boolean" },
+        "max-games": { type: "string" },
+        json: { type: "boolean" },
+        all: { type: "boolean" },
+      },
+    });
+    const [platformArg, username, ...extra] = positionals;
+    const platform = Platform.safeParse(platformArg);
+    if (!platform.success || !username || extra.length > 0) {
+      throw new Error("usage: report <lichess|chesscom> <username> [options] (see blunderstruck --help)");
+    }
+    const pick = <T extends string>(name: string, value: string | undefined, allowed: readonly T[]): T | undefined => {
+      if (value === undefined) return undefined;
+      if (!(allowed as readonly string[]).includes(value)) throw new Error(`--${name} must be one of ${allowed.join(", ")}`);
+      return value as T;
+    };
+    const timeClass = pick("time-class", values["time-class"], ReportTimeClass.options);
+    const band = pick("band", values.band, RatingBand.options);
+    const provider = pick("provider", values.provider, ["anthropic", "gemini", "none"] as const);
+    const maxGames = values["max-games"] === undefined ? undefined : intOption("max-games", values["max-games"], 0, 1);
+    const opts: ReportOptions = {
+      platform: platform.data,
+      username,
+      depth: intOption("depth", values.depth, DEFAULT_DEPTH, 1),
+      force: values.now === true,
+      sampleOnly: values["sample-only"] === true,
+      ...(timeClass ? { timeClass } : {}),
+      ...(band ? { band } : {}),
+      ...(values["as-of"] !== undefined ? { asOf: values["as-of"] } : {}),
+      ...(maxGames !== undefined ? { maxGames } : {}),
+    };
+    return {
+      opts,
+      json: values.json === true,
+      all: values.all === true,
+      ...(values.db !== undefined ? { db: values.db } : {}),
+      ...(provider ? { provider } : {}),
+      ...(values.env !== undefined ? { envFile: values.env } : {}),
+    };
+  } catch (err) {
+    throw err instanceof ConfigError ? err : new ConfigError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+function buildProvider(flag: ReportArgs["provider"]): { provider?: CoachProvider; noKey: boolean } {
+  const r = resolveProvider({ env: process.env, ...(flag ? { flag } : {}) });
+  if (r.kind === "none") return { noKey: r.message === NO_KEY_MESSAGE };
+  const make = r.kind === "anthropic" ? anthropicProvider : geminiProvider;
+  return { provider: make({ apiKey: r.apiKey, choice: r.choice }), noKey: false };
+}
+
+async function reportCmd(args: string[]) {
+  const a = parseReportArgs(args);
+  loadEnv(a.envFile === undefined ? {} : { file: a.envFile });
+  const { provider, noKey } = buildProvider(a.provider);
+  const store = await openSqliteStore(dbPath(a.db));
+
+  const progress = new ProgressLine(process.stderr.isTTY === true);
+  const note = (msg: string) => {
+    progress.clear();
+    say(msg);
+  };
+  let shownKey: string | undefined;
+  const show = (r: WeeklyReport, heading?: string) => {
+    progress.clear();
+    shownKey = `${r.periodEnd}#${r.revision}`;
+    if (a.json) return;
+    if (heading) process.stdout.write(`\n${heading}\n\n`);
+    process.stdout.write(`${formatReport(r, { all: a.all })}\n`);
+  };
+  const shown = (r: WeeklyReport) => shownKey === `${r.periodEnd}#${r.revision}`;
+
+  let warnedNoKey = false;
+  let provisionalShown = false;
+  let secondsPerGame: number | undefined;
+  // What a stop message reports when the engine dies before the run can count the stop itself.
+  let counts = { done: 0, total: 0 };
+
+  const controller = new AbortController();
+  let engine: UciEngine | undefined;
+  let interrupts = 0;
+  const onSigint = () => {
+    interrupts += 1;
+    if (interrupts === 1) {
+      controller.abort();
+      note("Stopping after the current game (press Ctrl-C again to quit now)...");
+      return;
+    }
+    void engine?.quit();
+    process.exit(130);
+  };
+  process.on("SIGINT", onSigint);
+
+  try {
+    const outcome = await runReport(
+      {
+        store,
+        fetchGames,
+        provider,
+        now: () => new Date(),
+        signal: controller.signal,
+        startEngine: async () => {
+          const e = await UciEngine.start();
+          engine = e;
+          return { evaluator: e, name: e.name, quit: () => e.quit() };
+        },
+        onProgress: ({ phase, done, total, etaSeconds }) => {
+          counts = { done, total };
+          if (phase === "sample" && total > done && etaSeconds !== null) secondsPerGame = etaSeconds / (total - done);
+          const what = phase === "sample" ? "Analysing the sample" : "Analysing the remaining games";
+          const eta = etaSeconds !== null && done < total ? `, ${minutes(etaSeconds)} left` : "";
+          progress.update(`${what}: ${done} of ${total}${eta}`, done === total);
+        },
+        onWarning: (message) => note(`Coach wording fell back to templates: ${message}`),
+        onReport: (report, { pending }) => {
+          if (noKey && !warnedNoKey) {
+            note(NO_KEY_MESSAGE);
+            warnedNoKey = true;
+          }
+          if (report.revision === 0) {
+            show(report);
+            if (pending === 0) return;
+            provisionalShown = true;
+            counts = { done: 0, total: pending };
+            if (a.opts.sampleOnly) {
+              note(`${games(pending)} not analysed yet (--sample-only); run report again without it to finish.`);
+            } else {
+              const eta = secondsPerGame === undefined ? "" : ` (${minutes(secondsPerGame * pending)})`;
+              note(`Analysing the remaining ${games(pending)}${eta}. Stop any time; run report again to continue.`);
+            }
+          } else if (provisionalShown) {
+            show(report, `Updated report (all ${games(report.coverage.total)} analysed):`);
+          } else {
+            note(
+              `Finished the earlier report for the period ending ${day(report.periodEnd)} first ` +
+                `(all ${games(report.coverage.total)} analysed).`,
+            );
+          }
+        },
+      },
+      a.opts,
+    );
+    progress.clear();
+
+    const r = outcome.report;
+    const n = outcome.newGames;
+    const waitingLine = (since: string) =>
+      `${n} new game${n === 1 ? "" : "s"} since ${day(since)}; a new report needs ${MIN_REPORT_GAMES} (${outcome.needed} more)`;
+    if (outcome.status === "unchanged" && r) {
+      note(`No new games since ${day(r.periodEnd)}; showing the latest report.`);
+    }
+    if (r && !shown(r)) show(r);
+    if (outcome.status === "waiting" || (outcome.status === "resumed" && outcome.needed > 0 && outcome.newGames > 0)) {
+      if (r) {
+        note(waitingLine(r.periodEnd));
+      } else if (outcome.newGames === 0) {
+        note(
+          `No rated bullet, blitz, rapid or classical games found for ${a.opts.username} on ${a.opts.platform} ` +
+            `in the last ${MAX_LOOKBACK_DAYS} days, so there is nothing to report yet.`,
+        );
+      } else {
+        note(`${games(outcome.newGames)} found; a first report needs ${MIN_REPORT_GAMES} (${outcome.needed} more).`);
+      }
+    }
+    if (outcome.otherTracks && outcome.otherTracks.length > 0 && r) {
+      note(
+        `Also tracked: ${outcome.otherTracks.map((t) => t.timeClass).join(", ")}. ` +
+          `This is ${r.track.timeClass}; choose another with --time-class <class>.`,
+      );
+    }
+    if (a.json) process.stdout.write(`${JSON.stringify(r ?? null, null, 2)}\n`);
+  } catch (err) {
+    progress.clear();
+    if (err instanceof AnalysisAborted) {
+      say(`${err.message}; run report again to continue`);
+      process.exitCode = 130;
+      return;
+    }
+    if (controller.signal.aborted) {
+      // Ctrl-C reaches Stockfish too, which can end the game in progress before the run checks the signal.
+      say(`Stopped: ${counts.done} of ${counts.total} analysed; run report again to continue`);
+      process.exitCode = 130;
+      return;
+    }
+    throw err;
+  } finally {
+    process.off("SIGINT", onSigint);
+    await store.close();
+  }
+}
+
+async function dbCmd(args: string[]) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { db: { type: "string" }, force: { type: "boolean" }, env: { type: "string" } },
+  });
+  const [action, file, ...extra] = positionals;
+  if ((action !== "export" && action !== "import") || !file || extra.length > 0) {
+    throw new ConfigError("usage: db export <file> [--db <path>] [--force] | db import <file> [--db <path>]");
+  }
+  loadEnv(values.env === undefined ? {} : { file: values.env });
+  const path = dbPath(values.db);
+
+  if (action === "export") {
+    const store = await openSqliteStore(path, { readOnly: true });
+    let handle;
+    try {
+      handle = await open(file, values.force ? "w" : "wx");
+    } catch (err) {
+      await store.close();
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new ConfigError(`${file} already exists; pass --force to overwrite it`);
+      }
+      throw err;
+    }
+    const counts: Record<string, number> = { track: 0, game: 0, analysis: 0, report: 0 };
+    const out = handle.createWriteStream();
+    try {
+      await exportStore(store, async (line) => {
+        const type = /^\{"type":"(\w+)"/.exec(line)?.[1];
+        if (type && type in counts) counts[type]! += 1;
+        if (!out.write(`${line}\n`)) await once(out, "drain");
+      });
+      await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
+    } catch (err) {
+      out.destroy();
+      await unlink(file).catch(() => {});
+      throw err;
+    } finally {
+      await store.close();
+    }
+    const total = Object.values(counts).reduce((s, n) => s + n, 0);
+    console.log(
+      `Exported ${total} records (${counts.track} tracks, ${counts.game} games, ${counts.analysis} analyses, ` +
+        `${counts.report} reports) from ${path} to ${file}`,
+    );
+    return;
+  }
+
+  if (!existsSync(file)) throw new ConfigError(`no file at ${file}`);
+  const store = await openSqliteStore(path);
+  try {
+    const lines = createInterface({ input: createReadStream(file, "utf8"), crlfDelay: Infinity });
+    const { imported } = await importStore(store, lines);
+    console.log(`Imported ${imported} lines from ${file} into ${path}`);
+  } finally {
+    await store.close();
+  }
+}
+
+/** Errors in what the user passed: exit 2 rather than 1. */
+const isUsageError = (err: unknown) =>
+  err instanceof ConfigError || err instanceof ReportInputError || err instanceof EnvFileError;
+
 const [command, ...rest] = process.argv.slice(2);
 try {
   if (command === "fetch") await fetchCmd(rest);
   else if (command === "analyze") await analyzeCmd(rest);
   else if (command === "patterns") await patternsCmd(rest);
+  else if (command === "report") await reportCmd(rest);
+  else if (command === "db") await dbCmd(rest);
   else if (command === "eval") await evalCmd(rest);
   else if (command === "models") console.table(COACH_ROUTES);
   else {
     console.log(USAGE);
-    process.exitCode = command ? 2 : 0;
+    process.exitCode = command && command !== "--help" && command !== "help" ? 2 : 0;
   }
 } catch (err) {
   console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
-  process.exitCode = 1;
+  process.exitCode = isUsageError(err) ? 2 : 1;
 }
