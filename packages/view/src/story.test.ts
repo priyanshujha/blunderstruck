@@ -82,7 +82,7 @@ describe("storyLines", () => {
       ["you", "Your queen went to d2."],
       ["they", "That let the knight jump to e4 with check, hitting your king and queen at once."],
       ["then", "Your king had to step aside, the knight took your queen, and your king took the knight."],
-      ["better", "Rook to e1. It covers e4, so the knight cannot land there safely."],
+      ["better", "Rook to e1. After it, e4 is guarded, so the knight cannot land there safely."],
     ]);
   });
 
@@ -111,7 +111,7 @@ describe("storyLines", () => {
     expect(texts(F2, "hung-piece")).toEqual([
       ["you", "Your knight took the pawn on e5. That left your knight on e5 where it could be taken."],
       ["they", "Their knight took your knight."],
-      ["better", "Bishop to b5. It gives nothing away."],
+      ["better", "Bishop to b5. It keeps the position together."],
     ]);
   });
 
@@ -150,7 +150,10 @@ describe("storyLines", () => {
       "They missed it. The game went on with the bishop taking your pawn on a2, with check.",
     ]);
     const { actualReply: _, ...none } = s;
-    expect(texts(none)[2]).toEqual(["then", "They missed it."]);
+    // No reply at all: the game ended on the move.
+    expect(texts(none)[2]).toEqual(["then", "The game ended there."]);
+    expect(storyCost(s).text).toBe("It could have cost your queen.");
+    expect(storyCost(F1).text).toBe("It cost your queen.");
   });
 
   it("names a discovered attack's rear piece and what it aims at", () => {
@@ -259,10 +262,10 @@ describe("storyLines", () => {
       {
         name: "en passant",
         move: mv({ san: "exd6", from: "e5", to: "d6", piece: "pawn", color: W, captured: "pawn", enPassant: true }),
-        you: "Your pawn took their pawn on d6 en passant.",
-        they: "That let their pawn take your pawn on d6 en passant.",
+        you: "Your pawn took their pawn en passant, landing on d6.",
+        they: "That let their pawn take your pawn en passant, landing on d6.",
         then: "Your pawn took their pawn en passant.",
-        better: "Pawn takes their pawn on d6, en passant.",
+        better: "Pawn takes their pawn en passant, landing on d6.",
       },
     ];
 
@@ -294,12 +297,19 @@ describe("storyLines", () => {
       [{ kind: "mates", mateIn: 1 }, "It gives mate at once."],
       [{ kind: "mates" }, "It forces mate."],
       [{ kind: "wins", piece: "rook", gave: "bishop", gain: 2 }, "It wins their rook for your bishop."],
-      [{ kind: "wins", piece: "queen" }, "It wins their queen."],
-      [{ kind: "wins", gain: 3 }, "It wins material."],
-      [{ kind: "covers-square", square: "e4" }, "It covers e4, so the knight cannot land there safely."],
-      [{ kind: "covers-square", square: "c5" }, "It covers c5."],
-      [{ kind: "stops-key-move" }, "It stops the knight from going to e4."],
-      [{ kind: "holds" }, "It gives nothing away."],
+      [{ kind: "wins", piece: "queen", gain: 9 }, "It wins their queen."],
+      [{ kind: "wins", gain: 3 }, "It wins material worth about 3 pawns."],
+      [{ kind: "wins", gain: 1 }, "It wins material worth about a pawn."],
+      // Equal pieces, or pieces that do not match the swing, are not named.
+      [{ kind: "wins", piece: "queen", gave: "queen", gain: 5 }, "It wins material worth about 5 pawns."],
+      [{ kind: "wins", piece: "bishop", gave: "bishop", gain: 2 }, "It wins material worth about 2 pawns."],
+      [{ kind: "wins", piece: "queen", gain: 3 }, "It wins material worth about 3 pawns."],
+      [{ kind: "covers-square", square: "e4", piece: "knight" }, "After it, e4 is guarded, so the knight cannot land there safely."],
+      [{ kind: "covers-square", square: "e4" }, "After it, e4 is guarded, so the knight cannot land there safely."],
+      [{ kind: "covers-square", square: "c5" }, "After it, c5 is guarded."],
+      [{ kind: "stops-key-move", square: "e4", piece: "knight" }, "After it, the knight can no longer go to e4."],
+      [{ kind: "stops-key-move" }, "After it, the knight can no longer go to e4."],
+      [{ kind: "holds" }, "It keeps the position together."],
     ];
     for (const [reason, sentence] of cases) {
       it(`${reason.kind} ${JSON.stringify(reason)}`, () => {
@@ -309,7 +319,7 @@ describe("storyLines", () => {
     }
     it("stops-key-move without a punishing move", () => {
       expect(storyLines({ ...F1, punish: [], betterReason: { kind: "stops-key-move" } }).at(-1)!.text).toBe(
-        "Rook to e1. It stops their best reply.",
+        "Rook to e1. After it, their best reply is no longer possible.",
       );
     });
   });
@@ -326,10 +336,18 @@ describe("storyCost", () => {
   it("says checkmate, a missed win, material, or winning chances", () => {
     const mate = { ...F1, punish: [mv({ san: "Qh2#", from: "h4", to: "h2", piece: "queen", color: "black", check: true, mate: true })] };
     expect(storyCost(mate).text).toBe("It allowed checkmate.");
+    expect(storyCost({ ...mate, replyFound: false }).text).toBe("It could have allowed checkmate.");
     expect(storyCost(F3, "missed-tactic").text).toBe("It cost the chance to win their queen.");
     expect(storyCost({ ...F3, betterReason: { kind: "mates", mateIn: 2 } }, "missed-mate").text).toBe("It cost a forced mate.");
     expect(storyCost({ ...F1, lost: undefined, gain: -1 }).text).toBe("It cost a pawn.");
-    expect(storyCost({ ...F1, lost: undefined, gain: -3 }).text).toBe("It cost material worth 3 pawns.");
-    expect(storyCost({ ...F1, lost: undefined, gain: 0 }).text).toBe("It cost winning chances.");
+    expect(storyCost({ ...F1, lost: undefined, gain: -3 }).text).toBe("It cost about 3 pawns of material.");
+    expect(storyCost({ ...F1, lost: undefined, gain: -3, replyFound: false }).text).toBe("It could have cost about 3 pawns of material.");
+    // A positional loss: nothing about material, only the chances.
+    const positional = storyCost({ ...F1, lost: undefined, gain: 0 });
+    expect(positional.text).toBe("Your winning chances went from 94% to 26%.");
+    expect(positional.detail).toBeUndefined();
+    expect(storyCost({ ...F3, betterReason: { kind: "wins", piece: "bishop", gave: "bishop", gain: 2 } }, "missed-tactic").text).toBe(
+      "It cost the chance to win material worth about 2 pawns.",
+    );
   });
 });

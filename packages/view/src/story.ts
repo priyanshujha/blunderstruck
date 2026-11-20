@@ -30,10 +30,10 @@ export interface StorySentence {
   text: string;
 }
 
-/** What a mistake cost: material first when a piece went, winning chances as the detail. */
+/** What a mistake cost: material first when material went, winning chances as the detail. */
 export interface StoryCost extends StorySentence {
-  /** "Your winning chances went from 94% to 26%." */
-  detail: string;
+  /** "Your winning chances went from 94% to 26%."; absent when the sentence already says that. */
+  detail?: string;
 }
 
 const PIECE_VALUE: Record<PieceRole, number> = { king: 100, queen: 9, rook: 5, bishop: 3, knight: 3, pawn: 1 };
@@ -86,6 +86,12 @@ class Sentence {
     return { segments: this.segments, text: segmentsText(this.segments) };
   }
 }
+
+/**
+ * Where a capture happened: " on f7", or for en passant, where the pawn that took landed
+ * (the pawn taken stood beside it): " en passant, landing on e6".
+ */
+const onSquare = (m: MoveDetail): string => (m.enPassant ? ` en passant, landing on ${m.to}` : ` on ${m.to}`);
 
 /** ": checkmate", " with check" or nothing. */
 const checkWords = (m: MoveDetail): string => (m.mate ? ": checkmate" : m.check ? " with check" : "");
@@ -160,7 +166,7 @@ function youSentence(story: ExampleStory, patternId: string | undefined): StoryS
   } else {
     s.named(m.piece, m.color);
     if (m.captured) {
-      s.text(" took ").named(m.captured, other(m.color)).text(` on ${m.to}${m.enPassant ? " en passant" : ""}`);
+      s.text(" took ").named(m.captured, other(m.color)).text(onSquare(m));
       if (m.promotion) s.text(" and became a ").piece(m.promotion, m.color);
     } else if (m.promotion) {
       s.text(` reached ${m.to} and became a `).piece(m.promotion, m.color);
@@ -194,7 +200,7 @@ function theySentence(story: ExampleStory, m: MoveDetail, isKey: boolean, patter
   }
   s.text("That let ").named(m.piece, m.color);
   if (m.captured) {
-    s.text(" take ").named(m.captured, player).text(` on ${m.to}${m.enPassant ? " en passant" : ""}`);
+    s.text(" take ").named(m.captured, player).text(onSquare(m));
     if (m.promotion) s.text(" and become a ").piece(m.promotion, m.color);
   } else if (m.promotion) {
     s.text(` reach ${m.to} and become a `).piece(m.promotion, m.color);
@@ -248,18 +254,18 @@ function thenSentence(story: ExampleStory, from: number, keyIndex: number | unde
   return s.done();
 }
 
-/** "They missed it. The game went on with the rook to b8." */
+/** "They missed it. The game went on with the rook to b8.", or "The game ended there." */
 function missedSentence(story: ExampleStory): StorySentence {
   const player = story.played.color;
-  const s = new Sentence(player).text("They missed it.");
   const m = story.actualReply;
-  if (!m) return s.done();
-  s.text(" The game went on with ");
+  // No reply in the game: it ended on the move (the last move, a resignation, a timeout).
+  if (!m) return new Sentence(player).text("The game ended there.").done();
+  const s = new Sentence(player).text("They missed it. The game went on with ");
   if (m.castle) {
     s.text(`them castling ${SIDE[m.castle]}`);
   } else {
     s.named(m.piece, m.color);
-    if (m.captured) s.text(" taking ").named(m.captured, player).text(` on ${m.to}${m.enPassant ? " en passant" : ""}`);
+    if (m.captured) s.text(" taking ").named(m.captured, player).text(onSquare(m));
     else s.text(` to ${m.to}`);
     if (m.promotion) s.text(", becoming a ").piece(m.promotion, m.color);
   }
@@ -278,32 +284,40 @@ function reasonText(s: Sentence, r: BetterReason, story: ExampleStory, player: C
       else if (r.mateIn === 1) s.text("It gives mate at once.");
       else s.text("It forces mate.");
       return;
-    case "wins":
-      if (r.piece) {
-        s.text("It wins their ").piece(r.piece, opp);
-        if (r.gave) s.text(" for your ").piece(r.gave, player);
+    case "wins": {
+      const named = piecesTellIt(r.piece, r.gave, r.gain ?? story.betterGain);
+      if (named) {
+        s.text("It wins their ").piece(named.won, opp);
+        if (named.gave) s.text(" for your ").piece(named.gave, player);
         s.text(".");
       } else {
-        s.text("It wins material.");
-      }
-      return;
-    case "covers-square": {
-      const sq = r.square ?? reply?.to;
-      if (!sq) {
-        s.text("It covers the square their best reply needed.");
-      } else if (reply && reply.to === sq) {
-        s.text(`It covers ${sq}, so `).named(reply.piece, reply.color).text(" cannot land there safely.");
-      } else {
-        s.text(`It covers ${sq}.`);
+        s.text(materialWorth("It wins material", r.gain ?? story.betterGain));
       }
       return;
     }
-    case "stops-key-move":
-      if (reply) s.text("It stops ").named(reply.piece, reply.color).text(` from going to ${reply.to}.`);
-      else s.text("It stops their best reply.");
+    // The square reasons say only what the reason establishes: the square is guarded after the
+    // better move, or the reply is no longer legal; never that the better move's piece does it.
+    case "covers-square": {
+      const sq = r.square ?? reply?.to;
+      const piece = r.piece ?? (reply && reply.to === sq ? reply.piece : undefined);
+      if (!sq) {
+        s.text("After it, their best reply no longer works.");
+      } else if (piece) {
+        s.text(`After it, ${sq} is guarded, so `).named(piece, opp).text(" cannot land there safely.");
+      } else {
+        s.text(`After it, ${sq} is guarded.`);
+      }
       return;
+    }
+    case "stops-key-move": {
+      const sq = r.square ?? reply?.to;
+      const piece = r.piece ?? reply?.piece;
+      if (sq && piece) s.text("After it, ").named(piece, opp).text(` can no longer go to ${sq}.`);
+      else s.text("After it, their best reply is no longer possible.");
+      return;
+    }
     case "holds":
-      s.text("It gives nothing away.");
+      s.text("It keeps the position together.");
       return;
   }
 }
@@ -319,8 +333,7 @@ function betterSentence(story: ExampleStory): StorySentence | undefined {
   } else {
     s.piece(b.piece, b.color);
     if (b.captured) {
-      s.text(" takes ").named(b.captured, other(b.color), { their: b.captured === b.piece }).text(` on ${b.to}`);
-      if (b.enPassant) s.text(", en passant");
+      s.text(" takes ").named(b.captured, other(b.color), { their: b.captured === b.piece }).text(onSquare(b));
     } else {
       s.text(` to ${b.to}`);
     }
@@ -376,28 +389,61 @@ export function winChances(story: Pick<ExampleStory, "winPctBefore" | "winPctAft
   return `Your winning chances went from ${Math.round(story.winPctBefore)}% to ${Math.round(story.winPctAfter)}%.`;
 }
 
+const VALUE: Record<PieceRole, number> = { pawn: 1, knight: 3, bishop: 3, rook: 5, queen: 9, king: 0 };
+
 /**
- * What the move cost, material first: checkmate allowed, the piece lost, the material, or for a
- * missed chance what it would have won. Winning chances before and after are the detail.
+ * The pieces to name for a material swing, or undefined when no single piece tells it: the
+ * piece won must be worth more than the piece given, and their difference must match the net
+ * swing to within a pawn either way ("their queen for your knight" for about 6 pawns).
+ */
+function piecesTellIt(
+  won: PieceRole | undefined,
+  gave: PieceRole | undefined,
+  gain: number | undefined,
+): { won: PieceRole; gave?: PieceRole } | undefined {
+  if (!won) return undefined;
+  const diff = VALUE[won] - (gave ? VALUE[gave] : 0);
+  if (diff <= 0) return undefined;
+  if (gain !== undefined && Math.abs(diff - Math.abs(gain)) > 1) return undefined;
+  return gave ? { won, gave } : { won };
+}
+
+/** "It wins material worth about 3 pawns", "… a pawn", or the bare lead when the size is unknown. */
+function materialWorth(lead: string, gain: number | undefined): string {
+  const n = gain === undefined ? 0 : Math.round(Math.abs(gain));
+  if (n === 0) return `${lead}.`;
+  return n === 1 ? `${lead} worth about a pawn.` : `${lead} worth about ${n} pawns.`;
+}
+
+/**
+ * What the move cost, material first: checkmate allowed, the piece lost (net, as the story
+ * builder reads it), the material lost, or for a missed chance what it would have won. When
+ * the opponent did not play the punishment, it is what the move could have cost. A positional
+ * loss says only the winning chances before and after.
  */
 export function storyCost(story: ExampleStory, patternId?: string): StoryCost {
   const player = story.played.color;
   const s = new Sentence(player);
   const missed = patternId !== undefined && blindSpotFamilyOf(patternId) === "missed";
   const r = story.betterReason;
-  if (story.punish.at(-1)?.mate) {
-    s.text("It allowed checkmate.");
-  } else if (story.lost) {
-    s.text("It cost ").named(story.lost.piece, story.lost.color).text(".");
+  // Only the punishment the opponent played (or a missed chance, which is gone either way) cost anything.
+  const cost = missed || story.replyFound ? "It cost" : "It could have cost";
+  const chances = winChances(story);
+  if (!missed && story.punish.at(-1)?.mate) {
+    s.text(story.replyFound ? "It allowed checkmate." : "It could have allowed checkmate.");
+  } else if (!missed && story.lost) {
+    s.text(`${cost} `).named(story.lost.piece, story.lost.color).text(".");
   } else if (missed && r?.kind === "mates") {
     s.text("It cost a forced mate.");
-  } else if (missed && r?.kind === "wins" && r.piece) {
-    s.text("It cost the chance to win their ").piece(r.piece, other(player)).text(".");
-  } else if (story.gain <= -1) {
+  } else if (missed && r?.kind === "wins") {
+    const named = piecesTellIt(r.piece, r.gave, r.gain ?? story.betterGain);
+    if (named) s.text("It cost the chance to win their ").piece(named.won, other(player)).text(".");
+    else s.text(materialWorth("It cost the chance to win material", r.gain ?? story.betterGain));
+  } else if (!missed && story.gain <= -1) {
     const n = Math.round(-story.gain);
-    s.text(n === 1 ? "It cost a pawn." : `It cost material worth ${n} pawns.`);
+    s.text(n === 1 ? `${cost} a pawn.` : `${cost} about ${n} pawns of material.`);
   } else {
-    s.text("It cost winning chances.");
+    return { segments: [{ text: chances }], text: chances };
   }
-  return { ...s.done(), detail: winChances(story) };
+  return { ...s.done(), detail: chances };
 }

@@ -7,7 +7,10 @@ import {
   REPORT_WEEKS,
   WeeklyReport,
 } from "@blunderstruck/contracts";
+import { storyOf } from "@blunderstruck/patterns";
+import { storyCost, storyLines } from "@blunderstruck/view";
 import { describe, expect, it } from "vitest";
+import { type FixtureOptions, fixtureGame } from "../../../packages/patterns/src/test-fixtures";
 import { formatReport } from "./report-format";
 
 const FEN = "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4";
@@ -193,8 +196,7 @@ describe("formatReport", () => {
 
   it("shows the precise figures, the week table and all nine trends with all", () => {
     const text = formatReport(weekly(), { all: true });
-    expect(text).toContain("Now 2.10 per 100 moves; started at 3.00; target 2.25.");
-    expect(text).not.toContain("In 23 of your 31 games");
+    expect(text).toContain("   In 23 of your 31 games.\n   Goal: at most 7 in every 10 games. In these 31 games that means 21 or fewer; you are at 23.\n   Now 2.10 per 100 moves; started at 3.00; target 2.25.");
     expect(text).toContain(`Position (FEN): ${FEN}`);
     expect(text).toContain("Left a piece hanging: improved (3.00 before, 2.10 now, per 100 moves, p = 0.040)");
     expect(text).toContain("Week by week");
@@ -404,8 +406,8 @@ describe("formatReport", () => {
       expect(text).toContain(
         [
           "   Looking at all 24 times in your last 64 games:",
-          "   - Their reply gave check: 11 of your 24, against about 1 in 8 of your mistakes overall. 7 of them from the knight that moved.",
-          "   - The piece you had just moved was the one you lost: 9 of your 24, against about 1 in 4 of your mistakes overall.",
+          "   - Their best reply gave check: 11 of your 24, against about 1 in 8 of your mistakes overall. 7 of them from the knight that moved.",
+          "   - The piece you had just moved was taken: 9 of your 24, against about 1 in 4 of your mistakes overall.",
           "   The habit to build:",
           "   1. 11 of your 24 began with a check: before you let go, find every check they would have.",
           "   2. Ask what now attacks the square your piece lands on.",
@@ -418,7 +420,7 @@ describe("formatReport", () => {
           "     You: Your queen went to d2.",
           "     They: That let the knight jump to e4 with check, hitting your king and queen at once.",
           "     Then: Your king had to step aside, the knight took your queen, and your king took the knight.",
-          "     Better: Rook to e1. It covers e4, so the knight cannot land there safely.",
+          "     Better: Rook to e1. After it, e4 is guarded, so the knight cannot land there safely.",
           "     It cost your queen.",
         ].join("\n"),
       );
@@ -431,12 +433,91 @@ describe("formatReport", () => {
     it("adds the precise figures, the position and the winning chances with all", () => {
       const text = formatReport(r(), { all: true });
       expect(text).toContain("   Now 0.20 per 100 moves; started at 2.00; target 2.25.");
-      expect(text).not.toContain("In 12 of your 31 games");
+      expect(text).toContain("   In 12 of your 31 games, about 4 in every 10 games.\n   Goal: at most 1 game in 3. In these 31 games that means 10 or fewer; you are at 12.\n   Now 0.20");
       expect(text).toContain("The habit to build:");
       expect(text).toContain(`   - Position (FEN): ${F1_FEN}`);
       expect(text).toContain("     It cost your queen. Your winning chances went from 94% to 26%.");
       expect(text).toContain("     You played Qd2; better was Re1 (-67.8 win%)");
       expect(text).toContain("motif: fork");
+    });
+  });
+
+  describe("stories from the story builder, read the way the board has them", () => {
+    // Engine lines as the patterns package's own story fixtures script them (Stockfish 19, depth 18).
+    const fenPgn = (fen: string, moves: string): string => `[Event "fixture"]\n[SetUp "1"]\n[FEN "${fen}"]\n\n${moves} *`;
+    const F1_POS = "r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2Q3R w - - 0 1";
+    const F1_EVALS = {
+      1: { cp: 778, pv: ["h1e1", "c7c5", "d1f3", "b7b6", "f2g1", "h7h6", "f3b7", "a8b8", "b7a6", "f6d5"] },
+      2: { cp: -283, pv: ["f6e4", "f2e1", "e4d2", "e1d2", "f8e8", "a1d1", "a8d8", "d2c3", "f7f5", "h1e1"] },
+    };
+    const QH4 = "1. e4 e5 2. Nf3 Qh4";
+    const AFTER_NF3 = { cp: 30, pv: ["b8c6", "f1b5", "g8f6", "e1g1", "f6e4", "f1e1", "e4d6", "f3e5", "f8e7", "b5f1"] };
+    const AFTER_QH4 = { cp: 920, pv: ["f3h4", "d7d5", "h4f5", "d5e4", "f5g7", "f8g7", "d2d3", "g7f8", "d3e4", "g8f6"] };
+
+    /** The story's lines and cost, as the terminal prints them. */
+    async function told(o: FixtureOptions & { as: "white" | "black" }, ply: number, patternId: string): Promise<string[]> {
+      const g = await fixtureGame(o);
+      const s = storyOf(g, { gameId: g.analysis.gameId, ply, patternId });
+      expect(s).toBeDefined();
+      return [...storyLines(s!, patternId).map((l) => `${l.tag}: ${l.text}`), `cost: ${storyCost(s!, patternId).text}`];
+    }
+
+    it("F1 when they did not play the fork: it could have cost the queen", async () => {
+      expect(await told({ pgn: fenPgn(F1_POS, "1. Qd2 h6"), as: "white", evals: F1_EVALS }, 1, "allowed-tactic")).toEqual([
+        "you: Your queen went to d2.",
+        "they: That let the knight jump to e4 with check, hitting your king and queen at once.",
+        "then: They missed it. The game went on with the pawn to h6.",
+        "better: Rook to e1. After it, e4 is guarded, so the knight cannot land there safely.",
+        "cost: It could have cost your queen.",
+      ]);
+    });
+
+    it("F1 as the game's last move: the game ended there", async () => {
+      const lines = await told({ pgn: fenPgn(F1_POS, "1. Qd2"), as: "white", evals: F1_EVALS }, 1, "allowed-tactic");
+      expect(lines[2]).toBe("then: The game ended there.");
+      expect(lines.at(-1)).toBe("cost: It could have cost your queen.");
+    });
+
+    it("2...Qh4?? 3.Nxh4: the better move is credited with nothing it does not do", async () => {
+      expect(await told({ pgn: `${QH4} 3. Nxh4`, as: "black", evals: { 4: AFTER_NF3, 5: AFTER_QH4 } }, 4, "hung-piece")).toEqual([
+        "you: Your queen went to h4. That left your queen on h4 where it could be taken.",
+        "they: The knight took your queen.",
+        "then: Your pawn went to d5, the knight went to f5, your pawn took their pawn, the knight took your pawn with check, and your bishop took the knight.",
+        "better: Knight to c6. It keeps the position together.",
+        "cost: It cost your queen.",
+      ]);
+    });
+
+    it("3.d3? after 2...Qh4: the missed queen, named because it outweighs the knight given", async () => {
+      const evals = { 5: AFTER_QH4, 6: { cp: -109, pv: ["h4e7", "d3d4", "d7d6", "b1c3", "c7c6", "f1c4", "g8f6", "c1e3", "h7h6", "e1g1"] } };
+      const lines = await told({ pgn: `${QH4} 3. d3`, as: "white", evals }, 5, "missed-capture");
+      expect(lines).toContain("better: Knight takes the queen on h4. It wins their queen for your knight.");
+      expect(lines.at(-1)).toBe("cost: It cost the chance to win their queen.");
+    });
+
+    it("Légal's trap, 4...g6? 5.Nxe5: a traded piece is not lost, so the cost is the pawn", async () => {
+      const evals = {
+        8: { cp: 60, pv: ["g8f6", "h2h3", "g4f3", "d1f3", "b8c6", "c3e2", "c6a5", "c4b5", "c7c6", "b5d3"] },
+        9: { cp: 254, pv: ["f3e5", "d6e5", "d1g4", "b8c6", "d2d3", "g8f6", "g4f3", "c6d4", "f3d1", "d8d7"] },
+      };
+      expect(await told({ pgn: "1. e4 e5 2. Nf3 d6 3. Bc4 Bg4 4. Nc3 g6 5. Nxe5", as: "black", evals }, 8, "allowed-tactic")).toEqual([
+        "you: Your pawn went to g6.",
+        "they: That let the knight take your pawn on e5. Moving it opened the line behind it: their queen on d1 was now aimed at your bishop.",
+        "then: Your pawn took the knight, and the queen took your bishop.",
+        "better: Knight to f6. It keeps the position together.",
+        "cost: It cost a pawn.",
+      ]);
+    });
+
+    it("d4? exd3+: en passant names where the pawn landed", async () => {
+      const evals = {
+        1: { cp: 752, pv: ["c2c6", "g8f8", "c6d6", "f8g8", "d6d7", "g8f8", "e1e2", "e8e6", "d7d8", "e6e8"] },
+        2: { cp: -697, pv: ["e4d3", "e1d2", "d3c2", "d2c2", "g8f8", "c2d2", "f8e7", "g2g4", "e8a8", "g4g5"] },
+      };
+      const lines = await told({ pgn: fenPgn("4r1k1/5ppp/8/8/4p3/8/2QP1PPP/4K3 w - - 0 1", "1. d4 exd3+"), as: "white", evals }, 1, "allowed-tactic");
+      expect(lines[1]).toBe(
+        "they: That let their pawn take your pawn en passant, landing on d3 with check. Moving it opened the line behind it: their rook on e8 was now aimed at your king.",
+      );
     });
   });
 });

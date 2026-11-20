@@ -236,42 +236,63 @@ const oneIn = (a: number, g: number): number => Math.floor((2 * g + a) / (2 * a)
 /**
  * How often something happened in a set of games, as a player can picture it: "not once",
  * "about 1 game in 3" (only when the share is within a tenth of 1 in 3, else the tenths form),
- * "about 8 in every 10 games" (from a share of `GAMES_TENTHS_FROM`),
+ * "about 8 in every 10 games" (from a share of `GAMES_TENTHS_FROM`; "about 1 game in 2" for
+ * 5 in 10, so one share always has one wording),
  * "in almost every game" (when that rounds to 10 of 10 but was not all), "in every game", and
  * "in your only game" when there was one game and it happened there.
  */
 export function gamesPhrase(affected: number, games: number): string {
-  if (games <= 0) return "no games yet";
-  if (affected <= 0) return "not once";
-  if (affected >= games) return games === 1 ? "in your only game" : "in every game";
+  return statedShare(affected, games).text;
+}
+
+/** A phrase and the share it states, as a fraction (`num / den`). */
+interface Stated {
+  text: string;
+  num: number;
+  den: number;
+}
+
+/** "about X in every 10 games", said as "about 1 game in N" when X/10 is 1/N, so one share has one wording. */
+function tenthsPhrase(x: number): Stated {
+  if (x > 0 && 10 % x === 0) return { text: `about 1 game in ${10 / x}`, num: 1, den: 10 / x };
+  return { text: `about ${x} in every 10 games`, num: x, den: 10 };
+}
+
+/** The phrase for `affected` of `games` and the share it states (see `gamesPhrase`). */
+function statedShare(affected: number, games: number): Stated {
+  if (games <= 0) return { text: "no games yet", num: 0, den: 1 };
+  if (affected <= 0) return { text: "not once", num: 0, den: 1 };
+  if (affected >= games) return { text: games === 1 ? "in your only game" : "in every game", num: 1, den: 1 };
   if (inTenths(affected, games)) {
     const x = tenthsOf(affected, games);
-    return x >= 10 ? "in almost every game" : `about ${x} in every 10 games`;
+    return x >= 10 ? { text: "in almost every game", num: 19, den: 20 } : tenthsPhrase(x);
   }
   const n = oneIn(affected, games);
   // "1 game in N" only when the true share is within a tenth of 1/N: |a·N − g| ≤ g/10.
-  if (10 * Math.abs(affected * n - games) <= games) return `about 1 game in ${n}`;
-  return `about ${tenthsOf(affected, games)} in every 10 games`;
+  if (10 * Math.abs(affected * n - games) <= games) return { text: `about 1 game in ${n}`, num: 1, den: n };
+  return tenthsPhrase(tenthsOf(affected, games));
 }
 
-/** A goal in the same words: "at most 1 game in 4", "at most 6 in every 10 games", "not in a single game". */
+/**
+ * A goal in the same words: "at most 1 game in 4", "at most 6 in every 10 games", "not in a
+ * single game". A goal in tenths that is one game in N is said that way ("at most 1 game in 5"
+ * for 2 in 10), as the frequency is.
+ */
 export function goalPhrase(goal: GameGoal): string {
   if (goal.per <= 0) return "not in a single game";
-  if (goal.of === 10) return `at most ${goal.per} in every 10 games`;
   if (goal.per === 1) return `at most 1 game in ${goal.of}`;
+  if (goal.of % goal.per === 0) return `at most 1 game in ${goal.of / goal.per}`;
+  if (goal.of === 10) return `at most ${goal.per} in every 10 games`;
   return `at most ${goal.per} games in every ${goal.of}`;
 }
 
 /** The item's goal, or for an item stored before goals were in games, the one its baseline gives. */
 export const goalOf = (item: Pick<FocusItem, "goal" | "baseline">): GameGoal => item.goal ?? gameGoalOf(item.baseline);
 
-/** A frequency or goal phrase without its hedge, so the two can be compared. */
-const phraseCore = (p: string): string => p.replace(/^(about|at most) /, "");
-
 /**
- * "In 51 of your 162 games, about 1 game in 3." and the edges. Given an unmet goal whose words
- * would read the same as the frequency ("about 6 in every 10" against "at most 6 in every 10"),
- * only the exact counts are said, so a missed goal never looks reached.
+ * "In 51 of your 162 games, about 1 game in 3." and the edges. Given a goal that is not met,
+ * the rounded phrase is left out whenever the share it states is at or under the goal's
+ * (compared as fractions), so a missed goal never reads as reached: only the counts are said.
  */
 export function frequencySentence(stat: Pick<PatternStat, "games" | "gamesAffected"> | undefined, goal?: GameGoal): string {
   if (!stat) return "No data for this period.";
@@ -279,11 +300,12 @@ export function frequencySentence(stat: Pick<PatternStat, "games" | "gamesAffect
   if (g <= 0) return "No games this period.";
   if (a <= 0) return g === 1 ? "Not once in your one game." : `Not once in your ${count(g)} games.`;
   if (a >= g) return g === 1 ? "In your one game." : `In all ${count(g)} of your games.`;
-  const phrase = gamesPhrase(a, g);
-  if (goal && !meetsGoal(stat, goal) && phraseCore(phrase) === phraseCore(goalPhrase(goal))) {
+  const stated = statedShare(a, g);
+  // stated ≤ goal  ⇔  num · goal.of ≤ goal.per · den
+  if (goal && !meetsGoal(stat, goal) && stated.num * goal.of <= goal.per * stated.den) {
     return `In ${count(a)} of your ${count(g)} games.`;
   }
-  return `In ${count(a)} of your ${count(g)} games, ${phrase}.`;
+  return `In ${count(a)} of your ${count(g)} games, ${stated.text}.`;
 }
 
 /**

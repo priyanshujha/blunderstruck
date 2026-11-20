@@ -20,11 +20,11 @@ export const patternName = (id: string): string => PATTERN_NAMES[id] ?? id;
  * Motif properties say "looked like", as they are read by rule of thumb.
  */
 export const BLIND_SPOT_LABELS: Record<string, string> = {
-  "answer-check": "Their reply gave check",
-  "answer-knight-check": "Their reply was a check from the knight that moved",
-  "answer-fork": "Their reply looked like a fork",
-  "answer-discovered": "Their reply looked like a discovered attack",
-  "moved-piece-lost": "The piece you had just moved was the one you lost",
+  "answer-check": "Their best reply gave check",
+  "answer-knight-check": "Their best reply was a check from the knight that moved",
+  "answer-fork": "Their best reply looked like a fork",
+  "answer-discovered": "Their best reply looked like a discovered attack",
+  "moved-piece-lost": "The piece you had just moved was taken",
   "moved-onto-attacked": "The piece you lost had just moved onto a square they already attacked",
   "moved-after-capture": "The piece you lost had just made a capture",
   "left-after-attack": "The piece you lost had not moved, and their last move attacked it",

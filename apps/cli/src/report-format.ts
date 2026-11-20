@@ -5,8 +5,9 @@ export interface ReportFormatOptions {
   /** Games of the period still waiting to be analysed. Defaults to `coverage.total - coverage.analysed`. */
   pending?: number;
   /**
-   * The precise figures: rates per 100 moves in place of the counts in games, the week-by-week
-   * table on a weekly report, all nine trends, the positions and the engine's own words.
+   * The precise figures as well: rates per 100 moves beside the counts in games (progress and
+   * retired items in rates only), the week-by-week table, all nine trends, the positions, the
+   * winning chances and the engine's own words.
    */
   all?: boolean;
 }
@@ -24,7 +25,7 @@ function exampleLines(ex: ExampleView, all: boolean): string[] {
   const out = [all ? `   - Position (FEN): ${ex.position}` : `   - ${ex.moveLabel}`];
   if (ex.story) {
     for (const l of ex.story) out.push(`     ${TAG_WORD[l.tag]}: ${l.text}`);
-    if (ex.cost) out.push(`     ${ex.cost.text}${all ? ` ${ex.cost.detail}` : ""}`);
+    if (ex.cost) out.push(`     ${ex.cost.text}${all && ex.cost.detail ? ` ${ex.cost.detail}` : ""}`);
     if (all) out.push(`     ${ex.line}`);
   } else {
     out.push(`     ${ex.line}`);
@@ -35,8 +36,9 @@ function exampleLines(ex: ExampleView, all: boolean): string[] {
 
 function focusLines(item: FocusView, all: boolean, v: ReportView): string[] {
   const out = [`${item.number}. ${item.title} [${item.patternName}]`, `   ${item.why}`];
+  // Items are judged in games, so the games and the goal print in both modes; `all` adds the rates.
+  out.push(`   ${item.frequency}`, `   ${item.goalLine} ${item.standing}`);
   if (all) out.push(`   ${item.figures}`);
-  else out.push(`   ${item.frequency}`, `   ${item.goalLine} ${item.standing}`);
   out.push(`   ${item.reason}`);
 
   if (item.blindSpots.length > 0) {
@@ -62,7 +64,7 @@ function focusLines(item: FocusView, all: boolean, v: ReportView): string[] {
 
 /**
  * The human-readable weekly report: focus items first, in games and words. `all` gives the
- * precise figures instead (rates per 100 moves) and the per-pattern detail.
+ * precise figures as well (rates per 100 moves) and the per-pattern detail.
  */
 export function formatReport(report: WeeklyReport, opts: ReportFormatOptions = {}): string {
   const all = opts.all ?? false;

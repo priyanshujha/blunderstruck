@@ -222,26 +222,51 @@ describe("plain-language numbers", () => {
     expect(frequencySentence({ games: 100, gamesAffected: 63 })).toBe("In 63 of your 100 games, about 6 in every 10 games.");
   });
 
-  it("never words an unmet goal the same as the current frequency", () => {
+  it("never states a share at or under an unmet goal", () => {
     const goals = [
       { per: 0, of: 1 },
       ...Array.from({ length: 19 }, (_, i) => ({ per: 1, of: i + 2 })),
       ...Array.from({ length: 9 }, (_, i) => ({ per: i + 1, of: 10 })),
     ];
-    const core = (p: string) => p.replace(/^(about|at most) /, "");
+    /** The share a phrase states, as a fraction. */
+    const stated = (sentence: string): [number, number] | undefined => {
+      const one = /about 1 game in (\d+)\./.exec(sentence);
+      if (one) return [1, Number(one[1])];
+      const tenths = /about (\d+) in every 10 games\./.exec(sentence);
+      if (tenths) return [Number(tenths[1]), 10];
+      if (sentence.includes("in almost every game")) return [19, 20];
+      return undefined;
+    };
     for (let g = 10; g <= 200; g++) {
-      for (let a = 0; a <= g; a++) {
+      for (let a = 1; a < g; a++) {
         const stat = { games: g, gamesAffected: a };
-        // A goal only ever drops words, so only sentences that hold the goal's words need a second look.
-        const plain = frequencySentence(stat);
+        // A goal can only drop the phrase, so only a phrase that would read as met needs the goal's sentence.
+        const plain = stated(frequencySentence(stat));
+        if (!plain) continue;
         for (const goal of goals) {
-          if (meetsGoal(stat, goal) || !plain.includes(core(goalPhrase(goal)))) continue;
+          if (meetsGoal(stat, goal) || plain[0] * goal.of > goal.per * plain[1]) continue;
           const sentence = frequencySentence(stat, goal);
-          if (sentence.includes(core(goalPhrase(goal)))) throw new Error(`${a}/${g} against ${goal.per}/${goal.of}: ${sentence}`);
+          if (stated(sentence)) throw new Error(`${a}/${g} against ${goal.per}/${goal.of}: ${sentence} (${goalPhrase(goal)})`);
         }
       }
     }
   });
+
+  it("gives one share one wording, in the frequency and the goal", () => {
+    // The three forms a value sweep found reading as met.
+    expect(frequencySentence({ games: 9, gamesAffected: 2 }, { per: 1, of: 5 })).toBe("In 2 of your 9 games.");
+    expect(gamesPhrase(2, 9)).toBe("about 1 game in 5");
+    expect(gamesPhrase(10, 19)).toBe("about 1 game in 2");
+    expect(frequencySentence({ games: 19, gamesAffected: 10 }, { per: 1, of: 2 })).toBe("In 10 of your 19 games.");
+    expect(goalPhrase({ per: 1, of: 10 })).toBe("at most 1 game in 10");
+    expect(goalPhrase({ per: 5, of: 10 })).toBe("at most 1 game in 2");
+    expect(goalPhrase({ per: 2, of: 10 })).toBe("at most 1 game in 5");
+    expect(gamesPhrase(21, 200)).toBe("about 1 game in 10");
+    expect(frequencySentence({ games: 200, gamesAffected: 21 }, { per: 1, of: 10 })).toBe("In 21 of your 200 games.");
+    // Met goals keep the phrase.
+    expect(frequencySentence({ games: 100, gamesAffected: 10 }, { per: 1, of: 10 })).toBe("In 10 of your 100 games, about 1 game in 10.");
+  });
+
 });
 
 const spot = (over: Partial<BlindSpot> = {}): BlindSpot => ({
@@ -305,12 +330,12 @@ describe("focus items in games and words", () => {
     expect(item?.standing).toBe("In these 162 games that means 40 or fewer; you are at 51.");
     expect(item?.blindSpotsIntro).toBe("Looking at all 62 times in your last 180 games:");
     expect(item?.blindSpots.map((b) => [b.sentence, b.refinement])).toEqual([
-      ["Their reply gave check: 23 of your 62, against about 1 in 8 of your mistakes overall.", "9 of them from the knight that moved."],
-      ["The piece you had just moved was the one you lost: 4 of your 62, against 3 of your 15 mistakes overall.", undefined],
+      ["Their best reply gave check: 23 of your 62, against about 1 in 8 of your mistakes overall.", "9 of them from the knight that moved."],
+      ["The piece you had just moved was taken: 4 of your 62, against 3 of your 15 mistakes overall.", undefined],
     ]);
     expect(item?.steps).toEqual([
-      { blindSpot: "answer-check", label: "Their reply gave check", text: "23 of your 62 came with check: list every check they have first." },
-      { blindSpot: "moved-piece-lost", label: "The piece you had just moved was the one you lost", text: "Ask what attacks the square your piece lands on." },
+      { blindSpot: "answer-check", label: "Their best reply gave check", text: "23 of your 62 came with check: list every check they have first." },
+      { blindSpot: "moved-piece-lost", label: "The piece you had just moved was taken", text: "Ask what attacks the square your piece lands on." },
     ]);
     const ex = item!.examples[0]!;
     expect(ex.moveLabel).toBe("Move 12, you had White");
@@ -328,11 +353,11 @@ describe("focus items in games and words", () => {
       const v = reportView(report({ focus: [focusItem({ blindSpots: [spot(o)], steps: [] })] }));
       return v.body.kind === "focus" ? v.body.items[0]!.blindSpots[0]!.sentence : "";
     };
-    expect(one({ baselineCount: 0, baselineOf: 40 })).toBe("Their reply gave check: 23 of your 62, against none of your mistakes overall.");
-    expect(one({ baselineCount: 0, baselineOf: 0 })).toBe("Their reply gave check: 23 of your 62.");
-    expect(one({ baselineCount: 120, baselineOf: 200 })).toBe("Their reply gave check: 23 of your 62, against about 6 in 10 of your mistakes overall.");
-    expect(one({ baselineCount: 1, baselineOf: 1 })).toBe("Their reply gave check: 23 of your 62, against all of your mistakes overall.");
-    expect(one({ baselineCount: 2, baselineOf: 7 })).toBe("Their reply gave check: 23 of your 62, against 2 of your 7 mistakes overall.");
+    expect(one({ baselineCount: 0, baselineOf: 40 })).toBe("Their best reply gave check: 23 of your 62, against none of your mistakes overall.");
+    expect(one({ baselineCount: 0, baselineOf: 0 })).toBe("Their best reply gave check: 23 of your 62.");
+    expect(one({ baselineCount: 120, baselineOf: 200 })).toBe("Their best reply gave check: 23 of your 62, against about 6 in 10 of your mistakes overall.");
+    expect(one({ baselineCount: 1, baselineOf: 1 })).toBe("Their best reply gave check: 23 of your 62, against all of your mistakes overall.");
+    expect(one({ baselineCount: 2, baselineOf: 7 })).toBe("Their best reply gave check: 23 of your 62, against 2 of your 7 mistakes overall.");
   });
 
   it("marks a step whose blind spot is missing and says so in the notes", () => {
