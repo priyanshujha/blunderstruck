@@ -39,6 +39,7 @@ function choice(patternId: string, kind: FocusChoice["reason"]["kind"] = "new", 
     baseline: stat(patternId),
     target: 0.9,
     since: "2026-11-19T00:00:00.000Z",
+    blindSpots: [],
     reason: {
       kind,
       previousRank: null,
@@ -447,7 +448,7 @@ describe("parseWording", () => {
     expect(errors[0]).toBe(
       'focus[0] (hung-piece).why, the sentence "It happened 12 times": Write this count with its token ({games}, {gamesAffected}, {occurrences}) or leave the number out.',
     );
-    expect(errorsOf(answer({ summary: "You hung a piece in 9 games." }))[0]).toMatch(/token \(\{games\}, \{mistakeRate\}, \{focusCount\}\)/);
+    expect(errorsOf(answer({ summary: "You hung a piece in 9 games." }))[0]).toMatch(/token \(\{games\}, \{mistakeRate\}, \{mistakesPerGame\}, \{focusCount\}\)/);
     for (const e of [...errors, ...errorsOf(answer({ focus: [{ drill: "Get it under 40%." }, {}] }))]) {
       expect(e).not.toMatch(/into the drill|study quantity/);
     }

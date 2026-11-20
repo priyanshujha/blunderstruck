@@ -37,6 +37,7 @@ function choice(patternId: string, n: number): FocusChoice {
     baseline: stat(patternId, n),
     target: ((n + 1) / 10) * 0.75,
     since: "2026-11-19T00:00:00.000Z",
+    blindSpots: [],
     reason: {
       kind: "new",
       previousRank: null,

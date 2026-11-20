@@ -258,6 +258,7 @@ export function chooseFocus(input: FocusInput): FocusDecision {
       since,
       reason: reasonFor(id, kind),
       examples: examplesFor(xs, analyses),
+      blindSpots: [],
     };
   };
 

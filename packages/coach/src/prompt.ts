@@ -61,6 +61,7 @@ const FOCUS_TOKEN_MEANING: Record<(typeof WORDING_FOCUS_TOKENS)[number], string>
 const SUMMARY_TOKEN_MEANING: Record<(typeof SUMMARY_TOKENS)[number], string> = {
   games: "games in this period",
   mistakeRate: "mistakes of any kind per hundred of the player's moves",
+  mistakesPerGame: "mistakes of any kind per game, with one decimal",
   focusCount: "number of focus items",
 };
 

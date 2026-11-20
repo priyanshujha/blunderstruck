@@ -100,7 +100,7 @@ function assemble(
 ): WeeklyReport {
   const focus: FocusItem[] = draft.focus.map((choice) => {
     const t = texts.get(choice.patternId)!;
-    return { ...choice, title: t.title, why: t.why, drill: t.drill };
+    return { ...choice, title: t.title, why: t.why, drill: t.drill, steps: [] };
   });
   return { ...draft, focus, summary, wording, notes };
 }

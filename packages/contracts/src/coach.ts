@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AnalyzedGame } from "./analysis";
 import { Color, GameRecord, Platform } from "./game";
+import { BlindSpot, BlindSpotWindow, ExampleStory, HabitStep, MAX_BLIND_SPOTS } from "./story";
 
 /**
  * Rating bands decide which advice is allowed: an 800 is never told to study rook endings
@@ -165,12 +166,18 @@ export const AnalysisSettings = z.object({
   analysisVersion: z.number().int(),
   patternsVersion: z.number().int(),
   engine: z.object({ name: z.string(), depth: z.number().int() }),
+  /** Depth of the deeper check of flagged moves; absent or 0 means no check. */
+  checkDepth: z.number().int().nonnegative().optional(),
 });
 export type AnalysisSettings = z.infer<typeof AnalysisSettings>;
 
-/** `"a<analysisVersion>.p<patternsVersion>.d<depth>.<engine name>"`. */
+/**
+ * `"a<analysisVersion>.p<patternsVersion>.d<depth>.<engine name>"`, then `".c<checkDepth>"` when
+ * the check depth is above 0, so keys of unchecked settings are unchanged.
+ */
 export function settingsKey(s: AnalysisSettings): string {
-  return `a${s.analysisVersion}.p${s.patternsVersion}.d${s.engine.depth}.${s.engine.name}`;
+  const base = `a${s.analysisVersion}.p${s.patternsVersion}.d${s.engine.depth}.${s.engine.name}`;
+  return s.checkDepth ? `${base}.c${s.checkDepth}` : base;
 }
 
 /** Weeks in a report's look-back window, including the current one. */
@@ -267,6 +274,8 @@ export const Coverage = z.object({
   complete: z.boolean(),
   /** The run stopped after the sample on request. */
   sampleOnly: z.boolean(),
+  /** Games whose flagged moves were checked deeper. */
+  checked: z.number().int().nonnegative().optional(),
 });
 export type Coverage = z.infer<typeof Coverage>;
 
@@ -298,7 +307,10 @@ export const FOCUS_TOKENS = [
 ] as const;
 
 /** Tokens a report's `summary` may use. */
-export const SUMMARY_TOKENS = ["games", "mistakeRate", "focusCount"] as const;
+export const SUMMARY_TOKENS = ["games", "mistakeRate", "mistakesPerGame", "focusCount"] as const;
+
+/** Tokens a habit step's `text` may use, filled from its blind spot. */
+export const BLIND_SPOT_TOKENS = ["count", "of", "games"] as const;
 
 /**
  * Replaces every `{token}` in `template`. Throws on any braced text that is not exactly a key
@@ -317,6 +329,51 @@ export function renderText(template: string, values: Record<string, string>): st
   return template.replace(token, (_, name: string) => values[name]!);
 }
 
+/** "At most `per` games in every `of`". */
+export const GameGoal = z.object({
+  per: z.number().int().nonnegative(),
+  of: z.number().int().positive(),
+});
+export type GameGoal = z.infer<typeof GameGoal>;
+
+/** Share of games affected (after the cut) from which a goal is stated in tenths of games. */
+export const GAMES_TENTHS_FROM = 0.45;
+/** `GAMES_TENTHS_FROM` as a fraction, for exact comparisons. */
+const TENTHS_FROM_NUM = 9;
+const TENTHS_FROM_DEN = 20;
+
+/**
+ * The goal for a pattern, from its baseline: a quarter fewer of the games affected. With
+ * s = gamesAffected / games and t = 0.75·s, the goal is `{per: floor(10t), of: 10}` when
+ * t ≥ `GAMES_TENTHS_FROM`; otherwise N = round(1/t), plus 1 when 1/N ≥ s, and the goal is
+ * `{per: 1, of: N}`. A baseline with no affected games gives `{per: 0, of: 1}`. Integer
+ * arithmetic throughout.
+ */
+export function gameGoalOf(baseline: Pick<PatternStat, "games" | "gamesAffected">): GameGoal {
+  const a = baseline.gamesAffected;
+  const g = baseline.games;
+  if (a <= 0 || g <= 0) return { per: 0, of: 1 };
+  // t = 3a / 4g.
+  if (3 * a * TENTHS_FROM_DEN >= 4 * g * TENTHS_FROM_NUM) {
+    // floor(10t) = floor(30a / 4g)
+    const num = 30 * a;
+    const den = 4 * g;
+    return { per: (num - (num % den)) / den, of: 10 };
+  }
+  // 1/t = 4g / 3a, rounded half up: floor((2·4g + 3a) / (2·3a)).
+  const num = 8 * g + 3 * a;
+  const den = 6 * a;
+  let n = (num - (num % den)) / den;
+  // 1/N ≥ a/g  ⇔  g ≥ N·a
+  if (g >= n * a) n += 1;
+  return { per: 1, of: n };
+}
+
+/** The stat is within the goal: `gamesAffected / games ≤ per / of`. */
+export function meetsGoal(stat: Pick<PatternStat, "games" | "gamesAffected">, goal: GameGoal): boolean {
+  return stat.gamesAffected * goal.of <= goal.per * stat.games;
+}
+
 /** A finding shown with its position, for the wording and the report pages. */
 export const FocusExample = PatternFinding.extend({
   /** FEN of the position before the player's move. */
@@ -325,6 +382,10 @@ export const FocusExample = PatternFinding.extend({
   played: z.string(),
   /** The engine's preferred move, in SAN. */
   best: z.string().optional(),
+  /** What happened, move by move, for the page's sentences and boards. */
+  story: ExampleStory.optional(),
+  /** Blind-spot property ids that hold for this occurrence. */
+  traits: z.array(z.string()).optional(),
 });
 export type FocusExample = z.infer<typeof FocusExample>;
 
@@ -346,11 +407,19 @@ export const FocusItem = z.object({
   reason: FocusReason,
   /** Largest losses first, separate games first. */
   examples: z.array(FocusExample).max(2),
+  /** What the pattern's occurrences have in common, strongest first. */
+  blindSpots: z.array(BlindSpot).max(MAX_BLIND_SPOTS).default([]),
+  /** The games `blindSpots` were computed over. */
+  blindSpotWindow: BlindSpotWindow.optional(),
+  /** One step per blind spot, in `blindSpots` order. */
+  steps: z.array(HabitStep).max(MAX_BLIND_SPOTS).default([]),
+  /** The goal in games; absent on items chosen before goals were stated in games (use `gameGoalOf(baseline)`). */
+  goal: GameGoal.optional(),
 });
 export type FocusItem = z.infer<typeof FocusItem>;
 
 /** A focus item as code chooses it, before any text is written. */
-export const FocusChoice = FocusItem.omit({ title: true, why: true, drill: true });
+export const FocusChoice = FocusItem.omit({ title: true, why: true, drill: true, steps: true });
 export type FocusChoice = z.infer<typeof FocusChoice>;
 
 export const WeeklyReport = z.object({
@@ -386,6 +455,8 @@ export const WeeklyReport = z.object({
   /** How the previous report's focus items moved in the games played since. */
   progress: z.array(PatternProgress),
   retired: z.array(RetiredFocus),
+  /** The games analysed when the period held more than the analysis cap. */
+  cappedGameIds: z.array(z.string()).optional(),
   /** Token template (`SUMMARY_TOKENS`). */
   summary: z.string(),
   wording: Wording,
@@ -403,6 +474,11 @@ const fixed2 = (n: number) => n.toFixed(2);
 const countFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0, useGrouping: true });
 /** Counts with en-US digit grouping ("1,500"), whatever the machine's locale. */
 const count = (n: number) => countFormat.format(n);
+const oneDecimalFormat = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+  useGrouping: true,
+});
 
 /** Token values for one focus item, from this period's numbers. Rates have two decimals. */
 export function focusTokenValues(
@@ -430,8 +506,25 @@ export function summaryTokenValues(report: {
   return {
     games: count(report.current.games),
     mistakeRate: fixed2(report.current.mistakesPer100Moves),
+    mistakesPerGame: oneDecimalFormat.format(mistakesPerGame(report.current)),
     focusCount: count(report.focus.length),
   };
+}
+
+/**
+ * Mistakes per game, from the period's rate: `round(mistakesPer100Moves · moves / 100)` recovers
+ * the exact count of mistakes. 0 for a period with no games.
+ */
+function mistakesPerGame(p: Pick<PeriodStats, "games" | "moves" | "mistakesPer100Moves">): number {
+  if (p.games <= 0) return 0;
+  return Math.round((p.mistakesPer100Moves * p.moves) / 100) / p.games;
+}
+
+/** Token values for a habit step, from its blind spot. */
+export function blindSpotTokenValues(
+  spot: Pick<BlindSpot, "count" | "of" | "games">,
+): Record<(typeof BLIND_SPOT_TOKENS)[number], string> {
+  return { count: count(spot.count), of: count(spot.of), games: count(spot.games) };
 }
 
 /** Line 1 of a store export. */

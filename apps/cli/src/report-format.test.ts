@@ -59,6 +59,8 @@ const focusItem = (patternId: string, over: Partial<FocusItem> = {}): FocusItem 
   why: "You left a piece hanging in {gamesAffected} of {games} games, {rate} per 100 moves.",
   drill: "Before each move, ask what the piece you just moved no longer protects.",
   exampleGameIds: ["g1", "g2"],
+  blindSpots: [],
+  steps: [],
   baseline: stat(patternId, 30, 1050, 3.0),
   target: 2.25,
   since: "2026-10-29T00:00:00.000Z",
