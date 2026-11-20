@@ -2,11 +2,15 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { Platform, ReportTimeClass } from "@blunderstruck/contracts";
+import { EnvFileError, loadEnv } from "./env";
 import { startServer } from "./server";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 4321;
-const USAGE = "usage: pnpm web <lichess|chesscom> <user> [--port 4321] [--db <path>] [--time-class <class>]";
+const USAGE =
+  "usage: pnpm web <lichess|chesscom> <user> [--port 4321] [--db <path>] [--time-class <class>] [--env <path>]\n" +
+  "  --env  read settings such as BLUNDERSTRUCK_DB from this file (default: ./.env when present);\n" +
+  "         variables already set in the environment win";
 
 /** `--db`, else `BLUNDERSTRUCK_DB`, else `~/.blunderstruck/blunderstruck.db`. */
 function dbPath(flag: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
@@ -21,8 +25,19 @@ async function main(): Promise<void> {
       port: { type: "string" },
       db: { type: "string" },
       "time-class": { type: "string" },
+      env: { type: "string" },
     },
   });
+  // Before the database path is resolved, so BLUNDERSTRUCK_DB in the file counts.
+  try {
+    loadEnv(values.env === undefined ? {} : { file: values.env });
+  } catch (err) {
+    if (err instanceof EnvFileError) {
+      console.error(err.message);
+      process.exit(2);
+    }
+    throw err;
+  }
   const [platformArg, user, ...rest] = positionals;
   const platform = Platform.safeParse(platformArg);
   if (!platform.success || !user || rest.length > 0) throw new Error(USAGE);
