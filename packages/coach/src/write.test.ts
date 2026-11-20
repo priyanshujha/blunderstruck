@@ -132,7 +132,7 @@ describe("writeReport", () => {
     expect(req.system).toBe(buildPrompt(d).system);
     expect(req.user).toBe(buildPrompt(d).user);
     expect(req.schema).toBe(WORDING_SCHEMA);
-    expect(req.choice).toMatchObject({ model: "test-model", effort: "medium", maxOutputTokens: 2000 });
+    expect(req.choice).toMatchObject({ model: "test-model", effort: "medium", maxOutputTokens: 4000 });
     expect(r.wording).toEqual({
       source: "model",
       provider: "anthropic",
@@ -153,7 +153,7 @@ describe("writeReport", () => {
     expect(p.requests).toHaveLength(2);
     expect(p.requests[1]!.system).toBe(p.requests[0]!.system);
     expect(p.requests[1]!.user).toContain(bad);
-    expect(p.requests[1]!.user).toContain("writes a number");
+    expect(p.requests[1]!.user).toContain("Write this count with its token");
     expect(r.wording).toMatchObject({ source: "model", calls: 2 });
     expect(r.focus[0]!.title).toBe("fixed title hung-piece");
   });

@@ -1,4 +1,4 @@
-import { FOCUS_TOKENS, type ReportDraft, SUMMARY_TOKENS } from "@blunderstruck/contracts";
+import { type ReportDraft, SUMMARY_TOKENS } from "@blunderstruck/contracts";
 
 /** The words of a report: a summary and, for each focus item, a title, why and drill (token templates). */
 export interface WordingText {
@@ -11,206 +11,250 @@ export type WordingResult = { ok: true; value: WordingText } | { ok: false; erro
 const LIMITS = { title: 60, why: 400, drill: 400, summary: 600 } as const;
 
 /**
- * Persistence ("{weeksRecurred} of your last {weeksCounted} weeks") means something only
- * over this many counted weeks; below it the weeks tokens are rejected for that item.
+ * Tokens a focus item's title, why and drill may use. The other focus tokens are left out
+ * because the report prints those lines itself, right under the wording.
  */
-const MIN_WEEKS_FOR_PERSISTENCE = 3;
-const FOCUS_TOKENS_WITHOUT_WEEKS: readonly string[] = FOCUS_TOKENS.filter(
-  (t) => t !== "weeksRecurred" && t !== "weeksCounted",
-);
+export const WORDING_FOCUS_TOKENS = ["games", "gamesAffected", "occurrences"] as const;
+
+/** Focus tokens the report prints on its own lines (weeks, rate, starting rate, target); refused in the wording so it does not repeat them. */
+export const PRINTED_TOKENS = ["rate", "baselineRate", "target", "weeksRecurred", "weeksCounted"] as const;
 
 /*
- * Numbers. The player's numbers reach the text only through tokens, which code fills in. So
- * any digit is rejected unless it sits inside one of the chess notations below, each of
- * which names a move, a square or a study quantity rather than a fact about the player's
- * record. They are removed in order, then any digit left (in any script) fails the check.
- * Counts spelled out in words are caught by the record-noun rules further down.
+ * The count rule. The player's own numbers reach the text only through tokens, which code
+ * fills in, because a number the model writes itself can be wrong. The check aims at what a
+ * model really does wrong (copying a value it was shown, or writing a statistic) and lets
+ * every other number through: positions, clock times, move numbers, study quantities and
+ * schedules.
  */
 
-/** Nouns that tally the player's record. Plural forms; "hundred moves" makes "two per hundred moves" a rate. */
-const RECORD_PLURAL =
-  "(?:games|times|weeks|mistakes|blunders|errors|outings|occasions|matches|pieces|positions|losses|percent|hundred[\\s-]+moves)";
-/** Singular forms, caught only right after a number word ("one game"). */
-const RECORD_SINGULAR = "(?:game|week|mistake|blunder|error|outing|occasion|match|piece|position|loss)";
-/** "within N words": words joined by spaces or hyphens, never across punctuation. */
-const words = (max: number) => `(?:[\\s-]+[\\w']+){0,${max}}?[\\s-]+`;
+/** Nouns that make a number a tally of the player's record: "9 games", "12 times". */
+export const RECORD_NOUNS: ReadonlySet<string> = new Set([
+  "game", "games", "time", "times", "occasion", "occasions", "loss", "losses", "win", "wins",
+  "week", "weeks", "outing", "outings", "match", "matches",
+]);
 
-/** A ratio written as numbers ("9/31"). Checked before anything is removed. */
-const BARE_RATIO = /\b\d+\s*\/\s*\d+/;
+/** After a record noun, these turn a count into a schedule ("3 games a day", "2 times per week"). */
+export const SCHEDULE_LEADS: ReadonlySet<string> = new Set(["a", "per", "each", "every"]);
+/** The periods a schedule runs over. */
+export const SCHEDULE_PERIODS: ReadonlySet<string> = new Set(["day", "week", "session", "sitting"]);
+/** Single words that make a schedule on their own: "3 games daily". */
+export const SCHEDULE_WORDS: ReadonlySet<string> = new Set(["daily", "weekly"]);
 
-/**
- * A move in SAN, with an optional move number: "Nf3", "Qxh7+", "exd5", "e8=Q#", "O-O-O",
- * "0-0", "1.e4", "1. e4", "20...Qxh2". A bare square ("e4", "f7") matches as a pawn move, and
- * may be followed by a hyphen ("a1-h8 diagonal", "f7-square", "e4-e5"). Safe: the digits are
- * ranks and move numbers of a position, not counts.
- */
-const SAN_MOVE =
-  /(?:\b\d{1,3}\.(?:\.\.)?\s*)?(?:\bO-O(?:-O)?|\b0-0(?:-0)?|\b[KQRBN][a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?|\b[a-h](?:x[a-h])?[1-8](?:=[QRBN])?)[+#]?(?!\w)/g;
+/** Words before a number that make it a move number ("by move 12 of the game"), not a count. */
+export const MOVE_WORDS: ReadonlySet<string> = new Set(["move", "moves"]);
 
-/** "the 7th rank", "2nd rank". Safe: a line of the board. */
-const RANK_ORDINAL = /\b[1-8](?:st|nd|rd|th)[\s-]+ranks?\b/gi;
+/** Number words, for shares written in words ("nine of thirty-one games"). */
+export const NUMBER_WORDS: ReadonlySet<string> = new Set([
+  "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+  "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
+  "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred", "dozen",
+]);
 
-/** "the 10th move". Safe: a point in a game. */
-const MOVE_ORDINAL = /\b\d{1,2}(?:st|nd|rd|th)[\s-]+moves?\b/gi;
+/** Number words that count the player's games in a record field (two to twenty, and a few round ones). */
+export const COUNT_WORDS: ReadonlySet<string> = new Set([
+  "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+  "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
+  "thirty", "forty", "fifty", "dozen",
+]);
 
-/** "move 12", "moves 10 to 15", "move 8-12". Safe: a point in a game, not how often something happened. */
-const MOVE_REFERENCE = /\bmoves?\s+\d{1,3}(?:\s*(?:to|-|–|and)\s*\d{1,3})?\b/gi;
+/** "once" and "twice" count only before these ("twice in your games"); "once you drop under 10 seconds" is a condition. */
+export const REPEAT_BEFORE: ReadonlySet<string> = new Set(["in", "per", "every"]);
 
-/** "the first 25 moves". Safe: the stretch of a game a drill looks at (up to 40). */
-const FIRST_MOVES = /\bfirst\s+(?:[1-9]|[1-3]\d|40)\s+moves\b/gi;
+/** Words skipped between a number and its noun or second number: "nine of your thirty-one games". */
+export const FILLERS: ReadonlySet<string> = new Set(["of", "your", "the", "my", "these", "last", "recent", "a", "an", "every", "each"]);
 
-/** "mate in 2", "mate-in-3". Safe: the length of a forced line. */
-const MATE_IN = /\bmate[\s-]+in[\s-]+\d\b/gi;
+/** Words that, beside a decimal, make it a rate ("1.2 per game", "a rate of 0.8"). */
+export const RATE_WORDS: ReadonlySet<string> = new Set(["per", "rate", "average"]);
 
-/**
- * A small whole number (up to 20, ordinal allowed) right before a study or look-ahead unit:
- * "2 moves deep", "2-move combination", "5 puzzles", "3 candidate moves", "the 3rd check".
- * Safe: it sizes a drill. Not after "every", "per" or "each", where it becomes a rate.
- */
-const STUDY_QUANTITY =
-  /(?<!\b(?:every|per|each)\s+)\b(?:[1-9]|1\d|20)(?:st|nd|rd|th)?[\s-]+(?:moves?|puzzles?|candidates?|candidate\s+moves?|plies|ply|combinations?|checks?|lines?|sets?)\b/gi;
-
-/** "all 3 before every move": the checks of a routine. Safe unless a record noun follows. */
-const ALL_N = new RegExp(`\\ball\\s+[1-9]\\b(?!${words(2)}${RECORD_PLURAL}\\b)`, "gi");
-
-/** "10-minute games", "5-second rule": a compound adjective for a time control or clock rule. Safe. */
-const CLOCK_ADJECTIVE = /\b(?:[1-9]|[1-5]\d|60)-(?:minute|second|min|sec)\b/gi;
-
-/**
- * Up to sixty minutes or seconds: "10 minutes a day", "keep 30 seconds". Safe: a drill's time
- * or a clock rule. Not as a rate ("every 30 seconds") and not tied to a record noun within
- * three words ("under 10 seconds in most games").
- */
-const CLOCK_QUANTITY = new RegExp(
-  `(?<!\\b(?:every|per|each)\\s+)\\b(?:[1-9]|[1-5]\\d|60)\\s+(?:minutes?|seconds?|mins?|secs?)\\b(?!${words(3)}${RECORD_PLURAL}\\b)`,
-  "gi",
-);
-
-/**
- * "2 rooks", "3 pawns". Safe: material on the board, up to eight. "pieces" is left out ("9
- * pieces" reads as a tally), and a sentence about the player's losses is rejected separately.
- */
-const PIECE_COUNT = /\b[1-8]\s+(?:pawns?|knights?|bishops?|rooks?|queens?)\b/gi;
-
-/** A time control: "3+2", "15+10". Safe: the kind of game, not a result. */
-const TIME_CONTROL = /\b\d{1,3}\+\d{1,2}\b/g;
-
-const PERMITTED = [
-  SAN_MOVE,
-  RANK_ORDINAL,
-  MOVE_ORDINAL,
-  MOVE_REFERENCE,
-  FIRST_MOVES,
-  MATE_IN,
-  STUDY_QUANTITY,
-  ALL_N,
-  CLOCK_ADJECTIVE,
-  CLOCK_QUANTITY,
-  PIECE_COUNT,
-  TIME_CONTROL,
+/** Fractions that, before "of the games", make a share of the record. */
+export const FRACTIONS: readonly (readonly string[])[] = [
+  ["half"], ["a", "third"], ["a", "quarter"], ["one", "third"], ["one", "quarter"], ["two", "thirds"], ["three", "quarters"],
 ];
+/** What a fraction must take a share of: "half of your losses". */
+export const SHARE_OF: ReadonlySet<string> = new Set(["your", "the", "these"]);
+export const SHARE_NOUNS: ReadonlySet<string> = new Set(["games", "losses", "wins"]);
 
-/** Numbers spelled out, which would slip past the digit check. "hundred" before "moves" is the unit of a rate. */
-const NUMBER_WORD =
-  "(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|twice|thrice|dozen|half|hundred(?![\\s-]+moves))";
+/** Words that put the player in a sentence, for the number-word rule. */
+export const SECOND_PERSON: ReadonlySet<string> = new Set(["you", "your", "you've", "you'd", "you're", "yourself"]);
 
-/** A number word within two words of a record noun: "twelve times", "one game", "nine of thirty-one games". */
-const WORDED_NEAR = new RegExp(`\\b${NUMBER_WORD}\\b${words(2)}(?:${RECORD_PLURAL}|${RECORD_SINGULAR})\\b`, "i");
-/** A number word within five words of a plural record noun: "nine of your recent rated games". */
-const WORDED_FAR = new RegExp(`\\b${NUMBER_WORD}\\b${words(5)}${RECORD_PLURAL}\\b`, "i");
-/** A decimal in words: "two point one", "two-point-one". */
-const WORDED_DECIMAL = new RegExp(`\\b${NUMBER_WORD}[\\s-]+point[\\s-]+${NUMBER_WORD}\\b`, "i");
+const DIGIT = /\p{Nd}/u;
+const LETTER = /\p{L}/u;
+/** A move in SAN at a position, to tell a move number ("1. e4") from the end of a sentence. */
+const SAN_AT = /(?:O-O|0-0|[KQRBN][a-h]?[1-8]?x?[a-h][1-8]|[a-h](?:x[a-h])?[1-8])(?!\w)/y;
 
-/** Verbs that make a piece count a tally of what the player gave away. */
-const LOSS_VERB = /\b(?:hung|hang|hangs|hanging|lost|lose|loses|losing|blundered|dropped|drop|drops|gave\s+away|give\s+away|threw\s+away)\b/i;
-/** A number, in digits or words, before a piece noun: "3 queens", "two minor pieces". */
-const PIECE_TALLY = new RegExp(
-  `\\b(?:\\d+|${NUMBER_WORD})${words(1)}(?:pawns?|knights?|bishops?|rooks?|queens?|pieces?)\\b`,
-  "i",
-);
-
-/** The first count found in `text`, or undefined. Tokens must already be removed. */
-function findCount(text: string): { kind: "digits" | "words"; match: string } | undefined {
-  const ratio = BARE_RATIO.exec(text);
-  if (ratio) return { kind: "digits", match: ratio[0] };
-  for (const sentence of text.split(/[.!?;:]+(?:\s+|$)/)) {
-    const tally = LOSS_VERB.test(sentence) ? PIECE_TALLY.exec(sentence) : null;
-    if (tally) return { kind: /\d/.test(tally[0]) ? "digits" : "words", match: tally[0] };
+/**
+ * The sentences of a field, split on ".", "!", "?", ";" and line breaks. A dot inside a
+ * decimal ("1.5") or after a move number ("1.e4", "1. e4", "20...Qxh2") does not end one.
+ */
+export function sentences(text: string): string[] {
+  const out: string[] = [];
+  let start = 0;
+  const cut = (end: number, next: number) => {
+    const s = text.slice(start, end).trim();
+    if (s) out.push(s);
+    start = next;
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === "!" || ch === "?" || ch === ";" || ch === "\n" || ch === "\r") {
+      cut(i, i + 1);
+      continue;
+    }
+    if (ch !== ".") continue;
+    let j = i;
+    while (j < text.length && text[j] === ".") j++;
+    if (DIGIT.test(text[i - 1] ?? "")) {
+      if (j === i + 1 && DIGIT.test(text[j] ?? "")) continue; // a decimal
+      let d = i - 1;
+      while (d > 0 && DIGIT.test(text[d - 1]!)) d--;
+      const standalone = d === 0 || !LETTER.test(text[d - 1]!);
+      SAN_AT.lastIndex = text[j] === " " ? j + 1 : j;
+      if (standalone && SAN_AT.test(text)) {
+        i = j - 1; // a move number: keep the dots with the move
+        continue;
+      }
+    }
+    cut(i, j);
+    i = j - 1;
   }
-  let rest = text;
-  for (const re of PERMITTED) rest = rest.replace(re, " ");
-  const digit = /\S*\p{Nd}\S*(?:\s+\S+)?/u.exec(rest);
-  if (digit) return { kind: "digits", match: digit[0] };
-  const worded = WORDED_DECIMAL.exec(text) ?? WORDED_NEAR.exec(text) ?? WORDED_FAR.exec(text);
-  if (worded) return { kind: "words", match: worded[0] };
+  cut(text.length, text.length);
+  return out;
+}
+
+/**
+ * Lower-cased words of a sentence, tokens blanked to "token". "3+2", "1.5", "1,500", "9/31",
+ * "twenty-one" and "you've" stay one word each.
+ */
+function wordsOf(sentence: string): string[] {
+  const text = sentence.replace(/\{[^{}]*\}/g, " token ").replace(/’/g, "'");
+  return Array.from(text.matchAll(/[\p{L}\p{N}\p{M}]+(?:[-+.,/'][\p{L}\p{N}\p{M}]+)*|[%％]/gu), (m) => m[0].toLowerCase());
+}
+
+/** A digit in any script as its ASCII digit: digit blocks run 0 to 9 from their first code point. */
+function asciiDigits(w: string): string {
+  return w.replace(/\p{Nd}/gu, (d) => {
+    let n = 0;
+    for (let cp = d.codePointAt(0)! - 1; DIGIT.test(String.fromCodePoint(cp)); cp--) n++;
+    return String(n % 10);
+  });
+}
+
+/** The value of a word written in digits ("12", "1,500", "1.5", "٩"), or undefined. */
+function digitValue(word: string): number | undefined {
+  const w = asciiDigits(word);
+  if (/^\d{1,3}(?:,\d{3})+$/.test(w)) return Number(w.replace(/,/g, ""));
+  if (/^\d+(?:\.\d+)?$/.test(w)) return Number(w);
   return undefined;
 }
 
-/*
- * Extra rules for the record fields (summary, title, why), which describe what the player did.
- */
+const isDecimal = (w: string) => /^\d+[.,]\d+$/.test(w) && !/^\d{1,3}(?:,\d{3})+$/.test(w);
+/** "nine", "thirty-one", "two-point-one". */
+const isNumberWord = (w: string) => w.split("-").every((p) => NUMBER_WORDS.has(p) || p === "point") && w !== "point";
+const isNumber = (w: string) => digitValue(w) !== undefined || isNumberWord(w);
 
-/** Number words other than "one". */
-const NUMBER_WORD_NOT_ONE =
-  "(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|twice|thrice|dozen|half|hundred)";
-/** Nouns a number word may size in a record field: material, moves and squares are chess, not statistics. */
-const BOARD_NOUN = "(?:pawns?|knights?|bishops?|rooks?|queens?|kings?|minor\\s+pieces|moves?|squares?|ranks?|files?|plies)";
-/**
- * Any number word but "one", unless right before a board noun: "went from three to two",
- * "below two", "nine such moments" are rates or tallies; "two rooks", "three moves deep" are chess.
- * "hundred moves" is the unit of a rate and passes as a board noun.
- */
-const RECORD_NUMBER_WORD = new RegExp(`\\b${NUMBER_WORD_NOT_ONE}\\b(?![\\s-]+${BOARD_NOUN}\\b)`, "i");
-/** A fraction of the record: "a third of your games", "a quarter of your games", "half the games". */
-const FRACTION_OF_RECORD = new RegExp(
-  `\\b(?:half|thirds?|quarters?|fifths?)\\b${words(3)}(?:${RECORD_PLURAL}|${RECORD_SINGULAR})\\b`,
-  "i",
-);
-
-/** Counts in a record field, after the shared checks. Tokens must already be removed. */
-function findRecordCount(text: string): { kind: "digits" | "words"; match: string } | undefined {
-  const shared = findCount(text);
-  if (shared) return shared;
-  const m = FRACTION_OF_RECORD.exec(text) ?? RECORD_NUMBER_WORD.exec(text);
-  return m ? { kind: "words", match: m[0] } : undefined;
+/** Whether a record noun is among the `n` words after `i`. */
+function nounWithin(ws: readonly string[], i: number, n: number): number {
+  for (let j = i + 1; j <= i + n && j < ws.length; j++) if (RECORD_NOUNS.has(ws[j]!)) return j;
+  return -1;
 }
 
-/*
- * The drill is advice about what to do next, so numbers there are study quantities ("three
- * times a week", "one game a day", "5 puzzles") and pass freely. Only the forms that state a
- * statistic about the player are rejected.
- */
-
-/** Any number, in digits or words ("one" included). */
-const ANY_NUMBER = `(?:\\d+|one|${NUMBER_WORD_NOT_ONE})`;
-const DRILL_STATISTICS: readonly RegExp[] = [
-  /** A percentage. */
-  /%|\bper\s*cent\b|\bpercent\b/i,
-  /** A ratio ("9/31"). */
-  BARE_RATIO,
-  /** A rate: "per hundred", "per 100", "in every hundred moves". */
-  /\b(?:per|every|each)\s+(?:hundred|100)\b/i,
-  /** A decimal: "4.25", "1,5". Move numbers ("1.e4") have no digit after the dot. */
-  /\b\d+[.,]\d+\b/,
-  /** A decimal in words. */
-  WORDED_DECIMAL,
-  /** "N of M games", "N out of M games", "N in M games", "twice in a dozen outings". */
-  new RegExp(`\\b${ANY_NUMBER}\\s+(?:out\\s+of|of|in)\\s+(?:(?:your|the|my|last|recent|a)\\s+)*${ANY_NUMBER}\\b${words(2)}${RECORD_PLURAL}\\b`, "i"),
-  /** "nine of your recent rated games": a count above one taken from the player's own games. */
-  new RegExp(`\\b(?:\\d+|${NUMBER_WORD_NOT_ONE})\\s+of\\s+your\\b${words(3)}${RECORD_PLURAL}\\b`, "i"),
-  /** A count tied to what the player did: "you hung 3 queens", "made 4 mistakes", "lost two rooks". */
-  new RegExp(`\\b(?:hung|lost|blundered|missed|dropped|made|gave\\s+away|threw\\s+away)\\s+(?:[\\w']+\\s+)?${ANY_NUMBER}\\b`, "i"),
-  /** A digit outside ASCII, which would not read as notation. */
-  /[^\P{Nd}0-9]/u,
-];
-
-/** The first statistic found in a drill, or undefined. Tokens must already be removed. */
-function findDrillStatistic(text: string): string | undefined {
-  for (const re of DRILL_STATISTICS) {
-    const m = re.exec(text);
-    if (m) return m[0];
+/** Whether a record noun is among the next `n` words after `i`, not counting fillers. */
+function nounAfterFillers(ws: readonly string[], i: number, n: number): boolean {
+  let seen = 0;
+  for (let j = i + 1; j < ws.length && seen < n; j++) {
+    if (FILLERS.has(ws[j]!)) continue;
+    if (RECORD_NOUNS.has(ws[j]!)) return true;
+    seen++;
   }
-  return undefined;
+  return false;
+}
+
+/** Whether the words after a record noun at `k` make it a schedule: "a day", "per session", "daily". */
+function isSchedule(ws: readonly string[], k: number): boolean {
+  const next = ws[k + 1] ?? "";
+  return SCHEDULE_WORDS.has(next) || (SCHEDULE_LEADS.has(next) && SCHEDULE_PERIODS.has(ws[k + 2] ?? ""));
+}
+
+/** Rule A: a value the model was shown, copied in digits before a record noun ("in 9 games"), unless it is a schedule. */
+export function copiesShownValue(ws: readonly string[], shown: ReadonlySet<number>): boolean {
+  return ws.some((w, i) => {
+    const v = digitValue(w);
+    if (v === undefined || !shown.has(v) || MOVE_WORDS.has(ws[i - 1] ?? "")) return false;
+    const k = nounWithin(ws, i, 3);
+    return k >= 0 && !isSchedule(ws, k);
+  });
+}
+
+/** Rule B: a statistic, whatever its numbers: a percentage, a rate per hundred, a share of games, a decimal rate. */
+export function isStatistic(ws: readonly string[]): boolean {
+  for (let i = 0; i < ws.length; i++) {
+    const w = ws[i]!;
+    if (w === "%" || w === "％" || w === "percent" || w === "percentage" || (w === "per" && ws[i + 1] === "cent")) return true;
+    // "two per hundred moves"; with a token ("{mistakeRate} mistakes per hundred moves") it is the intended form.
+    if (w === "per" && (ws[i + 1] === "hundred" || ws[i + 1] === "100") && ws.slice(Math.max(0, i - 3), i).some(isNumber)) return true;
+    if (/^\d+\/\d+$/.test(w) && nounAfterFillers(ws, i, 3)) return true;
+    if (isNumber(w)) {
+      let j = i + 1;
+      if (ws[j] === "out" && ws[j + 1] === "of") j += 2;
+      else if (ws[j] === "of" || ws[j] === "in") j += 1;
+      else j = -1;
+      if (j > 0) {
+        while (j < ws.length && FILLERS.has(ws[j]!)) j++;
+        if (j < ws.length && isNumber(ws[j]!) && nounAfterFillers(ws, j, 3)) return true;
+      }
+    }
+    if (isDecimal(w)) {
+      const before = ws[i - 1] === "of" ? ws[i - 2] : ws[i - 1];
+      if (RATE_WORDS.has(ws[i + 1] ?? "") || RATE_WORDS.has(before ?? "")) return true;
+    }
+    for (const f of FRACTIONS) {
+      if (f.every((p, n) => ws[i + n] === p)) {
+        const at = i + f.length;
+        if (ws[at] === "of" && SHARE_OF.has(ws[at + 1] ?? "") && SHARE_NOUNS.has(ws[at + 2] ?? "")) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Rule C, record fields only: a count in words before a record noun in a sentence about the player ("you hung a piece in nine games"). */
+export function countsInWords(ws: readonly string[]): boolean {
+  if (!ws.some((w) => SECOND_PERSON.has(w))) return false;
+  return ws.some((w, i) => {
+    // "at once" means at the same time, not one time.
+    const repeat = (w === "once" && ws[i - 1] !== "at") || w === "twice";
+    const counts = COUNT_WORDS.has(w) || (repeat && REPEAT_BEFORE.has(ws[i + 1] ?? ""));
+    return counts && nounAfterFillers(ws, i, 3);
+  });
+}
+
+/** What a field is checked against: the values the model was shown, and whether it describes the record (summary, title, why). */
+export interface CountContext {
+  shown: ReadonlySet<number>;
+  record: boolean;
+}
+
+/** Whether one sentence states a count about the player's games. */
+export function statesCount(sentence: string, ctx: CountContext): boolean {
+  const ws = wordsOf(sentence);
+  return copiesShownValue(ws, ctx.shown) || isStatistic(ws) || (ctx.record && countsInWords(ws));
+}
+
+/** The sentences of `text` that state a count about the player's games. */
+export function countSentences(text: string, ctx: CountContext): string[] {
+  return sentences(text).filter((s) => statesCount(s, ctx));
+}
+
+/** The record values the model was shown for this draft: games, and each focus item's games affected and occurrences. */
+export function shownValues(draft: ReportDraft): Set<number> {
+  const values = new Set<number>([draft.current.games]);
+  for (const f of draft.focus) {
+    const stat = draft.current.stats.find((s) => s.patternId === f.patternId);
+    values.add(stat?.games ?? draft.current.games);
+    values.add(stat?.gamesAffected ?? 0);
+    values.add(stat?.occurrences ?? 0);
+  }
+  return values;
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -257,47 +301,37 @@ function unfence(text: string): string {
   return m ? m[1]! : text;
 }
 
-type FieldKind = "record" | "drill";
+const quote = (s: string) => (s.length > 120 ? `${s.slice(0, 117)}...` : s);
 
-/**
- * Errors for one field's text: length, tokens and counts. A record field (summary, title, why)
- * may hold no counts at all; a drill may size practice but not state a statistic.
- */
-function checkField(where: string, text: string, max: number, allowed: readonly string[], kind: FieldKind): string[] {
+/** Errors for one field's text: length, tokens and sentences that state a count. */
+function checkField(where: string, text: string, max: number, allowed: readonly string[], ctx: CountContext): string[] {
   const errors: string[] = [];
   const tooLong = text.length > max;
   if (tooLong) errors.push(`${where} is ${text.length} characters; the limit is ${max}`);
+  const list = allowed.map((t) => `{${t}}`).join(", ");
   for (const m of text.matchAll(/\{([^{}]*)\}/g)) {
-    if (!allowed.includes(m[1]!)) {
-      errors.push(`${where} uses {${m[1]}}, which is not an allowed token (allowed: ${allowed.map((t) => `{${t}}`).join(", ")})`);
+    const name = m[1]!;
+    if (allowed.includes(name)) continue;
+    if ((PRINTED_TOKENS as readonly string[]).includes(name) && where !== "summary") {
+      errors.push(
+        `${where} uses {${name}}; the report prints the weeks, rate, starting rate and target lines itself, right under the wording, so leave it out (allowed: ${list})`,
+      );
+    } else {
+      errors.push(`${where} uses {${name}}, which is not an allowed token (allowed: ${list})`);
     }
   }
-  const rest = text.replace(/\{[^{}]*\}/g, "");
-  if (/[{}]/.test(rest)) errors.push(`${where} has an unmatched brace; braces are only for tokens`);
+  if (/[{}]/.test(text.replace(/\{[^{}]*\}/g, ""))) errors.push(`${where} has an unmatched brace; braces are only for tokens`);
   // An over-long field is already rejected; scanning it for counts would only cost time.
   if (tooLong) return errors;
-  if (kind === "drill") {
-    const stat = findDrillStatistic(rest);
-    if (stat) {
-      errors.push(
-        `${where} states a statistic ("${stat}"); a drill may size practice ("three times a week", "5 puzzles") but must not report results, so drop it`,
-      );
-    }
-    return errors;
-  }
-  const count = findRecordCount(rest);
-  if (count) {
-    const how = count.kind === "digits" ? "writes a number" : "writes a count in words";
-    errors.push(
-      `${where} ${how} ("${count.match}"); this field describes the player's record, which the report prints itself, so drop the count, or move it into the drill as a study quantity`,
-    );
+  for (const s of countSentences(text, ctx)) {
+    errors.push(`${where}, the sentence "${quote(s)}": Write this count with its token (${list}) or leave the number out.`);
   }
   return errors;
 }
 
 /**
  * Parse and check the model's text against the schema and the draft: pattern ids, lengths,
- * allowed tokens and no bare counts. `only` limits the expected ids.
+ * allowed tokens and no counts written by the model. `only` limits the expected ids.
  */
 export function parseWording(text: string, draft: ReportDraft, only?: string[]): WordingResult {
   let json: unknown;
@@ -318,16 +352,12 @@ export function parseWording(text: string, draft: ReportDraft, only?: string[]):
       `focus must hold exactly these patternIds in this order: [${expected.join(", ")}]; got [${got.join(", ")}]`,
     );
   }
-  errors.push(...checkField("summary", value.summary, LIMITS.summary, SUMMARY_TOKENS, "record"));
+  const shown = shownValues(draft);
+  errors.push(...checkField("summary", value.summary, LIMITS.summary, SUMMARY_TOKENS, { shown, record: true }));
   value.focus.forEach((f, i) => {
     const at = `focus[${i}] (${f.patternId})`;
-    const weeksCounted = draft.focus.find((c) => c.patternId === f.patternId)?.reason.weeksCounted ?? 0;
-    const allowed = weeksCounted >= MIN_WEEKS_FOR_PERSISTENCE ? FOCUS_TOKENS : FOCUS_TOKENS_WITHOUT_WEEKS;
     for (const [field, text] of [["title", f.title], ["why", f.why], ["drill", f.drill]] as const) {
-      errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], allowed, field === "drill" ? "drill" : "record"));
-      if (allowed !== FOCUS_TOKENS && /\{weeks(?:Recurred|Counted)\}/.test(text)) {
-        errors.push(`${at}.${field} cites weeks, but too few weeks were counted for this item; leave persistence out`);
-      }
+      errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], WORDING_FOCUS_TOKENS, { shown, record: field !== "drill" }));
     }
   });
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value };

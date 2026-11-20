@@ -1,6 +1,5 @@
 import {
   BAND_RUBRIC,
-  FOCUS_TOKENS,
   focusTokenValues,
   PATTERN_IDS,
   type PatternId,
@@ -9,6 +8,7 @@ import {
   SUMMARY_TOKENS,
   summaryTokenValues,
 } from "@blunderstruck/contracts";
+import { WORDING_FOCUS_TOKENS } from "./validate";
 
 /** The shape of the model's answer. No `maxItems`, `minimum`, `maxLength` or `oneOf`: limits are checked after parsing. */
 export const WORDING_SCHEMA: object = {
@@ -52,15 +52,10 @@ const GLOSSARY: Record<PatternId, string> = {
     "the same early position (by move twelve) went wrong for the player, with the same colour, in two or more different games.",
 };
 
-const FOCUS_TOKEN_MEANING: Record<(typeof FOCUS_TOKENS)[number], string> = {
+const FOCUS_TOKEN_MEANING: Record<(typeof WORDING_FOCUS_TOKENS)[number], string> = {
   games: "games in this period",
   gamesAffected: "games in this period with at least one of this mistake",
   occurrences: "times this mistake happened in this period",
-  rate: "times per hundred of the player's moves, this period",
-  baselineRate: "times per hundred moves when this item was first chosen",
-  target: "times per hundred moves to get down to",
-  weeksRecurred: "recent weeks in which it came back",
-  weeksCounted: "recent weeks with enough games to judge",
 };
 
 const SUMMARY_TOKEN_MEANING: Record<(typeof SUMMARY_TOKENS)[number], string> = {
@@ -86,7 +81,7 @@ const EXAMPLE = {
       title: "Forks that went unplayed",
       why: "You had a winning tactic and played something quieter in {gamesAffected} of your {games} games. In the second example Nd5 forked queen and rook; the move played let both escape.",
       drill:
-        "Look at every check, capture and threat before choosing a move, even when the position feels calm. Solve one themed set of fork puzzles a day.",
+        "Look at every check, capture and threat before choosing a move, even when the position feels calm. Solve 10 fork puzzles a day, each one two moves deep.",
     },
   ],
 };
@@ -112,8 +107,8 @@ const SYSTEM = [
   "- Each focus item comes with why code chose it: kind \"new\" (chosen for the first time), \"kept\" (still on the list from earlier reports), \"rose\" (it climbed into the top picks), \"returned\" (worked on before, now back). Score, recentCost and severity are win-percentage points; chronicity is how steadily it came back. Use these to choose what to stress, never to quote.",
   "- Example positions are given as FEN with the move played, the engine's best move and a short fact. You may refer to squares, pieces and moves from them (\"the knight on f6\", \"Nd5 was a fork\"). Do not invent positions, moves or facts that are not given.",
   "- Earlier focus items may come with a verdict: \"improved\", \"flat\" (no clear change), \"worse\" or \"insufficient-data\" (not enough games yet). Mention an improvement warmly in the summary. Do not call \"flat\" or \"insufficient-data\" a failure.",
-  "- Directly under your text, the program prints for each focus item a line with how many recent weeks it came back in (only when at least three weeks were counted), and a line with its current rate, its starting rate and its target. Do not restate them: the why says what happened and why it matters, and the drill says what to do; neither gives a weeks count, a rate or a target.",
-  "- Read gamesAffected in an item's token values before writing its why. When it is 0 (a kept item that stayed away this period), say it stayed away and to keep the habit going; never write \"{gamesAffected} of\" or \"0 of\" for it. When it is 1, write the singular (\"in a single game\"); when it equals games, say \"in each of your {games} games\".",
+  "- Directly under your text, the program prints for each focus item a line with how many recent weeks it came back in (only when at least three weeks were counted), and a line with its current rate, its starting rate and its target. Do not restate them: the why says what happened and why it matters, and the drill says what to do.",
+  "- Read gamesAffected in an item's token values before writing its why. When it is 1, write the singular (\"in a single game\"); when it equals games, say \"in each of your {games} games\".",
   "- You may mention persistence in words, without numbers (\"this one keeps coming back\"), only when the item's reason has weeksCounted of three or more and weeksRecurred is more than half of weeksCounted. Otherwise say nothing about how often it recurred.",
   "- Size each drill to the player's band using the rubric below. One drill per item: a habit or a short daily routine the player can actually do this week.",
   "",
@@ -126,18 +121,17 @@ const SYSTEM = [
   bandLines(),
   "",
   "# Numbers are written as tokens",
-  "Never write the player's numbers yourself. Write a token in braces and code fills in the number. A wrong number in a report is worse than no number, so any digit that counts games, moves, weeks, times or percentages makes the answer invalid.",
+  "Never write the player's numbers yourself. Write a token in braces and code fills in the number, because a wrong number in a report is worse than no number.",
+  "How many games, times or weeks something happened to the player is written only with its token, never as a number of your own, in digits or in words. No percentages, fractions of their games or rates, in any field. Numbers that describe a position, a clock or what to practise are fine as they are: \"Nd5 forked two pieces\", \"with 1 second left\", \"solve 15 puzzles a day\", \"play 3+2 games this week\". The report prints the weeks, rate and target lines itself, so leave those out entirely. When an item's gamesAffected is 0 (a kept item that stayed away this period), say it stayed away and to keep the habit going; never write \"{gamesAffected} of\" or \"0 of\" for it.",
   "Tokens allowed in a focus item's title, why and drill:",
-  ...FOCUS_TOKENS.map((t) => `- {${t}}: ${FOCUS_TOKEN_MEANING[t]}`),
+  ...WORDING_FOCUS_TOKENS.map((t) => `- {${t}}: ${FOCUS_TOKEN_MEANING[t]}`),
   "Tokens allowed in the summary:",
   ...SUMMARY_TOKENS.map((t) => `- {${t}}: ${SUMMARY_TOKEN_MEANING[t]}`),
   "Rules:",
   "- Use only the tokens listed for that field, spelled exactly, in single braces. No other braces anywhere.",
-  "- Good: \"in {gamesAffected} of your {games} games\".",
-  "- {weeksRecurred} and {weeksCounted} are invalid for an item whose reason has weeksCounted below three.",
-  "- Bad: \"in 9 of 31 games\", \"9/31\", \"40%\", \"3 times\", \"per 100 moves\", \"in nine of your games\", \"twelve times\". Write \"per hundred moves\" in words.",
+  "- Good: \"in {gamesAffected} of your {games} games\", \"you hung a piece {occurrences} times\".",
+  "- Bad: \"in 9 of 31 games\", \"9/31 games\", \"40%\", \"you hung a piece in nine games\", \"half of your games\", \"2 per 100 moves\". Write \"per hundred moves\" in words.",
   "- Do not write how many items there are (\"two habits\", \"both\"); use {focusCount} in the summary if you need the number.",
-  "- The summary, title and why describe the player's record, so they hold no counts at all: no digits outside chess notation (e4, Nf3, Qxh7+, O-O, 1.e4, move 12, mate in 2) and no number words other than \"one\", except right before a piece, pawn, move or square (\"two rooks\", \"three moves deep\"). The drill is advice, so study quantities are fine there (\"three times a week\", \"one game a day\", \"5 puzzles\"), but never a statistic: no percentages, no \"N of M games\", no \"per hundred\", no decimals and no count of what the player hung, lost or missed.",
   "- {mistakeRate} is a decimal per hundred moves: write \"{mistakeRate} mistakes per hundred moves\", never \"{mistakeRate}%\".",
   "",
   "# Output",
@@ -157,6 +151,12 @@ const SYSTEM = [
 ].join("\n");
 
 const round = (n: number, d = 2) => Math.round(n * 10 ** d) / 10 ** d;
+
+/** The values of the tokens the wording may use; the printed lines' values are left out. */
+function wordingTokenValues(f: ReportDraft["focus"][number], draft: ReportDraft): Record<string, string> {
+  const all = focusTokenValues(f, draft);
+  return Object.fromEntries(WORDING_FOCUS_TOKENS.map((t) => [t, all[t]]));
+}
 
 /**
  * The system prefix (the same for every player) and the user part (this player's numbers).
@@ -185,7 +185,7 @@ export function buildPrompt(draft: ReportDraft, only?: string[]): { system: stri
       baselinePer100Moves: round(f.baseline.per100Moves),
       target: round(f.target),
       onListSince: f.since,
-      tokens: focusTokenValues(f, draft),
+      tokens: wordingTokenValues(f, draft),
       examples: f.examples.map((e) => ({
         fen: e.fen,
         played: e.played,

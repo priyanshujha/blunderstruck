@@ -12,7 +12,7 @@ import {
 } from "@blunderstruck/contracts";
 import { describe, expect, it } from "vitest";
 import { templateWording } from "./templates";
-import { parseWording } from "./validate";
+import { countSentences, parseWording, sentences } from "./validate";
 
 const SETTINGS = { analysisVersion: 1, patternsVersion: 1, engine: { name: "stockfish", depth: 12 } };
 
@@ -89,7 +89,7 @@ const TWO = draft([choice("hung-piece"), choice("missed-tactic")]);
 function answer(over: { summary?: string; focus?: Partial<{ patternId: string; title: string; why: string; drill: string }>[] } = {}) {
   const base = [
     { patternId: "hung-piece", title: "Pieces left out", why: "In {gamesAffected} of your {games} games.", drill: "Check e4 and Nf3." },
-    { patternId: "missed-tactic", title: "Missed shots", why: "{rate} times per hundred moves.", drill: "Puzzles daily." },
+    { patternId: "missed-tactic", title: "Missed shots", why: "You missed a fork {occurrences} times.", drill: "Puzzles daily." },
   ];
   const focus = over.focus ? over.focus.map((f, i) => ({ ...base[i % 2]!, ...f })) : base;
   return JSON.stringify({ summary: over.summary ?? "Over {games} games, {mistakeRate} mistakes per hundred moves.", focus });
@@ -117,70 +117,71 @@ describe("parseWording", () => {
   });
 
   /**
-   * Every sentence, checked as a record field (why) and as a drill. Record fields describe
-   * what the player did and hold no counts; a drill may size practice but not state a statistic.
+   * Every sentence, checked against a draft that shows 31 games, 9 games affected and 12
+   * occurrences. Each row is checked as a why (and a title when it fits, and the summary when it
+   * holds no tokens), which are record fields, and as a drill, where counts in words are free.
    */
   const R = true;
   const X = false;
   it.each([
-    // [sentence, passes in why, passes in drill]
+    // [sentence, passes in summary, title and why, passes in drill]
     ["You hung a piece in 9 of 31 games.", X, X],
-    ["That was 9/31.", X, X],
+    ["That was 9/31.", R, R],
     ["It cost 40% of the time.", X, X],
     ["It cost 12 percent.", X, X],
-    ["It happened 3 times.", X, R],
-    ["For 2 weeks running.", X, R],
-    ["In 12 games out of the lot.", X, R],
+    ["It happened 3 times.", R, R],
+    ["For 2 weeks running.", R, R],
+    ["In 12 games out of the lot.", X, X],
     ["About 1.5 per hundred.", X, X],
-    ["Once every 30 moves.", X, R],
+    ["Once every 30 moves.", R, R],
     ["You made 4.25 mistakes per hundred moves.", X, X],
-    ["That happened 12 separate times.", X, R],
+    ["That happened 12 separate times.", X, X],
     ["You blundered 9 pieces in 31 outings.", X, X],
-    ["Solve 3 per day.", X, R],
-    ["Your 1500 rating says otherwise.", X, R],
-    ["Keep 90 seconds in reserve.", X, R],
+    ["Solve 3 per day.", R, R],
+    ["Your 1500 rating says otherwise.", R, R],
+    ["Keep 90 seconds in reserve.", R, R],
     ["You hung a piece in nine of thirty-one games.", X, X],
-    ["It happened twelve separate times.", X, R],
-    ["In half the games the queen went first.", X, R],
-    ["Twice in a dozen outings.", X, X],
-    ["For three weeks running.", X, R],
-    ["For two weeks, play only slow games.", X, R],
+    ["It happened twelve separate times.", R, R],
+    ["In half the games the queen went first.", R, R],
+    ["Twice in a dozen outings.", R, R],
+    ["For three weeks running.", R, R],
+    ["For two weeks, play only slow games.", R, R],
     ["Replay two master games in your opening.", X, R],
-    ["Nine errors in the endgame alone.", X, R],
-    ["You blundered 9 pieces in the endgame.", X, X],
-    ["You left nine pieces en prise.", X, R],
-    ["You hung 3 queens this month.", X, X],
-    ["You lost two rooks to back-rank tricks.", X, X],
-    ["You gave away three bishops.", X, X],
-    ["Nine positions went wrong the same way.", X, R],
-    ["Seven losses came from the same idea.", X, R],
+    ["Nine errors in the endgame alone.", R, R],
+    ["You blundered 9 pieces in the endgame.", R, R],
+    ["You left nine pieces en prise.", R, R],
+    ["You hung 3 queens this month.", R, R],
+    ["You lost two rooks to back-rank tricks.", R, R],
+    ["You gave away three bishops.", R, R],
+    ["Nine positions went wrong the same way.", R, R],
+    ["Seven losses came from the same idea.", R, R],
     ["Twelve percent of your moves were errors.", X, X],
-    ["It happens twice in every hundred moves.", X, X],
+    ["It happens twice in every hundred moves.", R, R],
     ["That is two per hundred moves.", X, X],
-    ["It came up in nine of your recent rated games.", X, X],
-    ["You slip once every 20 moves.", X, R],
-    ["You had under 10 seconds in most games.", X, R],
+    ["It came up in nine of your recent rated games.", X, R],
+    ["You slip once every 20 moves.", R, R],
+    ["You had under 10 seconds in most games.", R, R],
     ["That is two-point-one mistakes per hundred moves.", X, X],
     ["You hung a piece in ٩ games.", X, X],
-    ["It happened ３ times.", X, X],
-    ["It came up in a third of your games.", X, R],
-    ["It came up in a quarter of your games.", X, R],
-    ["It went wrong in half the games.", X, R],
-    ["The count went from three to two.", X, R],
-    ["Keep it below two.", X, R],
-    ["There were nine such moments.", X, R],
-    ["Do this drill three times a week.", X, R],
-    ["Solve a set twice a week.", X, R],
-    ["Analyse one game a day.", X, R],
-    ["Play one 15-minute game each day.", X, R],
-    ["Review one of your losses each day.", X, R],
-    ["Replay one of your games with the engine off.", X, R],
-    ["Play it out against an engine ten times.", X, R],
-    ["It happened twice. Once is a slip.", X, R],
-    ["Ten minutes a day, or 10 minutes if you prefer digits.", X, R],
-    ["Play one longer game each day.", X, R],
-    ["Play the 2 most forcing moves first.", X, R],
-    ["Run a 3-fold check before you move.", X, R],
+    ["It happened ３ times.", R, R],
+    ["It came up in a third of your games.", X, X],
+    ["It came up in a quarter of your games.", X, X],
+    ["It went wrong in half the games.", R, R],
+    ["The count went from three to two.", R, R],
+    ["Keep it below two.", R, R],
+    ["There were nine such moments.", R, R],
+    ["Do this drill three times a week.", R, R],
+    ["Solve a set twice a week.", R, R],
+    ["Analyse one game a day.", R, R],
+    ["Play one 15-minute game each day.", R, R],
+    ["Review one of your losses each day.", R, R],
+    ["Replay one of your games with the engine off.", R, R],
+    ["Play it out against an engine ten times.", R, R],
+    ["It happened twice. Once is a slip.", R, R],
+    ["Ten minutes a day, or 10 minutes if you prefer digits.", R, R],
+    ["Play one longer game each day.", R, R],
+    ["Play the 2 most forcing moves first.", R, R],
+    ["Run a 3-fold check before you move.", R, R],
     ["Use one of your two bishops on the long diagonal.", R, R],
     ["It turned up in most of your games.", R, R],
     ["{gamesAffected} of {games} games", R, R],
@@ -221,28 +222,200 @@ describe("parseWording", () => {
     ["Checks, captures, threats: all 3 before every move.", R, R],
     ["Trade 2 rooks when you are ahead.", R, R],
     ["Three queens on the board is a puzzle, not a game plan.", R, R],
-    ["{rate} times per hundred moves in your games.", R, X],
-  ] as const)("%j: why %s, drill %s", (text, inWhy, inDrill) => {
-    const asWhy = errorsOf(answer({ focus: [{ why: text }, {}] }));
-    const asDrill = errorsOf(answer({ focus: [{ drill: text }, {}] }));
-    expect(asWhy.length === 0, asWhy.join("\n")).toBe(inWhy);
-    expect(asDrill.length === 0, asDrill.join("\n")).toBe(inDrill);
+    ["{rate} times per hundred moves in your games.", X, X],
+    ["You hung a piece in 9 games; check before every move.", X, X],
+    ["You blundered a piece in nine games, so slow down.", X, R],
+    ["Since you hung a piece in nine games, do 10 puzzles a day.", X, R],
+    ["Your games had 12 hung pieces", R, R],
+    ["Nine times you walked into a fork", X, R],
+    ["You made the same mistake 6 times", R, R],
+    ["You lost on time in 4 games", R, R],
+    ["With 9 games affected out of 14", X, X],
+    ["Half your games had a hanging piece", R, R],
+    ["In a third of your games…", X, X],
+    ["You gave up 5 pieces", R, R],
+    ["You allowed four forks", R, R],
+    ["You threw 3 wins away", R, R],
+    ["Nine games ended with a hung piece.", R, R],
+    ["Nd5 forked two pieces at once.", R, R],
+    ["Two minor pieces were loose", R, R],
+    ["One piece left alone is often the whole game.", R, R],
+    ["One loose piece…", R, R],
+    ["two extra pawns", R, R],
+    ["four pawns against three", R, R],
+    ["Twice-defended", R, R],
+    ["The knight on c3 forks the king and rook after Nd5+.", R, R],
+    ["After 1.e4 e5 2.Nf3 Nc6 3.Bc4, watch the f7 square.", R, R],
+    ["In the Italian, 4.c3 prepares d4 with two central pawns.", R, R],
+    ["A rook on the 7th rank ties down two pawns at once.", R, R],
+    ["Rook and two pawns against a rook is usually a draw.", R, R],
+    ["With four pawns against three on one wing, push the candidate pawn first.", R, R],
+    ["Bb5 pins the knight to the king, and the pin holds for three moves.", R, R],
+    ["Solve 15 tactics puzzles every morning before you play.", R, R],
+    ["Play three 10-minute games a day and review each one.", R, R],
+    ["Spend at most 20 seconds on the first 10 moves.", R, R],
+    ["Keep 2 minutes on the clock for the last 10 moves of the game.", R, R],
+    ["Set aside 30 minutes, three times a week, for endgame study.", R, R],
+    ["Learn the Lucena position: king on the 8th rank, rook cutting off the other king.", R, R],
+    ["In king and pawn endings, count the squares: a king 3 squares away still catches the pawn.", R, R],
+    ["Two bishops against bishop and knight is a real edge in open positions.", R, R],
+    ["A double attack hits two targets at once; look for it after every capture.", R, R],
+    ["Calculate every forcing line three moves deep before you commit.", R, R],
+    ["Play the first 8 moves from memory, then slow down.", R, R],
+    ["Do one set of 20 puzzles, then play one rapid game.", R, R],
+    ["Replay a master game in your opening twice a month.", R, R],
+    ["The queen on h5 and bishop on c4 both aim at f7.", R, R],
+    ["Three pieces attack the king and only two defend it.", R, R],
+    ["Nf3 developed a piece and guarded e5 at the same time.", R, R],
+    ["In 5+0 blitz, premove only when the recapture is forced.", R, R],
+    ["Use the 5-second rule: before each capture, count to five.", R, R],
+    ["Thirty seconds of checking beats ten minutes of regret.", R, R],
+    ["Your two rooks are strongest when doubled on an open file.", R, R],
+    ["Look at the first 3 candidate moves, then pick one.", R, R],
+    ["Puzzle rush for 5 minutes, twice a day, is plenty.", R, R],
+    ["Mate in 3 starts with a quiet move, Qg4.", R, R],
+    ["After 20...Qxh2+ 21.Kf1, the king runs out of squares.", R, R],
+    ["Win the exchange first, then trade down to two rooks against one.", R, R],
+    ["Twice-defended pawns rarely fall to a single attacker.", R, R],
+    ["The bishop pair is worth about half a pawn in open positions.", R, R],
+    ["Keep the 50-move rule in mind in long endings.", R, R],
+    ["Each day, set up one position from a master game and play it out ten times.", R, R],
+    ["Castle by move 10, then bring both rooks to the centre.", R, R],
+    ["Two rooks, no plan", R, R],
+    ["Ten seconds of checking", R, R],
+    ["You hung a piece {occurrences} times in {gamesAffected} of your {games} games.", R, R],
+    ["You hung a piece in 7 games this month.", R, R],
+    ["In eleven games you gave away a knight.", X, R],
+    ["That made 4 losses in a row.", R, R],
+    ["Your games this period had 9 hung pieces.", R, R],
+    ["Three of your losses came from the same opening.", X, R],
+    ["You blundered your queen twice.", R, R],
+    ["Twice you walked into a back-rank mate.", R, R],
+    ["You missed a mate in one five times.", X, R],
+    ["The fork caught you out in 6 different games.", R, R],
+    ["Half of your games ended in time trouble.", X, X],
+    ["A quarter of your losses came from one opening.", X, X],
+    ["You lost 3 of your last 5 games on time.", X, X],
+    ["In 8 games you had under a minute by move 30.", R, R],
+    ["You've dropped a pawn in twelve games.", X, R],
+    ["You have allowed 5 forks so far.", R, R],
+    ["Your rate is 2 per hundred moves.", X, X],
+    ["That is a rate of three a game.", R, R],
+    ["You averaged 2 blunders a game.", R, R],
+    ["It came back in 4 weeks out of 6.", R, R],
+    ["It showed up for 5 weeks running, then stopped.", R, R],
+    ["These games had nine missed tactics.", R, R],
+    ["You threw away two winning positions.", R, R],
+    ["You left your queen en prise once.", R, R],
+    ["You were winning in 10 games but drew 4.", R, R],
+    ["Six times the clock ran out on you.", X, R],
+    ["You lost about a third of your games to it.", X, X],
+    ["You made 30 percent of your mistakes in the endgame.", X, X],
+    ["Over 14 games you gave up 6 pieces.", R, R],
+    ["1 in 4 of your games ended this way.", X, X],
+    ["You lost points in 7 of the 20 games.", X, X],
+    ["This week you hung two pieces.", R, R],
+    ["By my count you blundered 11 times.", R, R],
+    ["Nearly half your games had a loose piece.", R, R],
+    ["You missed 9 free captures.", R, R],
+    ["You played 25 games and lost 12.", R, R],
+    ["Nine of your wins were close calls.", X, R],
+    ["You went from 3 blunders a game to 2.", R, R],
+    ["Nine hung pieces this week", R, R],
+    ["You hung 9 pieces", R, R],
+    ["Good start. You hung a piece in nine games, though.", X, R],
+
+    // Rule A: a value the report showed (31 games, 9 affected, 12 occurrences) copied next to a record noun.
+    ["You hung a piece in 9 games.", X, X],
+    ["It came up 12 times.", X, X],
+    ["Across 31 games the same thing happened.", X, X],
+    ["9 of your games had a loose knight.", X, X],
+    ["That happened on 12 occasions.", X, X],
+    ["Loose pieces cost you 9 losses.", X, X],
+    ["In 9 separate games the queen was lost.", X, X],
+    ["Look back at those 9 games tonight.", X, X],
+    ["It turned up in 9 of your 31 games.", X, X],
+
+    // Rule B: statistic forms, whatever the numbers.
+    ["You hung a piece in 40% of games.", X, X],
+    ["A loose piece in 3 of 5 games is too many.", X, X],
+    ["Two out of three games went this way.", X, X],
+    ["That is 1 in 4 games.", X, X],
+    ["2/5 games ended early.", X, X],
+    ["Two thirds of your games had one.", X, X],
+    ["Half of the wins slipped away late.", X, X],
+    ["Your average is 1.4 per game.", X, X],
+    ["A rate of 0.8 is the problem.", X, X],
+    ["That is 3 per 100 moves.", X, X],
+    ["The percentage is high.", X, X],
+
+    // Rule C: a count in words beside a record noun, about the player, in the record fields.
+    ["You missed a fork in five games.", X, R],
+    ["Twice in your games the rook was trapped.", X, R],
+    ["Your eleven losses came from the same trap.", X, R],
+    ["You walked into a pin on six occasions.", X, R],
+    ["Nine times you left the back rank weak.", X, R],
+
+    // Positions, clocks, schedules and practice, including numbers that equal a shown value.
+    ["Make it a firm rule: once you are under 10 seconds, only capture, recapture or check.", R, R],
+    ["With 9 seconds left you played Kg8 when Nxe6 won the rook.", R, R],
+    ["Gather 12 of your own blitz positions where a king move walked into a tactic.", R, R],
+    ["Play a block of 3+2 games this week with one rule: by move 25, keep 15 seconds.", R, R],
+    ["Add 12 themed puzzles a day on forks, solved from the defending side.", R, R],
+    ["Play 9 games a day this week, all at 10+0.", R, R],
+    ["Play 3 games per session and review the losses.", R, R],
+    ["Play 9 rapid games weekly.", R, R],
+    ["At move 31 the rook was still on a1.", R, R],
+    ["Kg1 in game 9 was the moment it turned.", R, R],
+    ["A queen and two rooks against a queen: trade one rook first.", R, R],
+    ["In the first example, 2 pawns beat a knight in the endgame.", R, R],
+    ["Spend 30 seconds per move in the opening, then speed up.", R, R],
+    ["In 1+1 bullet, 9 seconds is a long think.", R, R],
+    ["Nf5 and Qg4 hit two weak squares at once in your game.", R, R],
+    ["In {gamesAffected} of your {games} games you dropped a piece, {occurrences} times in all.", R, R],
+  ] as const)("%j: record fields %s, drill %s", (text, inRecord, inDrill) => {
+    const cases: [string, string, boolean][] = [
+      ["why", answer({ focus: [{ why: text }, {}] }), inRecord],
+      ["drill", answer({ focus: [{ drill: text }, {}] }), inDrill],
+    ];
+    if (text.length <= 60) cases.push(["title", answer({ focus: [{ title: text }, {}] }), inRecord]);
+    if (!/[{}]/.test(text)) cases.push(["summary", answer({ summary: text }), inRecord]);
+    for (const [field, json, passes] of cases) {
+      const errors = errorsOf(json);
+      expect(errors.length === 0, `${field}: ${errors.join("\n")}`).toBe(passes);
+    }
   });
 
-  it("applies the record rule to the title and the summary too", () => {
-    expect(errorsOf(answer({ focus: [{ title: "Nine such moments" }, {}] }))[0]).toMatch(/title writes a count in words/);
-    expect(errorsOf(answer({ summary: "A third of your games went this way." }))[0]).toMatch(/summary writes a count in words/);
-    expect(errorsOf(answer({ summary: "Do it three times a week." }))[0]).toMatch(/summary writes a count/);
-    expect(errorsOf(answer({ focus: [{ title: "Two rooks, no plan" }, {}] }))).toEqual([]);
+  it("checks copied values against the draft it is given", () => {
+    const text = withWhy("You hung a piece in 7 games.");
+    expect(errorsOf(text)).toEqual([]);
+    const seven = draft([choice("hung-piece"), choice("missed-tactic")]);
+    seven.current = { ...seven.current, stats: seven.current.stats.map((s) => ({ ...s, gamesAffected: 7 })) };
+    expect(errorsOf(text, seven)).toHaveLength(1);
   });
 
-  it("tells a repair to drop the count or move it into the drill, not to use a token", () => {
-    const whyError = errorsOf(withWhy("It happened 3 times."))[0]!;
-    expect(whyError).toMatch(/writes a number \("3 times\."\)/);
-    expect(whyError).toMatch(/drop the count, or move it into the drill as a study quantity/);
-    expect(whyError).not.toMatch(/use a token/);
-    const drillError = errorsOf(answer({ focus: [{ drill: "Get it under 40%." }, {}] }))[0]!;
-    expect(drillError).toMatch(/drill states a statistic \("%"\)/);
+  it("splits sentences without breaking move text or decimals", () => {
+    expect(sentences("After 1. e4 e5 2.Nf3 Nc6, play 20...Qxh2. Then 1.5 is a decimal! Next; last\nline")).toEqual([
+      "After 1. e4 e5 2.Nf3 Nc6, play 20...Qxh2",
+      "Then 1.5 is a decimal",
+      "Next",
+      "last",
+      "line",
+    ]);
+    expect(sentences("Play Nf3. Then castle.")).toEqual(["Play Nf3", "Then castle"]);
+    expect(sentences("Look at move 12. Black had a fork...")).toEqual(["Look at move 12", "Black had a fork"]);
+  });
+
+  it("names the sentence and asks for a token, never for a move into the drill", () => {
+    const errors = errorsOf(withWhy("The knight on f6 was loose. It happened 12 times."));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBe(
+      'focus[0] (hung-piece).why, the sentence "It happened 12 times": Write this count with its token ({games}, {gamesAffected}, {occurrences}) or leave the number out.',
+    );
+    expect(errorsOf(answer({ summary: "You hung a piece in 9 games." }))[0]).toMatch(/token \(\{games\}, \{mistakeRate\}, \{focusCount\}\)/);
+    for (const e of [...errors, ...errorsOf(answer({ focus: [{ drill: "Get it under 40%." }, {}] }))]) {
+      expect(e).not.toMatch(/into the drill|study quantity/);
+    }
   });
 
   it("skips the count scan on a field that is already too long", () => {
@@ -250,24 +423,41 @@ describe("parseWording", () => {
     expect(errorsOf(withWhy(long))).toEqual([expect.stringMatching(/why is 506 characters/)]);
   });
 
-  it("allows the weeks tokens only when at least three weeks were counted for the item", () => {
-    const persist = "It came up in {weeksRecurred} of your last {weeksCounted} weeks.";
-    const text = answer({ focus: [{ why: persist }, {}] });
-    expect(errorsOf(text, draft([choice("hung-piece", "new", 3), choice("missed-tactic")]))).toEqual([]);
-    for (const counted of [0, 2]) {
-      const errors = errorsOf(text, draft([choice("hung-piece", "new", counted), choice("missed-tactic")]));
-      expect(errors.join("\n")).toMatch(/focus\[0\] \(hung-piece\)\.why cites weeks, but too few weeks/);
+  it("scans a 20,000-character field quickly", () => {
+    const inputs = [
+      "1.".repeat(10_000),
+      "9 ".repeat(10_000),
+      "you hung nine of your games ".repeat(715).slice(0, 20_000),
+      "9 of 31 games, half of your games, 1.5 per ".repeat(500).slice(0, 20_000),
+      "a-".repeat(10_000),
+      "{".repeat(20_000),
+      `${"e4 ".repeat(6_666)}.`,
+      "1.1.1.".repeat(3_334).slice(0, 20_000),
+      "half ".repeat(4_000),
+    ];
+    for (const text of inputs) {
+      const t0 = performance.now();
+      countSentences(text, { shown: new Set([9, 12, 31]), record: true });
+      expect(performance.now() - t0).toBeLessThan(100);
     }
-    const inTitle = answer({ focus: [{}, { title: "Back {weeksRecurred} weeks" }] });
-    expect(errorsOf(inTitle, draft([choice("hung-piece"), choice("missed-tactic", "new", 1)])).join("\n")).toMatch(
-      /focus\[1\] \(missed-tactic\)\.title cites weeks/,
-    );
+  });
+
+  it("rejects the tokens the report prints itself in every focus field", () => {
+    for (const token of ["rate", "baselineRate", "target", "weeksRecurred", "weeksCounted"]) {
+      for (const field of ["title", "why", "drill"] as const) {
+        const errors = errorsOf(answer({ focus: [{ [field]: `Now at {${token}}.` }, {}] }));
+        expect(errors.join("\n")).toMatch(
+          new RegExp(`focus\\[0\\] \\(hung-piece\\)\\.${field} uses \\{${token}\\}; the report prints the weeks, rate, starting rate and target lines itself`),
+        );
+      }
+    }
   });
 
   it("rejects unknown tokens and tokens from the wrong field", () => {
-    expect(errorsOf(withWhy("In {bogus} games."))[0]).toMatch(/\{bogus\}/);
+    expect(errorsOf(withWhy("In {bogus} games."))[0]).toMatch(/\{bogus\}, which is not an allowed token/);
     expect(errorsOf(withWhy("At {mistakeRate} per hundred moves."))[0]).toMatch(/\{mistakeRate\}/);
-    expect(errorsOf(answer({ summary: "At {rate} per hundred moves." }))[0]).toMatch(/summary uses \{rate\}/);
+    expect(errorsOf(answer({ summary: "At {rate} per hundred moves." }))[0]).toMatch(/summary uses \{rate\}, which is not an allowed token/);
+    expect(errorsOf(answer({ summary: "In {gamesAffected} games." }))[0]).toMatch(/summary uses \{gamesAffected\}/);
     expect(errorsOf(withWhy("A stray { brace."))[0]).toMatch(/unmatched brace/);
   });
 
@@ -310,26 +500,16 @@ describe("parseWording", () => {
 describe("templateWording", () => {
   const bands = RATING_BANDS.map((b) => b.id);
 
-  it.each(bands)("passes the checks and renders for every pattern at band %s", (band) => {
-    for (const id of PATTERN_IDS) {
-      for (const [kind, weeksCounted] of [["new", 5], ["kept", 2], ["rose", 0], ["returned", 6]] as const) {
-        const d = draft([choice(id, kind, weeksCounted)], band);
-        const w = templateWording(d);
-        expect(parseWording(JSON.stringify(w), d)).toMatchObject({ ok: true });
-        const values = focusTokenValues(d.focus[0]!, d);
-        const why = renderText(w.focus[0]!.why, values);
-        expect(why).toContain("9 of your 31 games");
-        expect(why.split(/(?<=\.)\s+/).length).toBeLessThanOrEqual(2);
-        renderText(w.focus[0]!.title, values);
-        renderText(w.focus[0]!.drill, values);
-        renderText(w.summary, summaryTokenValues(d));
-      }
-    }
-  });
-
   /** The draft with this period's stat for `id` set to `affected` of `games` games. */
-  function withAffected(id: string, affected: number, games: number): ReportDraft {
-    const d = draft([choice(id, "kept")]);
+  function withAffected(
+    id: string,
+    affected: number,
+    games: number,
+    kind: FocusChoice["reason"]["kind"] = "kept",
+    band: RatingBand = "club",
+    weeksCounted = 5,
+  ): ReportDraft {
+    const d = draft([choice(id, kind, weeksCounted)], band);
     d.current = {
       ...d.current,
       games,
@@ -339,6 +519,34 @@ describe("templateWording", () => {
     };
     return d;
   }
+
+  const PRINTED = /\{(weeksRecurred|weeksCounted|rate|baselineRate|target)\}/;
+
+  it.each(bands)("passes the checks and renders for every pattern, reason and games affected at band %s", (band) => {
+    for (const id of PATTERN_IDS) {
+      for (const [kind, weeksCounted] of [["new", 5], ["kept", 2], ["rose", 0], ["returned", 6]] as const) {
+        for (const [affected, games] of [[0, 14], [0, 1], [1, 14], [1, 1], [5, 14], [14, 14]] as const) {
+          const d = withAffected(id, affected, games, kind, band, weeksCounted);
+          const w = templateWording(d);
+          const parsed = parseWording(JSON.stringify(w), d);
+          expect(parsed, `${id} ${band} ${kind} ${affected}/${games}: ${JSON.stringify(parsed)}`).toMatchObject({ ok: true });
+          const values = focusTokenValues(d.focus[0]!, d);
+          const item = w.focus[0]!;
+          for (const text of [item.title, item.why, item.drill]) {
+            expect(text).not.toMatch(PRINTED);
+            expect(renderText(text, values)).not.toMatch(/[{}]/);
+          }
+          expect(renderText(item.why, values).split(/(?<=\.)\s+/).length).toBeLessThanOrEqual(2);
+          renderText(w.summary, summaryTokenValues(d));
+        }
+      }
+    }
+  });
+
+  it("renders the player's numbers in the why of the default draft", () => {
+    const d = draft([choice("hung-piece")]);
+    expect(renderText(templateWording(d).focus[0]!.why, focusTokenValues(d.focus[0]!, d))).toContain("9 of your 31 games");
+  });
 
   it.each([
     [0, 14, "these 14 games. Keep the habit going so it stays that way."],
@@ -355,6 +563,18 @@ describe("templateWording", () => {
       const why = renderText(w.focus[0]!.why, focusTokenValues(d.focus[0]!, d));
       expect(why).toContain(expected);
       expect(why).not.toMatch(/\b0 of\b|\b1 of\b|\b1 games\b/);
+    }
+  });
+
+  it("gives every pattern and drill level a quiet-period drill that points at no mistakes", () => {
+    for (const id of [...PATTERN_IDS, "unknown-pattern"]) {
+      for (const band of bands) {
+        const quiet = templateWording(withAffected(id, 0, 14, "kept", band)).focus[0]!.drill;
+        const busy = templateWording(withAffected(id, 5, 14, "kept", band)).focus[0]!.drill;
+        // An unknown pattern has no stat of its own, so it always reads as quiet.
+        if (id !== "unknown-pattern") expect(quiet).not.toBe(busy);
+        expect(quiet).not.toMatch(/this period|you lost|you did not|your own|missed|revisit|go back|example|from your games|recent games/i);
+      }
     }
   });
 
@@ -392,6 +612,12 @@ describe("templateWording", () => {
     expect(render(TWO)).toContain("The habits that stand out: pieces left hanging and missed tactics.");
     const few = { ...draft([]), notes: ["few-games" as const] };
     expect(render(few)).toContain("Only 31 games");
+    for (const [games, opening] of [[1, "Just a single game in this period"], [0, "No games were played in this period"]] as const) {
+      const d = { ...few, current: { ...few.current, games } };
+      expect(render(d)).toContain(opening);
+      expect(render(d)).not.toMatch(/\b[01] games\b/);
+      expect(parseWording(JSON.stringify(templateWording(d)), d)).toMatchObject({ ok: true });
+    }
     const better = draft([choice("missed-tactic")]);
     better.progress = [{ patternId: "hung-piece", previous: stat("hung-piece"), current: stat("hung-piece"), verdict: "improved", pValue: 0.01 }];
     better.retired = [{ patternId: "thrown-win", why: "graduated", since: better.periodEnd, baseline: stat("thrown-win"), current: stat("thrown-win") }];

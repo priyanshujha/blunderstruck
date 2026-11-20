@@ -1,6 +1,5 @@
 import {
   BAND_RUBRIC,
-  FOCUS_TOKENS,
   type FocusChoice,
   PATTERN_IDS,
   type PatternStat,
@@ -11,7 +10,7 @@ import {
 } from "@blunderstruck/contracts";
 import { describe, expect, it } from "vitest";
 import { buildPrompt, WORDING_SCHEMA } from "./prompt";
-import { parseWording } from "./validate";
+import { PRINTED_TOKENS, parseWording, WORDING_FOCUS_TOKENS } from "./validate";
 
 const SETTINGS = { analysisVersion: 1, patternsVersion: 1, engine: { name: "stockfish", depth: 12 } };
 
@@ -119,7 +118,8 @@ describe("buildPrompt", () => {
       expect(system).toContain(BAND_RUBRIC[band].adviceLevel);
       expect(system).toContain(BAND_RUBRIC[band].eligible.join(", "));
     }
-    for (const t of [...FOCUS_TOKENS, ...SUMMARY_TOKENS]) expect(system).toContain(`{${t}}`);
+    for (const t of [...WORDING_FOCUS_TOKENS, ...SUMMARY_TOKENS]) expect(system).toContain(`- {${t}}: `);
+    for (const t of PRINTED_TOKENS) expect(system).not.toContain(`{${t}}`);
     expect(system.split(/\s+/).length).toBeGreaterThan(900);
   });
 
@@ -133,9 +133,12 @@ describe("buildPrompt", () => {
     expect(parsed.summary).not.toMatch(/\b(one|two|both|pair|couple)\b/i);
     expect(system).toMatch(/illustrative only: never reuse them/);
     expect(system).toContain("Do not restate them");
-    expect(system).toContain("The summary, title and why describe the player's record, so they hold no counts at all");
-    expect(system).toContain("The drill is advice, so study quantities are fine there");
+    expect(system).toContain("is written only with its token, never as a number of your own");
+    expect(system).toContain("No percentages, fractions of their games or rates, in any field.");
+    expect(system).toContain("Numbers that describe a position, a clock or what to practise are fine as they are");
+    expect(system).toContain("The report prints the weeks, rate and target lines itself, so leave those out entirely.");
     expect(system).toContain('never write "{gamesAffected} of" or "0 of" for it');
+    expect(system).not.toMatch(/no number words other than|move it into the drill|any digit that counts/);
     expect(system).toContain("weeksCounted of three or more and weeksRecurred is more than half of weeksCounted");
     expect(example).not.toMatch(/\{(weeksRecurred|weeksCounted|rate|target)\}/);
   });
@@ -146,6 +149,8 @@ describe("buildPrompt", () => {
     expect(user).toContain('"timeClass": "blitz"');
     expect(user).toContain('"kind": "new"');
     expect(user).toContain('"weeksRecurred": 4');
+    expect(user).toContain('"gamesAffected": "8"');
+    expect(user).not.toMatch(/"tokens": \{[^}]*"(rate|baselineRate|target|weeksRecurred|weeksCounted)"/);
     expect(user).toContain("fen-for-hung-piece w - - 0 11");
     expect(user).toContain('"played": "Bd3"');
     expect(user).toContain('"best": "Nf3"');
