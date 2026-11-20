@@ -337,10 +337,10 @@ export const GameGoal = z.object({
 export type GameGoal = z.infer<typeof GameGoal>;
 
 /** Share of games affected (after the cut) from which a goal is stated in tenths of games. */
-export const GAMES_TENTHS_FROM = 0.45;
+export const GAMES_TENTHS_FROM = 0.5;
 /** `GAMES_TENTHS_FROM` as a fraction, for exact comparisons. */
-const TENTHS_FROM_NUM = 9;
-const TENTHS_FROM_DEN = 20;
+const TENTHS_FROM_NUM = 1;
+const TENTHS_FROM_DEN = 2;
 
 /**
  * The goal for a pattern, from its baseline: a quarter fewer of the games affected. With
@@ -369,7 +369,10 @@ export function gameGoalOf(baseline: Pick<PatternStat, "games" | "gamesAffected"
   return { per: 1, of: n };
 }
 
-/** The stat is within the goal: `gamesAffected / games ≤ per / of`. */
+/**
+ * The stat is within the goal: `gamesAffected / games ≤ per / of`. Only meaningful when the stat
+ * has enough games: callers must check for insufficient data first (it returns true for 0 games).
+ */
 export function meetsGoal(stat: Pick<PatternStat, "games" | "gamesAffected">, goal: GameGoal): boolean {
   return stat.gamesAffected * goal.of <= goal.per * stat.games;
 }

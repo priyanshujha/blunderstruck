@@ -186,7 +186,7 @@ const stat = (patternId: string, per100Moves: number) => ({
   avgWinPctLoss: 30,
 });
 
-/** Settings as a milestone 2 report stored them: no check depth. */
+/** Settings as a report stored them before the deeper check existed: no check depth. */
 const settings = { analysisVersion: 2, patternsVersion: 1, engine: { name: "stockfish", depth: 12 } };
 
 const periodStats = (start: string, end: string) => ({
@@ -476,6 +476,10 @@ describe("story contracts", () => {
 
   it("accepts a story and caps its lines and targets", () => {
     expect(ExampleStory.safeParse(story).success).toBe(true);
+    expect(ExampleStory.safeParse({ ...story, key: { line: "punish", index: 2 } }).success).toBe(true);
+    expect(ExampleStory.safeParse({ ...story, key: { line: "better", index: 0 } }).success).toBe(true);
+    expect(ExampleStory.safeParse({ ...story, key: { line: "actual", index: 0 } }).success).toBe(false);
+    expect(ExampleStory.safeParse({ ...story, key: { line: "punish", index: -1 } }).success).toBe(false);
     expect(ExampleStory.safeParse({ ...story, punish: Array.from({ length: 9 }, () => knightCheck) }).success).toBe(
       false,
     );
@@ -561,13 +565,14 @@ describe("game goals", () => {
   const goalOf = (gamesAffected: number, games: number) => gameGoalOf({ ...stat("hung-piece", 1), gamesAffected, games });
 
   it("states the goal in whole games", () => {
-    expect(GAMES_TENTHS_FROM).toBe(9 / 20);
+    expect(GAMES_TENTHS_FROM).toBe(1 / 2);
     expect(goalOf(51, 162)).toEqual({ per: 1, of: 4 });
     expect(goalOf(8, 10)).toEqual({ per: 6, of: 10 });
     expect(goalOf(5, 10)).toEqual({ per: 1, of: 3 });
     expect(goalOf(4, 40)).toEqual({ per: 1, of: 13 });
-    // t = 0.45 exactly: tenths from there.
-    expect(goalOf(6, 10)).toEqual({ per: 4, of: 10 });
+    // t = 0.45 stays below the tenths threshold; t = 0.525 is above it.
+    expect(goalOf(6, 10)).toEqual({ per: 1, of: 2 });
+    expect(goalOf(7, 10)).toEqual({ per: 5, of: 10 });
     expect(goalOf(10, 10)).toEqual({ per: 7, of: 10 });
     expect(goalOf(0, 10)).toEqual({ per: 0, of: 1 });
     expect(goalOf(0, 0)).toEqual({ per: 0, of: 1 });
@@ -585,6 +590,19 @@ describe("game goals", () => {
     }
   });
 
+  it("never asks for a stricter goal from a better start, nor one already met", () => {
+    let previous = { per: 0, of: 1 };
+    for (let a = 1; a <= 100; a++) {
+      const goal = goalOf(a, 100);
+      // per/of never decreases: previous.per / previous.of <= goal.per / goal.of.
+      expect(previous.per * goal.of, `affected ${a}: ${JSON.stringify(goal)}`).toBeLessThanOrEqual(
+        goal.per * previous.of,
+      );
+      expect(meetsGoal({ gamesAffected: a, games: 100 }, goal), `affected ${a}`).toBe(false);
+      previous = goal;
+    }
+  });
+
   it("judges a stat against the goal in games", () => {
     const goal = { per: 1, of: 4 };
     expect(meetsGoal({ ...stat("hung-piece", 1), gamesAffected: 40, games: 162 }, goal)).toBe(true);
@@ -594,8 +612,8 @@ describe("game goals", () => {
   });
 });
 
-describe("milestone 2b report fields", () => {
-  it("still parses a report stored before blind spots, steps and goals", () => {
+describe("reports with blind spots, steps and goals", () => {
+  it("reports stored before blind spots and goals still parse", () => {
     const parsed = WeeklyReport.parse(report);
     expect(parsed.focus[0]!.blindSpots).toEqual([]);
     expect(parsed.focus[0]!.steps).toEqual([]);
