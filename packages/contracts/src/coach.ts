@@ -300,12 +300,21 @@ export const FOCUS_TOKENS = [
 /** Tokens a report's `summary` may use. */
 export const SUMMARY_TOKENS = ["games", "mistakeRate", "focusCount"] as const;
 
-/** Replaces every `{token}` in `template`. Throws on any braced text that is not exactly a key of `values`. */
+/**
+ * Replaces every `{token}` in `template`. Throws on any braced text that is not exactly a key
+ * of `values`, and on any brace left unpaired in the template.
+ */
 export function renderText(template: string, values: Record<string, string>): string {
-  return template.replace(/\{([^{}]*)\}/g, (_, name: string) => {
+  const token = /\{([^{}]*)\}/g;
+  const check = (name: string) => {
     if (!Object.prototype.hasOwnProperty.call(values, name)) throw new Error(`unknown token {${name}}`);
-    return values[name]!;
+  };
+  const rest = template.replace(token, (_, name: string) => {
+    check(name);
+    return "";
   });
+  if (/[{}]/.test(rest)) throw new Error("unbalanced brace in template");
+  return template.replace(token, (_, name: string) => values[name]!);
 }
 
 /** A finding shown with its position, for the wording and the report pages. */

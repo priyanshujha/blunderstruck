@@ -288,6 +288,10 @@ describe("report contracts", () => {
     expect(() => renderText("{ games } games", { games: "30" })).toThrow();
     expect(() => renderText("{} games", { games: "30" })).toThrow();
     expect(() => renderText("{toString}", {})).toThrow();
+    for (const bad of ["{{games}}", "{games}}", "{games", "games}"]) {
+      expect(() => renderText(bad, { games: "30" })).toThrow();
+    }
+    expect(renderText("{games}", { games: "{x}" })).toBe("{x}");
   });
 
   it("formats token values with two-decimal rates", () => {
