@@ -19,7 +19,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll } from "vitest";
 import { createServer } from "node:http";
 import { writeFileSync } from "node:fs";
-import { createHandler, handler, hostAllowed, openForWeb, problemHandler, startServer } from "./server";
+import { createHandler, handler, hostAllowed, openForWeb, pendingGames, problemHandler, startServer } from "./server";
 
 // Invented players and games only. No socket: the handler is called with fake objects.
 const XSS = `<script>alert(1)</script>`;
@@ -217,6 +217,28 @@ describe("handler", () => {
     const r = await call(handler(store, TRACK), "GET", "/");
     expect(r.body).toContain("Based on 1 of 4 games; 2 still being analysed.");
     expect(r.body).toContain('<meta http-equiv="refresh" content="30">');
+  });
+
+  it("counts only the games a capped report kept as pending, not the ones it cut", async () => {
+    const provisional = { sampled: 1, analysed: 1, total: 2, complete: false, sampleOnly: false };
+    const store = await seeded({ coverage: provisional, cappedGameIds: ["lichess:g1", "lichess:g3"] });
+    await store.putAnalysis(analysis("lichess:g1"));
+    const r = (await store.latestReport(TRACK))!;
+    expect(await pendingGames(store, r)).toBe(1);
+    // A capped report stored before the field counts the whole period.
+    const { cappedGameIds: _drop, ...old } = r;
+    expect(await pendingGames(store, old)).toBe(3);
+  });
+
+  it("with a deeper check counts a game as pending until it is checked for the player's colour", async () => {
+    const settings = { ...SETTINGS, checkDepth: 18 };
+    const store = await seeded({ settings, coverage: { sampled: 4, analysed: 4, total: 4, complete: false, sampleOnly: false } });
+    const checked = (id: string, colors: string[]) =>
+      ({ ...analysis(id), check: { depth: 18, colors } }) as unknown as AnalyzedGame;
+    for (const n of [1, 2, 3, 4]) await store.putAnalysis(analysis(`lichess:g${n}`)); // first looks only
+    await store.putAnalysis(checked("lichess:g1", ["white"]));
+    await store.putAnalysis(checked("lichess:g2", ["black"]));
+    expect(await pendingGames(store, (await store.latestReport(TRACK))!)).toBe(3);
   });
 
   it("shows the full stored week history", async () => {
