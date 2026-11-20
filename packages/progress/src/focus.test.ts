@@ -319,6 +319,53 @@ describe("chooseFocus: cooldown window and the report being completed", () => {
   });
 });
 
+describe("chooseFocus: few-games reports are neutral", () => {
+  const fewGames = (r: WeeklyReport): WeeklyReport => ({ ...r, notes: ["few-games"] }) as WeeklyReport;
+  const top = prios([
+    [X, 20],
+    [Y, 10],
+    [Z, 5],
+  ]);
+
+  it("does not count toward the cooldown: R1 graduates X, R2 has few games, R3 and R4 still skip X", () => {
+    const r1 = report({ i: 1, retired: [{ id: X, why: "graduated" }] });
+    const r2 = fewGames(report({ i: 2 }));
+    const r3 = report({ i: 3 });
+    expect(cooldownPatterns([r1, r2], end(3))).toEqual(new Set([X]));
+    expect(cooldownPatterns([r1, r2, r3], end(4))).toEqual(new Set([X]));
+    const at4 = chooseFocus(input({ history: [r1, r2, r3], priorities: top, periodEnd: end(4) }));
+    expect(ids(at4.focus)).toEqual([Y, Z]);
+    // After two real reports, X may return.
+    const at5 = chooseFocus(input({ history: [r1, r2, r3, report({ i: 4 })], priorities: top, periodEnd: end(5) }));
+    expect(ids(at5.focus)).toEqual([X, Y]);
+  });
+
+  it("does not count toward rotation or break the held run", () => {
+    const challenger = prios([
+      [Y, 10],
+      [X, 5],
+    ]);
+    // Reports 10 to 14 are four measurements; a few-games report 15 must not make it five.
+    const run = heldRun(10, 14, () => ABOVE_TARGET);
+    const quiet = fewGames(
+      report({ i: 15, focus: [{ id: X, since: end(10) }], progress: [{ id: X, verdict: "flat", occurrences: 35 }] }),
+    );
+    expect(chooseFocus(input({ history: [...run, quiet], priorities: challenger })).retired).toEqual([]);
+    // With one more real measurement it rotates, the quiet report in between notwithstanding.
+    const more = report({ i: 16, focus: [{ id: X, since: end(10) }], progress: [{ id: X, ...ABOVE_TARGET }] });
+    const r = chooseFocus(input({ history: [...run, quiet, more], priorities: challenger }));
+    expect(r.retired).toMatchObject([{ patternId: X, why: "rotated" }]);
+  });
+
+  it("takes previous ranks from the last report that is not few-games", () => {
+    const real = report({ i: 18, priorities: prios([[Y, 20], [Z, 10]]) });
+    const quiet = fewGames(report({ i: 19, priorities: prios([]) }));
+    const focus = chooseFocus(input({ history: [real, quiet] })).focus;
+    expect(kindOf(focus, Y)).toBe("new");
+    expect(focus[0]!.reason.previousRank).toBe(1);
+  });
+});
+
 describe("chooseFocus: unranked eligible patterns", () => {
   it("never makes two patterns on the same moves both focus items", () => {
     // Y and Z share every move; Z comes back eligible but unranked because Y covers them.

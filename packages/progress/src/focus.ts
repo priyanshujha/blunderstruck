@@ -56,6 +56,12 @@ const idRank = (id: string): number => {
   return i < 0 ? PATTERN_IDS.length : i;
 };
 
+/**
+ * A report of a period with too few games for any choice. It is final, but neutral for focus:
+ * it neither counts toward a cooldown or rotation nor breaks a run, and supplies no previous rank.
+ */
+const isFewGames = (r: WeeklyReport): boolean => r.notes?.includes("few-games") ?? false;
+
 /** A report is final once its games are all analysed, or the run stopped after the sample on request. */
 const isFinal = (r: WeeklyReport): boolean => r.coverage.complete || r.coverage.sampleOnly;
 
@@ -105,11 +111,13 @@ function measure(p: { verdict: PatternProgress["verdict"]; current: PatternStat 
 /**
  * The earlier measurements of an item held in `prev`, newest first: each final report of the
  * unbroken run holding it that carries its verdict in `progress` (so not the report that chose it).
+ * Few-games reports are skipped.
  */
 function heldMeasures(finals: readonly WeeklyReport[], patternId: string, target: number): Measure[] {
   const out: Measure[] = [];
   for (let i = finals.length - 1; i >= 0; i--) {
     const r = finals[i]!;
+    if (isFewGames(r)) continue;
     if (!r.focus.some((f) => f.patternId === patternId)) break;
     const p = r.progress.find((x) => x.patternId === patternId);
     if (p) out.push(measure(p, target));
@@ -120,12 +128,12 @@ function heldMeasures(finals: readonly WeeklyReport[], patternId: string, target
 /**
  * Patterns that may not be chosen now: graduated or rotated in one of the last
  * `COOLDOWN_REPORTS` final reports of `history`. Provisional revisions are ignored, and only
- * the latest revision of each period counts. With `before` (the period end of the report
+ * the latest revision of each period counts, and few-games reports are skipped. With `before` (the period end of the report
  * being built), only periods ending before it count, as in `chooseFocus`.
  */
 export function cooldownPatterns(history: readonly WeeklyReport[], before?: string): Set<string> {
   const cooling = new Set<string>();
-  for (const r of finalHistory(history, before).slice(-COOLDOWN_REPORTS)) {
+  for (const r of finalHistory(history, before).filter((r) => !isFewGames(r)).slice(-COOLDOWN_REPORTS)) {
     for (const x of r.retired) if (x.why === "graduated" || x.why === "rotated") cooling.add(x.patternId);
   }
   return cooling;
@@ -191,6 +199,8 @@ export function chooseFocus(input: FocusInput): FocusDecision {
   const { current, comparison, band, periodEnd, analyses } = input;
   const finals = finalHistory(input.history, periodEnd);
   const prev = finals[finals.length - 1];
+  /** The last final report in which a choice could be made: the source of previous ranks. */
+  const ranksFrom = finals.filter((r) => !isFewGames(r)).at(-1);
 
   const currentStat = (id: string) => statOf(current.stats, id, current);
   const comparisonStat = (id: string) =>
@@ -216,7 +226,7 @@ export function chooseFocus(input: FocusInput): FocusDecision {
 
   const reasonFor = (id: string, kind: FocusReason["kind"]): FocusReason => {
     const p = priorityOf(id);
-    const previousRank = prev?.priorities.find((x) => x.patternId === id)?.rank ?? null;
+    const previousRank = ranksFrom?.priorities.find((x) => x.patternId === id)?.rank ?? null;
     return {
       kind,
       previousRank,
@@ -295,8 +305,8 @@ export function chooseFocus(input: FocusInput): FocusDecision {
     if (focus.length >= MAX_FOCUS_ITEMS) break;
     const id = p.patternId;
     if (!choosable(p) || retiredNow.has(id) || focus.some((f) => f.patternId === id)) continue;
-    const previousRank = prev?.priorities.find((x) => x.patternId === id)?.rank ?? null;
-    const rose = prev !== undefined && (previousRank === null || previousRank >= ROSE_MIN_PREVIOUS_RANK);
+    const previousRank = ranksFrom?.priorities.find((x) => x.patternId === id)?.rank ?? null;
+    const rose = ranksFrom !== undefined && (previousRank === null || previousRank >= ROSE_MIN_PREVIOUS_RANK);
     const kind: FocusReason["kind"] = everRetired.has(id) ? "returned" : rose ? "rose" : "new";
     const baseline = currentStat(id);
     focus.push(choice(id, kind, periodEnd, baseline, baseline.per100Moves * (1 - TARGET_REDUCTION)));
