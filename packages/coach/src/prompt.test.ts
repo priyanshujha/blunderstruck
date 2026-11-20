@@ -294,7 +294,7 @@ describe("buildPrompt", () => {
       tokens: { count: "23", of: "62", games: "14" },
       // 53 of 302 mistakes overall: about one in six.
       overall: "about 1 in 6 of the mistakes overall",
-      refinement: { id: "answer-knight-check", meaning: "the punishing move was a knight check" },
+      refinement: { id: "answer-knight-check", meaning: "the punishing move was a check by the knight that moved" },
     });
     expect(a.blindSpots[1]).toMatchObject({ id: "answer-fork", heuristic: true, overall: "rare elsewhere" });
     // The plain share, whatever the pattern's own count: no subtraction.
@@ -334,5 +334,16 @@ describe("buildPrompt", () => {
     const items = (WORDING_SCHEMA as { properties: { focus: { items: { required: string[]; properties: Record<string, unknown> } } } }).properties.focus.items;
     expect(items.required).toContain("steps");
     expect(items.properties.steps).toMatchObject({ type: "array", items: { required: ["blindSpot", "text"] } });
+  });
+
+  it("labels a piece the opponent did not win as couldHaveLost, and says how to word it", () => {
+    const d = storiedDraft("x", WORKED);
+    d.focus[0]!.examples[0]!.story = { ...F1_STORY, replyFound: false };
+    const { system, user } = buildPrompt(d);
+    const data = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(user)![1]!);
+    expect(data.focus[0].examples[0]).toMatchObject({ opponentFoundIt: false, couldHaveLost: "your queen d2" });
+    expect(data.focus[0].examples[0].lost).toBeUndefined();
+    expect(system).toContain("When it is false they missed it, and the piece is given as couldHaveLost instead of lost");
+    expect(system).toBe(buildPrompt(storiedDraft("y", WORKED)).system);
   });
 });

@@ -1,5 +1,6 @@
 import {
   BLIND_SPOT_TOKENS,
+  type FocusChoice,
   type FocusExample,
   type MoveDetail,
   type ReportDraft,
@@ -297,10 +298,7 @@ export function countSentences(text: string, ctx: CountContext): string[] {
   return sentences(text).filter((s) => statesCount(s, ctx));
 }
 
-/**
- * The record values the model was shown for this draft: games, each focus item's games
- * affected and occurrences, and each blind spot's count, total and games.
- */
+/** The record values the model was shown for this draft: games, and each focus item's games affected and occurrences. */
 export function shownValues(draft: ReportDraft): Set<number> {
   const values = new Set<number>([draft.current.games]);
   for (const f of draft.focus) {
@@ -308,11 +306,21 @@ export function shownValues(draft: ReportDraft): Set<number> {
     values.add(stat?.games ?? draft.current.games);
     values.add(stat?.gamesAffected ?? 0);
     values.add(stat?.occurrences ?? 0);
-    for (const b of f.blindSpots ?? []) {
-      values.add(b.count);
-      values.add(b.of);
-      values.add(b.games);
-    }
+  }
+  return values;
+}
+
+/**
+ * The values shown for one item's why and steps: the draft's record values and the item's
+ * blind spots' counts, totals and games. Its drill and the summary are checked against the
+ * record values alone, so a blind-spot number never blocks a practice quantity there.
+ */
+export function shownForItem(draft: ReportDraft, item: Pick<FocusChoice, "blindSpots"> | undefined): Set<number> {
+  const values = shownValues(draft);
+  for (const b of item?.blindSpots ?? []) {
+    values.add(b.count);
+    values.add(b.of);
+    values.add(b.games);
   }
   return values;
 }
@@ -381,8 +389,8 @@ export interface ExampleMoves {
 /**
  * The moves and squares of an item's examples. With a story: the move played, the punishing
  * line and the better line, their from and to squares, and the pieces hit, behind or lost.
- * An example without a story gives its move played and best move. Moves and squares named in
- * an example's fact count too, since the model is shown it.
+ * An example without a story gives its move played and best move, the squares of its
+ * position's pieces, and the moves and squares its fact names.
  */
 export function exampleMoves(examples: readonly FocusExample[]): ExampleMoves {
   const keys = new Set<string>();
@@ -406,14 +414,15 @@ export function exampleMoves(examples: readonly FocusExample[]): ExampleMoves {
       for (const p of [...st.targets, st.rear, st.lost]) if (p) squares.add(p.square);
       if (st.betterReason?.square) squares.add(st.betterReason.square);
     } else {
-      // An example from before stories is shown with its position, so its pieces may be named.
+      // An example from before stories is shown with its position and fact, so its pieces and
+      // the moves and squares its fact names may be named.
       addSan(e.played);
       if (e.best) addSan(e.best);
       for (const sq of occupiedSquares(e.fen)) squares.add(sq);
+      const fact = namedMoves(e.evidence ?? "");
+      for (const m of fact.moves) addSan(m);
+      for (const sq of fact.squares) squares.add(sq);
     }
-    const fact = namedMoves(e.evidence ?? "");
-    for (const m of fact.moves) addSan(m);
-    for (const sq of fact.squares) squares.add(sq);
   }
   return { keys, sans, squares };
 }
@@ -579,25 +588,45 @@ export function parseWording(text: string, draft: ReportDraft, only?: string[]):
     const at = `focus[${i}] (${f.patternId})`;
     const item = draft.focus.find((c) => c.patternId === f.patternId);
     const allowed = exampleMoves(item?.examples ?? []);
+    const withSpots = shownForItem(draft, item);
     for (const [field, text] of [["title", f.title], ["why", f.why], ["drill", f.drill]] as const) {
-      errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], WORDING_FOCUS_TOKENS, { shown, record: field !== "drill" }));
-      errors.push(...checkMoves(`${at}.${field}`, text, allowed));
+      const ctx = { shown: field === "why" ? withSpots : shown, record: field !== "drill" };
+      errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], WORDING_FOCUS_TOKENS, ctx));
     }
-    if (item) errors.push(...checkSteps(at, f.steps, item.blindSpots ?? [], shown, allowed));
+    errors.push(...itemMoveErrors(at, f, allowed));
+    if (item) errors.push(...checkSteps(at, f.steps, item.blindSpots ?? [], withSpots));
   });
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value };
 }
 
+/** Move-rule errors for an item's title, why, drill and steps against its examples' moves and squares. */
+function itemMoveErrors(at: string, f: WordingText["focus"][number], allowed: ExampleMoves): string[] {
+  const errors: string[] = [];
+  for (const [field, text] of [["title", f.title], ["why", f.why], ["drill", f.drill]] as const) {
+    errors.push(...checkMoves(`${at}.${field}`, text, allowed));
+  }
+  f.steps.forEach((s, j) => errors.push(...checkMoves(`${at}.steps[${j}] (${s.blindSpot})`, s.text, allowed)));
+  return errors;
+}
+
+/**
+ * Whether kept text still names only moves and squares of the item's current examples. A
+ * later revision refreshes a kept example's story (a deeper check can change its lines), so
+ * text written for the old story may name a move the page no longer shows.
+ */
+export function namesOnlyShown(f: WordingText["focus"][number], examples: readonly FocusExample[]): boolean {
+  return itemMoveErrors("", f, exampleMoves(examples)).length === 0;
+}
+
 /**
  * Errors for an item's steps: exactly one per blind spot, in the item's blind-spot order; each
- * within the step limit, with step tokens only, the drill's number rules and the move rule.
+ * within the step limit, with step tokens only and the drill's number rules (the move rule is checked with the item's other fields).
  */
 function checkSteps(
   at: string,
   steps: readonly StepText[],
   blindSpots: readonly { id: string }[],
   shown: ReadonlySet<number>,
-  allowed: ExampleMoves,
 ): string[] {
   const errors: string[] = [];
   const expected = blindSpots.map((b) => b.id);
@@ -612,7 +641,6 @@ function checkSteps(
   steps.forEach((s, j) => {
     const where = `${at}.steps[${j}] (${s.blindSpot})`;
     errors.push(...checkField(where, s.text, LIMITS.step, STEP_TOKENS, { shown, record: false }));
-    errors.push(...checkMoves(where, s.text, allowed));
   });
   return errors;
 }

@@ -1008,3 +1008,36 @@ describe("template steps", () => {
     );
   });
 });
+
+describe("scope of the story allowances and blind-spot values", () => {
+  it("does not let a storied example's fact add moves or squares", () => {
+    const item = allowedItem();
+    item.examples = [{ ...item.examples[0]!, evidence: "allowed Bb4+ Kd1 (fork) on c3" }, item.examples[1]!];
+    const d = draft([item, missedItem()]);
+    expect(storiedErrors(storiedAnswer({ a: { why: "Bb4+ was the shot." } }), d)).toEqual([
+      expect.stringMatching(/why names Bb4\+: this move is not in the examples shown/),
+    ]);
+    expect(storiedErrors(storiedAnswer({ a: { why: "The square c3 mattered." } }), d)).toEqual([
+      expect.stringMatching(/why names the square c3/),
+    ]);
+  });
+
+  it("checks an item's why and steps against its blind-spot numbers, and its drill and the summary without them", () => {
+    const item = { ...allowedItem(), blindSpots: [spot("answer-check", { count: 10 }), spot("moved-piece-lost")] };
+    const d = draft([item, missedItem()]);
+    const drill = "Play a block of 10 bullet games this week, then 10 games a day at rapid.";
+    expect(storiedErrors(storiedAnswer({ a: { drill } }), d)).toEqual([]);
+    expect(storiedErrors(storiedAnswer({ summary: "Play 10 games, then look back." }), d)).toEqual([]);
+    expect(storiedErrors(storiedAnswer({ a: { why: "It happened in 10 games." } }), d)).toEqual([
+      expect.stringMatching(/allowed-tactic\)\.why, the sentence "It happened in 10 games"/),
+    ]);
+    const steps = [{ blindSpot: "answer-check", text: "You allowed a check in 10 games; list their checks first." }, { blindSpot: "moved-piece-lost", text: STEP_B }];
+    expect(storiedErrors(storiedAnswer({ a: { steps } }), d)).toHaveLength(1);
+    // Another item's blind-spot number is not this item's.
+    expect(storiedErrors(storiedAnswer({ b: { why: "It happened in 10 games." } }), d)).toEqual([]);
+  });
+
+  it("words moved-after-capture as the capture it is", () => {
+    expect(TEMPLATE_STEPS["moved-after-capture"]).toMatch(/^Before you capture, look at the square you take on: who can take back there/);
+  });
+});

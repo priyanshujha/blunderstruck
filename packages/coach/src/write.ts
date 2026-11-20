@@ -12,7 +12,7 @@ import { pickModel } from "./models";
 import { buildPrompt, WORDING_SCHEMA } from "./prompt";
 import { type CoachProvider, ProviderResponseError } from "./provider";
 import { templateStep, templateWording } from "./templates";
-import { parseWording, type WordingText } from "./validate";
+import { namesOnlyShown, parseWording, type WordingText } from "./validate";
 
 /** Model calls allowed for one period: the plan, one repair and one reword. */
 const MAX_CALLS = 3;
@@ -22,12 +22,6 @@ type ItemText = WordingText["focus"][number];
 export interface WriteOptions {
   /** Told why model wording was not used: the provider's (already redacted) error or the validation failure. */
   onModelError?: (message: string) => void;
-  /**
-   * Every example each pattern could show this period, by pattern id, with fresh computed
-   * fields. A later revision that keeps an item's text keeps its examples, looked up here and in
-   * the draft's own examples; an item whose kept example is in neither is worded again.
-   */
-  candidates?: Readonly<Record<string, readonly FocusExample[]>>;
 }
 
 interface Attempt {
@@ -130,20 +124,15 @@ function assemble(
 const byId = (focus: readonly ItemText[]) => new Map(focus.map((f) => [f.patternId, f]));
 
 /**
- * The previous item's examples, found again among this period's candidates (same game and
- * ply, fresh computed fields), or undefined when one of them is gone. A previous item with no
- * examples named none, so it takes the draft's.
+ * The previous item's examples, found again among the draft's (same game and ply, fresh
+ * computed fields), or undefined when one of them is gone. A previous item with no examples
+ * named none, so it takes the draft's.
  */
-function keptExamples(
-  prev: FocusItem,
-  item: FocusChoice,
-  candidates: readonly FocusExample[] | undefined,
-): FocusExample[] | undefined {
+function keptExamples(prev: FocusItem, item: FocusChoice): FocusExample[] | undefined {
   if (prev.examples.length === 0) return item.examples;
-  const pool = [...item.examples, ...(candidates ?? [])];
   const out: FocusExample[] = [];
   for (const e of prev.examples) {
-    const found = pool.find((c) => c.gameId === e.gameId && c.ply === e.ply);
+    const found = item.examples.find((c) => c.gameId === e.gameId && c.ply === e.ply);
     if (!found) return undefined;
     out.push(found);
   }
@@ -165,8 +154,9 @@ function keptText(prev: FocusItem, item: FocusChoice): ItemText {
  * gets template wording and no call.
  *
  * Kept text stays with what it describes. An item keeps its model text only together with its
- * examples (same game and ply, from the draft or `opts.candidates`); when one is gone the item
- * is worded again in the reword call, or gets template text when no call is left. Steps are
+ * examples (same game and ply, found in the draft), and only while every move and square it
+ * names is still in those examples' refreshed stories; otherwise the item is worded again in
+ * the reword call, or gets template text when no call is left. Steps are
  * kept per blind spot: a blind spot no longer selected loses its step, and a newly selected
  * one gets the template step, with no call.
  *
@@ -224,14 +214,15 @@ export async function writeReport(
   const texts = new Map<string, ItemText>();
   const examples = new Map<string, FocusExample[]>();
   const wordedFor: string[] = [];
-  /** Model-worded items whose kept examples are gone: worded again. */
+  /** Model-worded items whose kept examples are gone, or whose text names a move they no longer show: worded again. */
   const stale: string[] = [];
   for (const item of draft.focus) {
     const id = item.patternId;
     const prev = prevItems.get(id);
-    const kept = prev && prevModelIds.has(id) ? keptExamples(prev, item, opts.candidates?.[id]) : undefined;
-    if (prev && kept) {
-      texts.set(id, keptText(prev, item));
+    const kept = prev && prevModelIds.has(id) ? keptExamples(prev, item) : undefined;
+    const text = prev && kept ? keptText(prev, item) : undefined;
+    if (text && kept && namesOnlyShown(text, kept)) {
+      texts.set(id, text);
       examples.set(id, kept);
       wordedFor.push(id);
     } else {

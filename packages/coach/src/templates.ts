@@ -341,7 +341,7 @@ export const TEMPLATE_STEPS: Record<BlindSpotId, string> = {
   "moved-onto-attacked":
     "Before you put a piece on a square, check whether an enemy piece already attacks that square, and whether yours is defended enough there.",
   "moved-after-capture":
-    "After every capture, stop and look again before your next move: which of your pieces are loose now, and what can be taken?",
+    "Before you capture, look at the square you take on: who can take back there, and what do you lose if they do?",
   "left-after-attack":
     "When the opponent attacks one of your pieces, answer that first: move it, defend it or trade it before you play your own idea.",
   undefended:

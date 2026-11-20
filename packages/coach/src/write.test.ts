@@ -1,7 +1,9 @@
 import {
   type BlindSpot,
+  type ExampleStory,
   type FocusChoice,
   type FocusExample,
+  type MoveDetail,
   PATTERN_IDS,
   type PatternStat,
   type PeriodStats,
@@ -382,12 +384,11 @@ describe("writeReport with blind spots and examples", () => {
     expect(r.focus[0]!.title).toBe("fixed title hung-piece");
   });
 
-  it("keeps kept text with its examples, refreshed from the candidates, and makes no call", async () => {
+  it("keeps kept text with its examples in their order, refreshed from the draft, and makes no call", async () => {
     const first = await writeReport(drafted([{ id: "hung-piece", examples: [A, B] }]), stub([good(["hung-piece"])]));
-    const next = drafted([{ id: "hung-piece", examples: [C] }], 1);
-    const fresh = [ex("hung-piece", "g2", 20, 71), ex("hung-piece", "g1", 10, 64), C];
+    const fresh = [ex("hung-piece", "g2", 20, 71), ex("hung-piece", "g1", 10, 64)];
     const p = stub([]);
-    const r = await writeReport(next, p, first, { candidates: { "hung-piece": fresh } });
+    const r = await writeReport(drafted([{ id: "hung-piece", examples: fresh }], 1), p, first);
     expect(p.requests).toHaveLength(0);
     expect(r.focus[0]!.title).toBe("model title hung-piece");
     expect(r.focus[0]!.examples).toEqual([fresh[1], fresh[0]]);
@@ -490,5 +491,79 @@ describe("writeReport with blind spots and examples", () => {
       expect(() => WeeklyReport.parse(report)).not.toThrow();
     }
     expect(p.requests.length).toBe(3);
+  });
+});
+
+/** A move for a story; only the fields the move rule reads matter here. */
+function mv(san: string, uci: string, piece: MoveDetail["piece"], color: MoveDetail["color"]): MoveDetail {
+  return { san, uci, from: uci.slice(0, 2), to: uci.slice(2, 4), piece, color, check: san.includes("+"), mate: false, fenAfter: `after-${uci}` };
+}
+
+/** F1 as revision 0 saw it (better Re1, covering e4) and after a deeper check changed the better line to Qe2. */
+function f1(better: MoveDetail[], reason: ExampleStory["betterReason"]): FocusExample {
+  const story: ExampleStory = {
+    played: mv("Qd2", "d1d2", "queen", "white"),
+    punish: [mv("Ne4+", "f6e4", "knight", "black"), mv("Ke1", "f2e1", "king", "white"), mv("Nxd2", "e4d2", "knight", "black")],
+    replyFound: true,
+    better,
+    targets: [],
+    gain: -6,
+    ...(reason ? { betterReason: reason } : {}),
+    winPctBefore: 96,
+    winPctAfter: 28,
+    depth: 18,
+  };
+  return { patternId: "allowed-tactic", gameId: "g-f1", ply: 21, winPctLoss: 68, fen: "r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2Q3R w - - 0 1", played: "Qd2", story };
+}
+
+describe("writeReport when a kept example's story changes", () => {
+  const before = f1([mv("Re1", "h1e1", "rook", "white")], { kind: "covers-square", square: "e4" });
+  const after = f1([mv("Qe2", "d1e2", "queen", "white")], { kind: "holds" });
+  const answer = (d: ReportDraft, why: string) =>
+    JSON.stringify({ ...JSON.parse(stepped(d, ["allowed-tactic"])), focus: JSON.parse(stepped(d, ["allowed-tactic"])).focus.map((f: object) => ({ ...f, why })) });
+
+  async function revisionZero() {
+    const d0 = drafted([{ id: "allowed-tactic", examples: [before] }]);
+    const first = await writeReport(d0, stub([answer(d0, "Re1 would have kept the queen safe.")]));
+    expect(first.wording).toMatchObject({ source: "model", calls: 1 });
+    return first;
+  }
+
+  it("keeps the text while every move it names is still in the refreshed story", async () => {
+    const d0 = drafted([{ id: "allowed-tactic", examples: [before] }]);
+    const first = await writeReport(d0, stub([answer(d0, "Qd2 walked into Ne4+.")]));
+    const next = drafted([{ id: "allowed-tactic", examples: [after] }], 1);
+    const p = stub([]);
+    const r = await writeReport(next, p, first);
+    expect(p.requests).toHaveLength(0);
+    expect(r.focus[0]!.why).toBe("Qd2 walked into Ne4+.");
+    expect(r.focus[0]!.examples).toEqual([after]);
+  });
+
+  it("rewords the item when its kept text names a move the refreshed story no longer shows", async () => {
+    const first = await revisionZero();
+    const next = drafted([{ id: "allowed-tactic", examples: [after] }], 1);
+    const p = auto(() => next);
+    const r = await writeReport(next, p, first);
+    expect(p.requests).toHaveLength(1);
+    expect(p.requests[0]!.user).toBe(buildPrompt(next, ["allowed-tactic"]).user);
+    expect(p.requests[0]!.user).toContain("Qe2 (your queen d1-e2)");
+    expect(r.focus[0]!.title).toBe("call1 title allowed-tactic");
+    expect(r.focus[0]!.why).not.toContain("Re1");
+    expect(r.focus[0]!.examples).toEqual([after]);
+    expect(r.wording).toMatchObject({ source: "model", wordedFor: ["allowed-tactic"], calls: 2 });
+  });
+
+  it("gives that item template text when no call is left", async () => {
+    const first = await revisionZero();
+    const capped = { ...first, wording: { ...first.wording, calls: 3 } };
+    const next = drafted([{ id: "allowed-tactic", examples: [after] }], 1);
+    const p = auto(() => next);
+    const r = await writeReport(next, p, capped);
+    expect(p.requests).toHaveLength(0);
+    expect(r.focus[0]!.why).toBe(templateWording(next).focus[0]!.why);
+    expect(r.focus[0]!.title).toBe(templateWording(next).focus[0]!.title);
+    expect(r.wording.calls).toBe(3);
+    expect(r.wording.wordedFor).toEqual([]);
   });
 });
