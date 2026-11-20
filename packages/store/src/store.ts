@@ -46,6 +46,8 @@ export interface Store {
     settingsKey: string,
     ends: readonly string[],
   ): Promise<Map<string, PeriodStats>>;
+  /** Every stored week for one track and settings key, `end` ascending. */
+  listPeriodStats(trackKey: string, settingsKey: string): Promise<PeriodStats[]>;
   putPeriodStats(trackKey: string, settingsKey: string, s: PeriodStats): Promise<void>;
   /** Replaces the stored report only when its revision is higher; otherwise "stale". */
   putReport(r: WeeklyReport): Promise<"stored" | "stale">;
