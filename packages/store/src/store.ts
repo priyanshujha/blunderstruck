@@ -49,8 +49,12 @@ export interface Store {
   /** Every stored week for one track and settings key, `end` ascending. */
   listPeriodStats(trackKey: string, settingsKey: string): Promise<PeriodStats[]>;
   putPeriodStats(trackKey: string, settingsKey: string, s: PeriodStats): Promise<void>;
-  /** Replaces the stored report only when its revision is higher; otherwise "stale". */
-  putReport(r: WeeklyReport): Promise<"stored" | "stale">;
+  /**
+   * Replaces the stored report for the same period only when its revision is higher; otherwise
+   * "stale". Stores nothing and returns "conflict" when the report's period overlaps a stored
+   * report of the same track with a different period end (periods that only touch are fine).
+   */
+  putReport(r: WeeklyReport): Promise<"stored" | "stale" | "conflict">;
   /** The track's reports, sorted by `periodEnd` ascending. */
   reports(t: Track): Promise<WeeklyReport[]>;
   latestReport(t: Track): Promise<WeeklyReport | undefined>;

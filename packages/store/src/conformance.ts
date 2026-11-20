@@ -334,6 +334,33 @@ export function storeConformance(make: () => Promise<Store>): void {
       expect(all.map((r) => r.revision)).toEqual([2]);
     });
 
+    it("refuses a report whose period overlaps another stored period of the track", async () => {
+      const first = fixtureReport("2026-11-19T00:00:00.000Z");
+      expect(await store.putReport(first)).toBe("stored");
+      const nearly = fixtureReport("2026-11-19T00:00:00.001Z", 3);
+      expect(await store.putReport(nearly)).toBe("conflict");
+      const inside = { ...fixtureReport("2026-11-16T00:00:00.000Z"), periodStart: "2026-11-14T00:00:00.000Z" };
+      expect(await store.putReport(inside)).toBe("conflict");
+      expect((await store.reports(TRACK)).map((r) => r.periodEnd)).toEqual(["2026-11-19T00:00:00.000Z"]);
+      // Another track is never in conflict.
+      expect(await store.putReport(fixtureReport("2026-11-19T00:00:00.001Z", 0, { ...TRACK, timeClass: "rapid" }))).toBe(
+        "stored",
+      );
+    });
+
+    it("accepts periods that only touch, and a higher revision of the same period", async () => {
+      expect(await store.putReport(fixtureReport("2026-11-19T00:00:00.000Z"))).toBe("stored");
+      expect(await store.putReport(fixtureReport("2026-11-12T00:00:00.000Z"))).toBe("stored");
+      expect(await store.putReport(fixtureReport("2026-11-26T00:00:00.000Z"))).toBe("stored");
+      const widened = { ...fixtureReport("2026-11-19T00:00:00.000Z", 1), periodStart: "2026-11-12T00:00:00.000Z" };
+      expect(await store.putReport(widened)).toBe("stored");
+      expect((await store.reports(TRACK)).map((r) => [r.periodEnd, r.revision])).toEqual([
+        ["2026-11-12T00:00:00.000Z", 0],
+        ["2026-11-19T00:00:00.000Z", 1],
+        ["2026-11-26T00:00:00.000Z", 0],
+      ]);
+    });
+
     it("lists a track's reports by period end and returns the latest", async () => {
       const other: Track = { ...TRACK, timeClass: "rapid" };
       await store.putReport(fixtureReport("2026-11-19T00:00:00.000Z"));

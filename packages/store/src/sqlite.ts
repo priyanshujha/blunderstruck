@@ -288,16 +288,25 @@ export async function openSqliteStore(path: string, opts: OpenSqliteOptions = {}
     async putReport(r) {
       const parsed = WeeklyReport.parse(r);
       const tk = trackKey(parsed.track);
+      const start = instant(parsed.periodStart);
       const end = instant(parsed.periodEnd);
       return tx(() => {
+        const overlap = db
+          .prepare(
+            `SELECT 1 FROM reports
+             WHERE track_key = ? AND period_end <> ? AND period_start < ? AND period_end > ? LIMIT 1`,
+          )
+          .get(tk, end, end, start);
+        if (overlap) return "conflict" as const;
         const existing = db
           .prepare("SELECT revision FROM reports WHERE track_key = ? AND period_end = ?")
           .get(tk, end) as { revision: number } | undefined;
         if (existing && Number(existing.revision) >= parsed.revision) return "stale" as const;
         db.prepare(
-          `INSERT INTO reports (track_key, period_end, revision, json) VALUES (?, ?, ?, ?)
-           ON CONFLICT (track_key, period_end) DO UPDATE SET revision = excluded.revision, json = excluded.json`,
-        ).run(tk, end, parsed.revision, JSON.stringify(parsed));
+          `INSERT INTO reports (track_key, period_start, period_end, revision, json) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (track_key, period_end) DO UPDATE SET
+             period_start = excluded.period_start, revision = excluded.revision, json = excluded.json`,
+        ).run(tk, start, end, parsed.revision, JSON.stringify(parsed));
         return "stored" as const;
       });
     },

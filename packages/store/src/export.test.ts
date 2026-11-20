@@ -125,6 +125,16 @@ describe("export and import", () => {
     await expect(importStore(memoryStore(), from(broken))).rejects.toThrow(/line 4: not valid JSON/);
   });
 
+  it("fails on a report line that overlaps a stored report, with its line number", async () => {
+    const lines = await dump(await filled(memoryStore()));
+    const overlapping = JSON.stringify({ type: "report", data: fixtureReport("2026-11-19T00:00:00.001Z") });
+    const target = await openSqliteStore(":memory:");
+    await expect(importStore(target, from([...lines, overlapping]))).rejects.toThrow(
+      new RegExp(`line ${lines.length + 1}: .*overlaps`),
+    );
+    await target.close();
+  });
+
   it("refuses an export from a newer schema, or one without a header", async () => {
     const header = JSON.stringify({
       type: "header",

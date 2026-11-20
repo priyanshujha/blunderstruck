@@ -116,7 +116,9 @@ export async function importStore(
           break;
         case "report":
           await flush();
-          await store.putReport(line.data);
+          if ((await store.putReport(line.data)) === "conflict") {
+            throw new Error("this report's period overlaps a stored report of the same track");
+          }
           break;
       }
     } catch (err) {

@@ -160,6 +160,14 @@ export function memoryStore(): Store {
       open();
       const parsed = WeeklyReport.parse(r);
       const key = reportKey(parsed);
+      const tk = trackKey(parsed.track);
+      const start = instant(parsed.periodStart);
+      const end = instant(parsed.periodEnd);
+      for (const other of reports.values()) {
+        if (trackKey(other.track) !== tk) continue;
+        const otherEnd = instant(other.periodEnd);
+        if (otherEnd !== end && instant(other.periodStart) < end && otherEnd > start) return "conflict";
+      }
       const existing = reports.get(key);
       if (existing && existing.revision >= parsed.revision) return "stale";
       reports.set(key, parsed);

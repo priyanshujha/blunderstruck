@@ -56,6 +56,7 @@ const MIGRATIONS: readonly ((db: DatabaseSync) => void)[] = [
       );
       CREATE TABLE reports (
         track_key TEXT NOT NULL,
+        period_start TEXT NOT NULL,
         period_end TEXT NOT NULL,
         revision INTEGER NOT NULL,
         json TEXT NOT NULL,
