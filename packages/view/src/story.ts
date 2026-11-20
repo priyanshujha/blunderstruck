@@ -183,15 +183,22 @@ function youSentence(story: ExampleStory, patternId: string | undefined): StoryS
 }
 
 /** The opponent's reply that punished the move: "That let the knight jump to e4 with check, …". */
-function theySentence(story: ExampleStory, m: MoveDetail, isKey: boolean, patternId: string | undefined): StorySentence {
+function theySentence(
+  story: ExampleStory,
+  m: MoveDetail,
+  isKey: boolean,
+  patternId: string | undefined,
+  happened: boolean,
+): StorySentence {
   const player = story.played.color;
   const s = new Sentence(player);
   s.willName(m.captured, player);
   if (isKey) for (const t of story.targets) s.willName(t.piece, t.color);
   const hungReply = patternId === "hung-piece" && story.lost && m.captured && m.to === story.lost.square;
   if (hungReply) {
-    // "Their knight took your knight."
-    s.named(m.piece, m.color).text(" took ").named(m.captured!, player).text(`${checkWords(m)}.`);
+    // "Their knight took your knight." only when it did; otherwise what the move allowed.
+    if (happened) s.named(m.piece, m.color).text(" took ").named(m.captured!, player).text(`${checkWords(m)}.`);
+    else s.text("That let ").named(m.piece, m.color).text(" take ").named(m.captured!, player).text(`${checkWords(m)}.`);
     return s.done();
   }
   if (m.castle) {
@@ -285,6 +292,15 @@ function reasonText(s: Sentence, r: BetterReason, story: ExampleStory, player: C
       else s.text("It forces mate.");
       return;
     case "wins": {
+      // The move played won material too: say only what the better move wins beyond it.
+      if (story.gain >= 1) {
+        const extra = (story.betterGain ?? r.gain ?? 0) - story.gain;
+        const piece = pieceWorth(story, extra);
+        if (piece) s.text("It wins a ").piece(piece, opp).text(" more than your move did.");
+        else if (extra >= 1) s.text(materialWorth("It wins material", extra).replace(/\.$/, " more than your move did."));
+        else s.text("It wins material.");
+        return;
+      }
       const named = piecesTellIt(r.piece, r.gave, r.gain ?? story.betterGain);
       if (named) {
         s.text("It wins their ").piece(named.won, opp);
@@ -362,6 +378,18 @@ function betterSentence(story: ExampleStory): StorySentence | undefined {
 const line = (tag: StoryTag, sentence: StorySentence): StoryLine => ({ tag, ...sentence });
 
 /**
+ * Whether the opponent played the punishment: the engine's reply, or another move that took
+ * the piece lost (then `other` is that move, as the game had it).
+ */
+function punishment(story: ExampleStory): { found: boolean; other?: MoveDetail } {
+  const a = story.actualReply;
+  const takesLost = !!a && !!story.lost && !!a.captured && a.to === story.lost.square && a.color !== story.played.color;
+  const differs = !!a && a.uci !== story.punish[0]?.uci;
+  if (takesLost && differs) return { found: true, other: a };
+  return { found: story.replyFound || takesLost };
+}
+
+/**
  * An example told move by move: the player's move, the reply that punished it, what followed
  * (or that the opponent missed it), and the better move with its reason. Pure function of the story.
  */
@@ -370,9 +398,14 @@ export function storyLines(story: ExampleStory, patternId?: string): StoryLine[]
   const key = keyMove(story);
   const keyIndex = key.line === "punish" && key.move ? key.index : undefined;
   const reply = story.punish[0];
-  if (reply) {
-    out.push(line("they", theySentence(story, reply, keyIndex === 0, patternId)));
-    if (story.replyFound) {
+  const { found, other: actual } = punishment(story);
+  if (actual) {
+    // The punishment was played with another move: tell that move; the engine's continuation
+    // after its own reply did not happen, so it is not told.
+    out.push(line("they", theySentence(story, actual, false, patternId, true)));
+  } else if (reply) {
+    out.push(line("they", theySentence(story, reply, keyIndex === 0, patternId, found)));
+    if (found) {
       const then = thenSentence(story, 1, keyIndex);
       if (then) out.push(line("then", then));
     } else {
@@ -390,6 +423,37 @@ export function winChances(story: Pick<ExampleStory, "winPctBefore" | "winPctAft
 }
 
 const VALUE: Record<PieceRole, number> = { pawn: 1, knight: 3, bishop: 3, rook: 5, queen: 9, king: 0 };
+
+/** Material the better line wins beyond the line played, in pawns. */
+const missedBy = (story: ExampleStory): number => (story.betterGain ?? 0) - story.gain;
+
+/**
+ * The opponent's piece worth exactly `diff` pawns that the player takes in the better line, or
+ * undefined when no single piece is the difference.
+ */
+function pieceWorth(story: ExampleStory, diff: number): PieceRole | undefined {
+  if (diff < 1 || !Number.isInteger(diff)) return undefined;
+  const player = story.played.color;
+  return story.better.find((m) => m.color === player && m.captured && m.captured !== "king" && VALUE[m.captured] === diff)?.captured;
+}
+
+/**
+ * The minor piece a rook went for, when the story is exactly that trade: a knight or bishop of
+ * theirs takes the rook, the player takes that piece back, and nothing else changes hands.
+ */
+function exchangeOf(story: ExampleStory): "knight" | "bishop" | undefined {
+  // A rook for a minor piece is two pawns net, whether or not the builder names the rook as lost.
+  if (story.gain !== -2 || (story.lost && story.lost.piece !== "rook")) return undefined;
+  const player = story.played.color;
+  const moves = [story.played, ...story.punish];
+  const captures = moves.filter((m) => m.captured);
+  if (captures.length !== 2) return undefined;
+  const take = moves.findIndex((m) => m.color !== player && m.captured === "rook");
+  const taker = moves[take];
+  if (!taker || (taker.piece !== "knight" && taker.piece !== "bishop")) return undefined;
+  const back = moves.slice(take + 1).some((m) => m.color === player && m.to === taker.to && m.captured === taker.piece);
+  return back ? taker.piece : undefined;
+}
 
 /**
  * The pieces to name for a material swing, or undefined when no single piece tells it: the
@@ -427,18 +491,31 @@ export function storyCost(story: ExampleStory, patternId?: string): StoryCost {
   const missed = patternId !== undefined && blindSpotFamilyOf(patternId) === "missed";
   const r = story.betterReason;
   // Only the punishment the opponent played (or a missed chance, which is gone either way) cost anything.
-  const cost = missed || story.replyFound ? "It cost" : "It could have cost";
+  const cost = missed || punishment(story).found ? "It cost" : "It could have cost";
+  const exchange = !missed ? exchangeOf(story) : undefined;
   const chances = winChances(story);
   if (!missed && story.punish.at(-1)?.mate) {
     s.text(story.replyFound ? "It allowed checkmate." : "It could have allowed checkmate.");
+  } else if (exchange) {
+    s.text(`${cost} the exchange (a `).piece("rook", player).text(" for a ").piece(exchange, other(player)).text(").");
   } else if (!missed && story.lost) {
     s.text(`${cost} `).named(story.lost.piece, story.lost.color).text(".");
   } else if (missed && r?.kind === "mates") {
     s.text("It cost a forced mate.");
-  } else if (missed && r?.kind === "wins") {
-    const named = piecesTellIt(r.piece, r.gave, r.gain ?? story.betterGain);
-    if (named) s.text("It cost the chance to win their ").piece(named.won, other(player)).text(".");
-    else s.text(materialWorth("It cost the chance to win material", r.gain ?? story.betterGain));
+  } else if (missed && missedBy(story) >= 1) {
+    // What the better line won beyond what the move played won.
+    const diff = missedBy(story);
+    const piece = pieceWorth(story, diff);
+    const traded = piece ? undefined : piecesTellIt(r?.kind === "wins" ? r.piece : undefined, r?.gave, diff);
+    if (piece) {
+      s.text("It cost the chance to win a ").piece(piece, other(player)).text(".");
+    } else if (traded) {
+      s.text("It cost the chance to win their ").piece(traded.won, other(player));
+      if (traded.gave) s.text(" for your ").piece(traded.gave, player);
+      s.text(".");
+    } else {
+      s.text(materialWorth("It cost the chance to win material", diff));
+    }
   } else if (!missed && story.gain <= -1) {
     const n = Math.round(-story.gain);
     s.text(n === 1 ? `${cost} a pawn.` : `${cost} about ${n} pawns of material.`);

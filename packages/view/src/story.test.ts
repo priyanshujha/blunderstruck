@@ -333,11 +333,32 @@ describe("storyCost", () => {
     expect(c.detail).toBe("Your winning chances went from 94% to 26%.");
   });
 
+  it("calls a rook for a minor piece the exchange, and only that", () => {
+    const rookFor = (taker: "knight" | "bishop", extra?: MoveDetail): ExampleStory => ({
+      ...F1,
+      played: mv({ san: "Rd4", from: "d1", to: "d4", piece: "rook", color: "white" }),
+      punish: [
+        mv({ san: "xd4", from: "f5", to: "d4", piece: taker, color: "black", captured: "rook" }),
+        mv({ san: "exd4", from: "e3", to: "d4", piece: "pawn", color: "white", captured: taker }),
+        ...(extra ? [extra] : []),
+      ],
+      lost: undefined,
+      gain: -2,
+    });
+    expect(storyCost(rookFor("bishop")).text).toBe("It cost the exchange (a rook for a bishop).");
+    expect(storyCost({ ...rookFor("knight"), replyFound: false }).text).toBe("It could have cost the exchange (a rook for a knight).");
+    // A third capture is not the plain exchange.
+    const more = rookFor("knight", mv({ san: "Rxa2", from: "a8", to: "a2", piece: "rook", color: "black", captured: "pawn" }));
+    expect(storyCost({ ...more, gain: -2 }).text).toBe("It cost about 2 pawns of material.");
+  });
+
   it("says checkmate, a missed win, material, or winning chances", () => {
     const mate = { ...F1, punish: [mv({ san: "Qh2#", from: "h4", to: "h2", piece: "queen", color: "black", check: true, mate: true })] };
     expect(storyCost(mate).text).toBe("It allowed checkmate.");
     expect(storyCost({ ...mate, replyFound: false }).text).toBe("It could have allowed checkmate.");
-    expect(storyCost(F3, "missed-tactic").text).toBe("It cost the chance to win their queen.");
+    expect(storyCost(F3, "missed-tactic").text).toBe("It cost the chance to win their queen for your knight.");
+    // Nothing beyond what the move played won: no material claim.
+    expect(storyCost({ ...F3, gain: 6 }, "missed-tactic").text).toBe("Your winning chances went from 76% to 8%.");
     expect(storyCost({ ...F3, betterReason: { kind: "mates", mateIn: 2 } }, "missed-mate").text).toBe("It cost a forced mate.");
     expect(storyCost({ ...F1, lost: undefined, gain: -1 }).text).toBe("It cost a pawn.");
     expect(storyCost({ ...F1, lost: undefined, gain: -3 }).text).toBe("It cost about 3 pawns of material.");
@@ -346,7 +367,7 @@ describe("storyCost", () => {
     const positional = storyCost({ ...F1, lost: undefined, gain: 0 });
     expect(positional.text).toBe("Your winning chances went from 94% to 26%.");
     expect(positional.detail).toBeUndefined();
-    expect(storyCost({ ...F3, betterReason: { kind: "wins", piece: "bishop", gave: "bishop", gain: 2 } }, "missed-tactic").text).toBe(
+    expect(storyCost({ ...F3, betterGain: 2, betterReason: { kind: "wins", piece: "bishop", gave: "bishop", gain: 2 } }, "missed-tactic").text).toBe(
       "It cost the chance to win material worth about 2 pawns.",
     );
   });
