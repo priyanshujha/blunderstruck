@@ -235,6 +235,21 @@ export function bandOf(
   return { rating, band: "club", bandSource: "default" };
 }
 
+/**
+ * The span blind spots are computed over: from the earlier of the period's start and six weeks
+ * before its end, to its end. A weekly report uses its six weeks; a longer first report uses
+ * its whole period.
+ */
+export function blindSpotSpan(periodStart: string, periodEnd: string): { start: string; end: string } {
+  const sixWeeks = weekBuckets(iso(periodEnd)).at(-1)!.start;
+  return { start: iso(Math.min(ms(periodStart), ms(sixWeeks))), end: iso(periodEnd) };
+}
+
+/** The games played within `span`, both ends included. */
+export function inSpan(games: readonly GameRecord[], span: { start: string; end: string }): GameRecord[] {
+  return games.filter((g) => ms(g.playedAt) >= ms(span.start) && ms(g.playedAt) <= ms(span.end));
+}
+
 export interface DraftInput {
   store: Store;
   track: Track;
@@ -326,14 +341,14 @@ export async function buildDraft(input: DraftInput): Promise<Draft> {
     const a = analyses.get(g.id);
     if (a) periodAnalyses.set(g.id, a);
   }
-  // Blind spots and example stories read the six weeks: every analysed game of the player in them.
+  // Blind spots and example stories read the window's games: every analysed game of the player in it.
+  const span = blindSpotSpan(periodStart, end);
   const windowGames: PlayerGame[] = [];
-  for (const g of weekGamesPool) {
+  for (const g of inSpan(weekGamesPool, span)) {
     const a = analyses.get(g.id);
     const pg = a ? toPlayerGame(g, a, track.username) : null;
     if (pg) windowGames.push(pg);
   }
-  const windowStart = weekBuckets(end).at(-1)!.start;
   // A later revision of this period keeps the examples of the revision before it, where still findings.
   const earlierRevision = input.history
     .filter((r) => ms(r.periodEnd) === ms(end) && r.revision < input.revision)
@@ -355,8 +370,8 @@ export async function buildDraft(input: DraftInput): Promise<Draft> {
     window: {
       games: windowGames,
       findings: summarize(track.username, windowGames).findings,
-      start: iso(windowStart),
-      end,
+      start: span.start,
+      end: span.end,
     },
     ...(keepExamples ? { keepExamples } : {}),
   });
