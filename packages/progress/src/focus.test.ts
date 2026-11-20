@@ -13,7 +13,10 @@ import {
   type RetiredFocus,
   type WeeklyReport,
 } from "@blunderstruck/contracts";
+import type { PlayerGame } from "@blunderstruck/patterns";
 import { describe, expect, it } from "vitest";
+// The patterns package's own test helpers: invented games through the real analysis, stub engine.
+import { fixtureGame } from "../../patterns/src/test-fixtures";
 import { chooseFocus, cooldownPatterns, type FocusInput } from "./focus";
 
 const X = "hung-piece";
@@ -26,17 +29,21 @@ const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const end = (i: number) => new Date(Date.UTC(2026, 0, 1) + i * 7 * 24 * 3600 * 1000).toISOString();
 const NOW = end(20);
 
+/** Two occurrences per affected game, so the goal in games and the rate per 100 moves agree here. */
 const stat = (patternId: string, games: number, moves: number, occurrences: number): PatternStat => ({
   patternId,
   games,
   moves,
-  gamesAffected: Math.min(occurrences, games),
+  gamesAffected: Math.min(Math.ceil(occurrences / 2), games),
   occurrences,
   per100Moves: moves === 0 ? 0 : (occurrences * 100) / moves,
   avgWinPctLoss: 20,
 });
 
-/** A held item: started at 4.0 per 100 moves, target 3.0. */
+/**
+ * A held item: started at 4.0 per 100 moves (20 of 30 games), target 3.0; its derived goal is
+ * {5, 10}, met at 25 occurrences (13 games) and not at 35 (18 games).
+ */
 const BASELINE = stat(X, 30, 1000, 40);
 const TARGET = 3;
 
@@ -61,7 +68,7 @@ function prios(ranked: readonly [string, number][]): PatternPriority[] {
   return out;
 }
 
-type HeldItem = { id: string; since: string; baseline?: PatternStat; target?: number };
+type HeldItem = { id: string; since: string; baseline?: PatternStat; target?: number; goal?: { per: number; of: number } };
 
 function report(opts: {
   i: number;
@@ -77,6 +84,7 @@ function report(opts: {
     since: f.since,
     baseline: f.baseline ?? BASELINE,
     target: f.target ?? TARGET,
+    ...(f.goal ? { goal: f.goal } : {}),
   }));
   const progress: PatternProgress[] = (opts.progress ?? []).map((p) => ({
     patternId: p.id,
@@ -161,6 +169,7 @@ function input(over: Partial<FocusInput> & { history: WeeklyReport[] }): FocusIn
     band: "club",
     periodEnd: NOW,
     analyses: new Map(),
+    window: { games: [], findings: [], start: end(14), end: NOW },
     ...over,
   };
 }
@@ -589,6 +598,207 @@ describe("chooseFocus: determinism", () => {
       priorities: [...priorities].reverse(),
       current: { ...base.current, findings: [...findings].reverse(), stats: [...base.current.stats].reverse() },
     };
+    expect(chooseFocus(flipped)).toEqual(chooseFocus(base));
+  });
+});
+
+describe("chooseFocus: goals in games", () => {
+  /** 162 games, 5,000 moves; `affected` games with the pattern, 1.2 per 100 moves throughout. */
+  const wide = (affected: number): PatternStat => ({
+    patternId: X,
+    games: 162,
+    moves: 5000,
+    gamesAffected: affected,
+    occurrences: 60,
+    per100Moves: 1.2,
+    avgWinPctLoss: 20,
+  });
+  const BASE = wide(51);
+  /** Held since 10 (stored without a goal), measured at 11 with `before` games affected; now `now`. */
+  const run = (before: number, now: PatternStat, comparisonGames = 162) => {
+    const r10 = report({ i: 10, focus: [{ id: X, since: end(10), baseline: BASE, target: 0.9 }] });
+    const r11 = report({ i: 11, focus: [{ id: X, since: end(10), baseline: BASE, target: 0.9 }] });
+    const measured = { ...r11, progress: [{ patternId: X, previous: wide(51), current: wide(before), verdict: "flat", pValue: 0.5 }] };
+    const current: PatternSummary = { ...summary({ [Y]: 30 }), games: now.games, moves: now.moves, stats: [now, stat(Y, now.games, now.moves, 30)] };
+    const cmp: PeriodStats = { ...comparison(), games: comparisonGames, moves: 5000, stats: [{ ...wide(51), games: comparisonGames }] };
+    return chooseFocus(input({ history: [r10, measured as WeeklyReport], current, comparison: cmp }));
+  };
+
+  it("derives {1, 4} for an item stored without a goal: at goal at 40 of 162, not at 41", () => {
+    const at = run(40, wide(40));
+    expect(at.progress[0]!.verdict).toBe("flat");
+    expect(at.retired).toMatchObject([{ patternId: X, why: "graduated" }]);
+
+    const above = run(40, wide(41));
+    expect(above.retired).toEqual([]);
+    expect(above.focus.find((f) => f.patternId === X)).toMatchObject({ reason: { kind: "kept" }, goal: { per: 1, of: 4 } });
+    expect(run(41, wide(40)).retired).toEqual([]);
+  });
+
+  it("never counts a stat with too few games as at goal", () => {
+    // 0 of 8 games meets any goal arithmetically, but 8 games is not enough data.
+    const few = run(40, { ...wide(0), games: 8, moves: 200, occurrences: 0, per100Moves: 0 });
+    expect(few.progress[0]!.verdict).toBe("insufficient-data");
+    expect(few.retired).toEqual([]);
+    const none = run(40, { ...wide(0), games: 0, moves: 0, occurrences: 0, per100Moves: 0 });
+    expect(none.retired).toEqual([]);
+  });
+
+  it("gives a new item goal = gameGoalOf(baseline) and keeps the per-100-move target", () => {
+    const y = chooseFocus(input({ history: [] })).focus.find((f) => f.patternId === Y)!;
+    // 15 of 30 games: t = 0.375, round(1/t) = 3.
+    expect(y.goal).toEqual({ per: 1, of: 3 });
+    expect(y.target).toBeCloseTo(2.25, 10);
+  });
+
+  it("keeps a stored goal, and judges graduation on it", () => {
+    const held = (i: number) => report({ i, focus: [{ id: X, since: end(10), goal: { per: 2, of: 10 } }] });
+    const measured = { ...held(11), progress: [{ patternId: X, previous: stat(X, 30, 4000, 120), current: stat(X, 30, 1000, 25), verdict: "flat", pValue: 0.2 }] } as WeeklyReport;
+    const r = chooseFocus(input({ history: [held(10), measured] }));
+    // 13 of 30 games is within the derived {5, 10} but not within the stored {2, 10}.
+    expect(r.retired).toEqual([]);
+    expect(r.focus.find((f) => f.patternId === X)!.goal).toEqual({ per: 2, of: 10 });
+  });
+});
+
+describe("chooseFocus: blind spots and examples", () => {
+  const P = "allowed-tactic";
+  const fenPgn = (fen: string, moves: string): string => `[Event "fixture"]\n[SetUp "1"]\n[FEN "${fen}"]\n\n${moves} *`;
+  /** F1, an allowed fork: 1.Qd2? Ne4+ wins the queen. Traits include answer-check and undefended. */
+  const fork = (id: string) =>
+    fixtureGame({
+      pgn: fenPgn("r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2Q3R w - - 0 1", "1. Qd2 Ne4+"),
+      as: "white",
+      id,
+      evals: { 1: { cp: 778, pv: ["h1e1"] }, 2: { cp: -283, pv: ["f6e4", "f2e1", "e4d2", "e1d2", "f8e8"] } },
+    });
+  /** F2, hung after a capture: 3.Nxe5? Nxe5. Traits include moved-piece-lost and undefended, not answer-check. */
+  const hung = (id: string) =>
+    fixtureGame({
+      pgn: "1. e4 e5 2. Nf3 Nc6 3. Nxe5 Nxe5",
+      as: "white",
+      id,
+      evals: { 5: { cp: 43, pv: ["f1b5"] }, 6: { cp: -401, pv: ["c6e5", "b1c3", "e5g6"] } },
+    });
+  /** 1.a3, a countable mistake with a quiet answer: only its move-number band. */
+  const quiet = (id: string) =>
+    fixtureGame({ pgn: "1. a3 e5", as: "white", id, evals: { 1: { cp: 30, pv: ["e2e4"] }, 2: { cp: -150, pv: ["e7e5"] } } });
+
+  const find = (patternId: string, gameId: string, ply: number, winPctLoss: number): PatternFinding => ({
+    patternId,
+    gameId,
+    ply,
+    winPctLoss,
+  });
+
+  /**
+   * Ten occurrences of P: two quiet ones with the largest losses, four F2 and four F1; six more
+   * quiet countable mistakes in the window that are not P.
+   */
+  const setup = async (patternId = P) => {
+    const games: PlayerGame[] = await Promise.all([
+      ...["q1", "q2", "x1", "x2", "x3", "x4", "x5", "x6"].map(quiet),
+      ...["a1", "a2", "a3", "a4"].map(hung),
+      ...["b1", "b2", "b3", "b4"].map(fork),
+    ]);
+    const findings = [
+      find(patternId, "q1", 1, 60),
+      find(patternId, "q2", 1, 45),
+      ...[50, 25, 20, 15].map((l, i) => find(patternId, `a${i + 1}`, 5, l)),
+      ...[30, 12, 11, 10].map((l, i) => find(patternId, `b${i + 1}`, 1, l)),
+    ];
+    const analyses = new Map(games.map((g) => [g.analysis.gameId, g.analysis] as const));
+    const base = input({
+      history: [],
+      priorities: prios([[patternId, 10]]),
+      current: summary({ [patternId]: 10 }, 30, findings),
+      analyses,
+      window: { games, findings, start: end(14), end: NOW },
+    });
+    return { games, findings, base };
+  };
+  const at = (xs: readonly { gameId: string; ply: number }[]) => xs.map((e) => [e.gameId, e.ply]);
+
+  it("gives every item its blind spots over the window, and an example for each of the first two", async () => {
+    const { base } = await setup();
+    const r = chooseFocus(base);
+    const item = r.focus[0]!;
+    expect(item.blindSpots.map((b) => b.id)).toEqual(["moved-piece-lost", "undefended", "answer-check"]);
+    expect(item.blindSpotWindow).toEqual({ start: end(14), end: NOW, games: 16, mistakes: 16 });
+    // Example 1: the largest loss with moved-piece-lost (not the larger quiet q1). Example 2: the
+    // largest loss in another game with undefended (not the larger quiet q2).
+    expect(at(item.examples)).toEqual([
+      ["a1", 5],
+      ["b1", 1],
+    ]);
+    expect(item.examples[0]!.traits).toContain("moved-piece-lost");
+    expect(item.examples[1]!.traits).toContain("undefended");
+    expect(item.examples[0]!.gameId).not.toBe(item.examples[1]!.gameId);
+    expect(item.examples[0]!.story).toMatchObject({ played: { san: "Nxe5", piece: "knight" }, lost: { piece: "knight" } });
+    expect(item.examples[1]!.story).toMatchObject({ played: { san: "Qd2", piece: "queen" }, lost: { piece: "queen" } });
+    expect(r.examplesDropped).toEqual([]);
+  });
+
+  it("keeps kept examples, refreshing their computed fields", async () => {
+    const { base } = await setup();
+    const r = chooseFocus({ ...base, keepExamples: { [P]: [{ gameId: "b2", ply: 1 }, { gameId: "a3", ply: 5 }] } });
+    const item = r.focus[0]!;
+    expect(at(item.examples)).toEqual([
+      ["b2", 1],
+      ["a3", 5],
+    ]);
+    expect(item.examples[0]).toMatchObject({ winPctLoss: 12, played: "Qd2", story: { played: { san: "Qd2" } } });
+    expect(item.examples[0]!.traits).toContain("answer-check");
+    expect(item.examples[1]).toMatchObject({ winPctLoss: 20, played: "Nxe5" });
+    expect(r.examplesDropped).toEqual([]);
+  });
+
+  it("replaces a kept example that is no longer a finding, and reports the item", async () => {
+    const { base } = await setup();
+    const r = chooseFocus({ ...base, keepExamples: { [P]: [{ gameId: "a2", ply: 5 }, { gameId: "gone", ply: 7 }] } });
+    // a2 keeps its slot; the second slot is filled by the rule: undefended, in another game.
+    expect(at(r.focus[0]!.examples)).toEqual([
+      ["a2", 5],
+      ["a1", 5],
+    ]);
+    expect(r.examplesDropped).toEqual([P]);
+
+    // A kept example whose game is no longer a finding of this pattern, though still analysed.
+    const moved = chooseFocus({ ...base, keepExamples: { [P]: [{ gameId: "x1", ply: 1 }] } });
+    expect(at(moved.focus[0]!.examples)).toEqual([
+      ["a1", 5],
+      ["b1", 1],
+    ]);
+    expect(moved.examplesDropped).toEqual([P]);
+  });
+
+  it("refreshes blind spots and examples of a kept item too", async () => {
+    const { base } = await setup();
+    const history = [report({ i: 19, focus: [{ id: P, since: end(19) }] })];
+    const item = chooseFocus({ ...base, history }).focus.find((f) => f.patternId === P)!;
+    expect(item.reason.kind).toBe("kept");
+    expect(item.blindSpots.map((b) => b.id)).toEqual(["moved-piece-lost", "undefended", "answer-check"]);
+    expect(at(item.examples)).toEqual([
+      ["a1", 5],
+      ["b1", 1],
+    ]);
+  });
+
+  it("gives a pattern outside the trait families no blind spots and the old example rule", async () => {
+    const { base } = await setup("thrown-win");
+    const item = chooseFocus(base).focus[0]!;
+    expect(item.blindSpots).toEqual([]);
+    expect(item.blindSpotWindow).toMatchObject({ games: 16 });
+    expect(at(item.examples)).toEqual([
+      ["q1", 1],
+      ["a1", 5],
+    ]);
+    expect(item.examples.map((e) => e.traits)).toEqual([[], []]);
+  });
+
+  it("does not depend on the order of the window", async () => {
+    const { base, games, findings } = await setup();
+    const flipped = { ...base, window: { ...base.window, games: [...games].reverse(), findings: [...findings].reverse() } };
     expect(chooseFocus(flipped)).toEqual(chooseFocus(base));
   });
 });

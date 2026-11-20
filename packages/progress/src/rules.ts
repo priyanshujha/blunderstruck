@@ -74,17 +74,23 @@ export const CHRONICITY_WEIGHT = 1;
 
 // Focus rules
 
-/** A held item graduates after this many consecutive enough-data reports at or below target. */
+/**
+ * A held item graduates after this many consecutive enough-data reports at its goal in games
+ * (`meetsGoal`; the goal is `gameGoalOf(baseline)`, a quarter fewer games affected).
+ */
 export const GRADUATE_AFTER_REPORTS = 2;
 /** A held item may be rotated out after this many enough-data reports without graduating. */
 export const ROTATE_AFTER_REPORTS = 6;
 /** A graduated or rotated pattern cannot be chosen again for this many final reports. */
 export const COOLDOWN_REPORTS = 2;
-/** A new item's target is its starting rate cut by this share (25%). */
+/**
+ * A new item's per-100-move `target` is its starting rate cut by this share (25%). Kept for
+ * older readers; graduation is judged on the goal in games.
+ */
 export const TARGET_REDUCTION = 0.25;
 /** A pattern "rose" when its rank in the previous report was this or lower (or it had none). */
 export const ROSE_MIN_PREVIOUS_RANK = 3;
-/** At most this many example positions per focus item. */
+/** At most this many example positions per focus item; example `i` shows blind spot `i` when it can. */
 export const MAX_EXAMPLES = 2;
 
 // Two-pass analysis

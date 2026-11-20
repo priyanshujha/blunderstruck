@@ -1,10 +1,15 @@
 import {
+  blindSpotFamilyOf,
+  gameGoalOf,
   isEligible,
+  meetsGoal,
   PATTERN_IDS,
   type AnalyzedGame,
+  type BlindSpot,
   type FocusChoice,
   type FocusExample,
   type FocusReason,
+  type GameGoal,
   type PatternFinding,
   type PatternPriority,
   type PatternProgress,
@@ -15,7 +20,7 @@ import {
   type RetiredFocus,
   type WeeklyReport,
 } from "@blunderstruck/contracts";
-import { uciToSan } from "@blunderstruck/patterns";
+import { blindSpots, storyOf, traitsOf, uciToSan, type PlayerGame } from "@blunderstruck/patterns";
 import {
   COOLDOWN_REPORTS,
   GRADUATE_AFTER_REPORTS,
@@ -26,6 +31,12 @@ import {
   ROTATE_AFTER_REPORTS,
   TARGET_REDUCTION,
 } from "./rules";
+
+/** An example kept from an earlier revision, by its position. */
+export interface ExampleRef {
+  gameId: string;
+  ply: number;
+}
 import { verdict } from "./verdict";
 
 export interface FocusInput {
@@ -37,14 +48,28 @@ export interface FocusInput {
   /** The track's stored reports, oldest first. */
   history: readonly WeeklyReport[];
   periodEnd: string;
-  /** Analysed games of the period by game id, for the example positions of new items. */
+  /** Analysed games of the period by game id, for the example positions. */
   analyses: ReadonlyMap<string, AnalyzedGame>;
+  /**
+   * The report's six weeks: every analysed game of the player in them (checked values where
+   * present) and their findings. Blind spots are computed over it, and example stories and
+   * traits are read from its games.
+   */
+  window: { games: readonly PlayerGame[]; findings: readonly PatternFinding[]; start: string; end: string };
+  /**
+   * Examples to keep, by pattern id, in their stored order: an item of that pattern keeps each
+   * one that is still a finding of the pattern in the period (its computed fields refreshed),
+   * and fills the rest by the usual rule. The caller decides which items keep their examples.
+   */
+  keepExamples?: Readonly<Record<string, readonly ExampleRef[]>>;
 }
 
 export interface FocusDecision {
   focus: FocusChoice[];
   retired: RetiredFocus[];
   progress: PatternProgress[];
+  /** Pattern ids of items that had a kept example (`keepExamples`) that is no longer a finding. */
+  examplesDropped: string[];
 }
 
 /** Most game ids a focus item lists. */
@@ -100,12 +125,16 @@ function finalHistory(history: readonly WeeklyReport[], before?: string): Weekly
   return [...latest.values()].filter(isFinal).sort((a, b) => Date.parse(a.periodEnd) - Date.parse(b.periodEnd));
 }
 
-/** One report's measurement of a held item: its verdict and rate there. */
+/** One report's measurement of a held item: whether it had enough data, and was at goal there. */
 type Measure = { enough: boolean; atTarget: boolean };
 
-function measure(p: { verdict: PatternProgress["verdict"]; current: PatternStat }, target: number): Measure {
-  const enough = p.verdict !== "insufficient-data";
-  return { enough, atTarget: enough && p.current.per100Moves <= target && p.verdict !== "worse" };
+/**
+ * Enough data first (a verdict other than "insufficient-data"), then the goal in games: at goal
+ * when `meetsGoal` holds and the verdict is not "worse".
+ */
+function measure(p: { verdict: PatternProgress["verdict"]; current: PatternStat }, goal: GameGoal): Measure {
+  const enough = p.verdict !== "insufficient-data" && p.current.games > 0;
+  return { enough, atTarget: enough && meetsGoal(p.current, goal) && p.verdict !== "worse" };
 }
 
 /**
@@ -113,14 +142,14 @@ function measure(p: { verdict: PatternProgress["verdict"]; current: PatternStat 
  * unbroken run holding it that carries its verdict in `progress` (so not the report that chose it).
  * Few-games reports are skipped.
  */
-function heldMeasures(finals: readonly WeeklyReport[], patternId: string, target: number): Measure[] {
+function heldMeasures(finals: readonly WeeklyReport[], patternId: string, goal: GameGoal): Measure[] {
   const out: Measure[] = [];
   for (let i = finals.length - 1; i >= 0; i--) {
     const r = finals[i]!;
     if (isFewGames(r)) continue;
     if (!r.focus.some((f) => f.patternId === patternId)) break;
     const p = r.progress.find((x) => x.patternId === patternId);
-    if (p) out.push(measure(p, target));
+    if (p) out.push(measure(p, goal));
   }
   return out;
 }
@@ -139,36 +168,76 @@ export function cooldownPatterns(history: readonly WeeklyReport[], before?: stri
   return cooling;
 }
 
-/** Largest losses first, preferring separate games; findings whose game or move is missing are skipped. */
+/** A finding that can be shown: its move is in the period's analyses. */
+type Candidate = { finding: PatternFinding; traits: readonly string[] };
+
+/**
+ * The examples of one item, at most `MAX_EXAMPLES`. `findings` are the pattern's findings in
+ * the period, largest loss first; those whose game or move is not analysed are skipped.
+ *
+ * Slot `i` targets blind spot `i` (when there is one): the largest loss not yet shown that has
+ * that property, in a game not yet shown; else the largest loss in a game not yet shown; else
+ * the largest loss not yet shown. Without blind spots this is "largest losses first, separate
+ * games first". A kept example (`keep`) holds its slot when it is still a finding; one that is
+ * not is dropped and its slot filled by the rule. Each example carries its story and traits
+ * when its game is in the window.
+ */
 function examplesFor(
+  patternId: string,
   findings: readonly PatternFinding[],
   analyses: ReadonlyMap<string, AnalyzedGame>,
-): FocusExample[] {
-  const built: FocusExample[] = [];
+  games: ReadonlyMap<string, PlayerGame>,
+  spots: readonly BlindSpot[],
+  keep: readonly ExampleRef[] | undefined,
+): { examples: FocusExample[]; dropped: boolean } {
+  const family = blindSpotFamilyOf(patternId);
+  const candidates: Candidate[] = [];
   for (const f of findings) {
     const move = analyses.get(f.gameId)?.moves.find((m) => m.ply === f.ply);
     if (!move) continue;
-    built.push({
-      ...f,
-      fen: move.fenBefore,
-      played: move.san,
-      ...(move.bestUci ? { best: uciToSan(move.fenBefore, move.bestUci) } : {}),
+    if (candidates.some((c) => c.finding.gameId === f.gameId && c.finding.ply === f.ply)) continue;
+    const g = games.get(f.gameId);
+    const gm = g?.analysis.moves.find((m) => m.ply === f.ply);
+    const traits = family && g && gm && gm.color === g.color ? traitsOf(g, gm, family) : [];
+    candidates.push({ finding: f, traits });
+  }
+  const same = (c: Candidate, r: ExampleRef) => c.finding.gameId === r.gameId && c.finding.ply === r.ply;
+
+  const slots: (Candidate | undefined)[] = [];
+  let dropped = false;
+  for (const r of (keep ?? []).slice(0, MAX_EXAMPLES)) {
+    const c = candidates.find((x) => same(x, r));
+    if (!c) dropped = true;
+    slots.push(c);
+  }
+  while (slots.length < MAX_EXAMPLES) slots.push(undefined);
+
+  for (let i = 0; i < slots.length; i++) {
+    if (slots[i]) continue;
+    const taken = slots.filter((c): c is Candidate => c !== undefined);
+    const free = candidates.filter((c) => !taken.includes(c));
+    const otherGame = free.filter((c) => !taken.some((t) => t.finding.gameId === c.finding.gameId));
+    const spot = spots[i]?.id;
+    slots[i] = (spot ? otherGame.find((c) => c.traits.includes(spot)) : undefined) ?? otherGame[0] ?? free[0];
+  }
+
+  const examples = slots
+    .filter((c): c is Candidate => c !== undefined)
+    .map((c): FocusExample => {
+      const f = c.finding;
+      const move = analyses.get(f.gameId)!.moves.find((m) => m.ply === f.ply)!;
+      const g = games.get(f.gameId);
+      const story = g ? storyOf(g, f) : undefined;
+      return {
+        ...f,
+        fen: move.fenBefore,
+        played: move.san,
+        ...(move.bestUci ? { best: uciToSan(move.fenBefore, move.bestUci) } : {}),
+        ...(story ? { story } : {}),
+        traits: [...c.traits],
+      };
     });
-  }
-  const out: FocusExample[] = [];
-  const games = new Set<string>();
-  for (const x of built) {
-    if (out.length >= MAX_EXAMPLES) break;
-    if (!games.has(x.gameId)) {
-      out.push(x);
-      games.add(x.gameId);
-    }
-  }
-  for (const x of built) {
-    if (out.length >= MAX_EXAMPLES) break;
-    if (!out.includes(x)) out.push(x);
-  }
-  return out.sort((a, b) => b.winPctLoss - a.winPctLoss || cmp(a.gameId, b.gameId) || a.ply - b.ply);
+  return { examples, dropped };
 }
 
 /** Distinct game ids of a pattern's findings, largest loss first. */
@@ -187,16 +256,21 @@ function exampleGameIds(findings: readonly PatternFinding[]): string[] {
  * Only final reports of earlier periods count (`coverage.complete` or `coverage.sampleOnly`);
  * provisional revisions are ignored. For each item of the latest final report, in its order:
  * outgrown when the band no longer allows it; graduated when this report and the previous
- * report with enough data for it (verdict not "insufficient-data") both have its rate at or
- * below `target` and a verdict other than "worse"; rotated when it has been measured with
+ * report with enough data for it (verdict not "insufficient-data") both meet its goal in games
+ * (`meetsGoal` with `goal`, or `gameGoalOf(baseline)` for an item stored without one) and have a
+ * verdict other than "worse"; rotated when it has been measured with
  * enough data in at least `ROTATE_AFTER_REPORTS` reports (this one included) and an eligible
  * pattern not held has a higher score; kept otherwise. Graduated and rotated patterns are not
  * chosen for the next `COOLDOWN_REPORTS` final reports (`cooldownPatterns`). Free slots are
  * filled in rank order from eligible patterns, never with one retired in this same report.
  * "rose" needs an earlier final report: on a track's first report every item is "new". The result does not depend on the order of the inputs.
+ *
+ * Every item, new or kept, gets its blind spots over `window` and its examples (`examplesFor`).
+ * A new item's goal is `gameGoalOf(baseline)`; a kept item keeps its goal, or derives it the
+ * same way when it has none. `target` (per 100 moves) is still filled for older readers.
  */
 export function chooseFocus(input: FocusInput): FocusDecision {
-  const { current, comparison, band, periodEnd, analyses } = input;
+  const { current, comparison, band, periodEnd, analyses, window } = input;
   const finals = finalHistory(input.history, periodEnd);
   const prev = finals[finals.length - 1];
   /** The last final report in which a choice could be made: the source of previous ranks. */
@@ -223,6 +297,9 @@ export function chooseFocus(input: FocusInput): FocusDecision {
     (a, b) => b.winPctLoss - a.winPctLoss || cmp(a.gameId, b.gameId) || a.ply - b.ply,
   );
   const findingsOf = (id: string) => sortedFindings.filter((f) => f.patternId === id);
+  const windowGames = new Map<string, PlayerGame>();
+  for (const g of window.games) if (!windowGames.has(g.analysis.gameId)) windowGames.set(g.analysis.gameId, g);
+  const examplesDropped: string[] = [];
 
   const reasonFor = (id: string, kind: FocusReason["kind"]): FocusReason => {
     const p = priorityOf(id);
@@ -248,8 +325,12 @@ export function chooseFocus(input: FocusInput): FocusDecision {
     since: string,
     baseline: PatternStat,
     target: number,
+    goal: GameGoal,
   ): FocusChoice => {
     const xs = findingsOf(id);
+    const spots = blindSpots(window.games, window.findings, id, { start: window.start, end: window.end });
+    const { examples, dropped } = examplesFor(id, xs, analyses, windowGames, spots.spots, input.keepExamples?.[id]);
+    if (dropped) examplesDropped.push(id);
     return {
       patternId: id,
       exampleGameIds: exampleGameIds(xs),
@@ -257,8 +338,10 @@ export function chooseFocus(input: FocusInput): FocusDecision {
       target,
       since,
       reason: reasonFor(id, kind),
-      examples: examplesFor(xs, analyses),
-      blindSpots: [],
+      examples,
+      blindSpots: spots.spots,
+      blindSpotWindow: spots.window,
+      goal,
     };
   };
 
@@ -284,8 +367,10 @@ export function chooseFocus(input: FocusInput): FocusDecision {
       continue;
     }
 
-    const now = measure({ verdict: v.verdict, current: cur }, item.target);
-    const earlier = heldMeasures(finals, id, item.target).filter((m) => m.enough);
+    // Items stored before goals were stated in games derive theirs from the baseline.
+    const goal = item.goal ?? gameGoalOf(item.baseline);
+    const now = measure({ verdict: v.verdict, current: cur }, goal);
+    const earlier = heldMeasures(finals, id, goal).filter((m) => m.enough);
     const run = [now, ...earlier].filter((m) => m.enough);
     if (now.enough && run.length >= GRADUATE_AFTER_REPORTS && run.slice(0, GRADUATE_AFTER_REPORTS).every((m) => m.atTarget)) {
       retire("graduated");
@@ -299,7 +384,7 @@ export function chooseFocus(input: FocusInput): FocusDecision {
       continue;
     }
 
-    focus.push(choice(id, "kept", item.since, item.baseline, item.target));
+    focus.push(choice(id, "kept", item.since, item.baseline, item.target, goal));
   }
 
   for (const p of ranked) {
@@ -310,8 +395,8 @@ export function chooseFocus(input: FocusInput): FocusDecision {
     const rose = ranksFrom !== undefined && (previousRank === null || previousRank >= ROSE_MIN_PREVIOUS_RANK);
     const kind: FocusReason["kind"] = everRetired.has(id) ? "returned" : rose ? "rose" : "new";
     const baseline = currentStat(id);
-    focus.push(choice(id, kind, periodEnd, baseline, baseline.per100Moves * (1 - TARGET_REDUCTION)));
+    focus.push(choice(id, kind, periodEnd, baseline, baseline.per100Moves * (1 - TARGET_REDUCTION), gameGoalOf(baseline)));
   }
 
-  return { focus, retired, progress };
+  return { focus, retired, progress, examplesDropped };
 }
