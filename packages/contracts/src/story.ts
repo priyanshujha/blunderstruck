@@ -57,9 +57,17 @@ export const ExampleStory = z.object({
   played: MoveDetail,
   /** The engine's answer to the move played, cut after its last capture, check or mate. */
   punish: z.array(MoveDetail).max(STORY_LINE_MAX_PLIES),
-  /** The game's actual reply was the engine's answer. */
+  /** The game's actual reply was the engine's answer: `followed >= 1`. */
   replyFound: z.boolean(),
+  /** The move actually played next in the game, if any. */
   actualReply: MoveDetail.optional(),
+  /**
+   * How many leading plies of `punish` were actually played in the game, in order, starting
+   * with the opponent's reply: 0 when the reply was another move or the game ended there. Every
+   * move of `punish` from this index on is what the engine shows, not what was played. `better`
+   * is never played. Absent on stories stored before the field existed.
+   */
+  followed: z.number().int().nonnegative().optional(),
   /** The engine's preferred line instead of the move played, cut the same way. */
   better: z.array(MoveDetail).max(STORY_LINE_MAX_PLIES),
   /**
@@ -76,6 +84,13 @@ export const ExampleStory = z.object({
   rear: StoryPiece.optional(),
   /** The player's piece that was lost. */
   lost: StoryPiece.optional(),
+  /** The most valuable enemy piece won for `lost`; absent when it went for nothing or pawns only. */
+  lostFor: PieceRole.optional(),
+  /**
+   * The capture of `lost` was played in the game: it is within the first `followed` plies of
+   * `punish`. Says nothing about the rest of the game.
+   */
+  lostInGame: z.boolean().optional(),
   /** Material balance change for the player along `punish`, in pawns. */
   gain: z.number(),
   /** Material balance change for the player along `better`, in pawns. */

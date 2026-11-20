@@ -356,8 +356,8 @@ describe("storyOf: no square reason the better move did not earn", () => {
   });
 });
 
-describe("storyOf: the punishment found by another capture", () => {
-  it("1...Qe4?? 2.Nxe4 counts as found when the stored answer was Bxe4", async () => {
+describe("storyOf: what the game actually played", () => {
+  it("1...Qe4?? 2.Nxe4 when the stored answer was Bxe4: not followed, though the queen went", async () => {
     // Depth 18 prefers Nxe4 (+6.43); depth 12 answers Bxe4 (+6.53). Either takes the queen.
     const g = await fixtureGame({
       pgn: fenPgn("2b2rk1/ppp1qppp/8/8/8/2NB4/PPP2PPP/5RK1 b - - 0 1", "1... Qe4 2. Nxe4"),
@@ -371,7 +371,82 @@ describe("storyOf: the punishment found by another capture", () => {
     expect(brief(s)).toEqual(["Bxe4"]);
     expect(s.lost).toEqual({ square: "e4", piece: "queen", color: "black" });
     expect(s.actualReply).toMatchObject({ san: "Nxe4", captured: "queen" });
-    expect(s.replyFound).toBe(true);
+    expect(s.followed).toBe(0);
+    expect(s.replyFound).toBe(false);
+    expect(s.lostInGame).toBe(false);
+  });
+
+  it("1...Ne5? 2.Qxe5?? dxe5: a different capture, which itself loses the queen", async () => {
+    const g = await fixtureGame({
+      pgn: fenPgn("5rk1/ppp2ppp/1qnp4/8/3P4/2P5/PP2QPPP/2BR2K1 b - - 0 1", "1... Ne5 2. Qxe5 dxe5"),
+      as: "black",
+      evals: {
+        2: { cp: 10, pv: ["b6a5", "a2a3", "a5f5", "d1e1", "a7a6", "g2g4", "f5g6", "h2h3", "h7h6", "f2f4"] },
+        3: { cp: 640, pv: ["d4e5", "f8e8", "c1f4", "b6c6", "e2c2", "d6e5", "f4e3", "a7a6", "f2f3", "c6c4"] },
+      },
+    });
+    const s = story(g, 2);
+    expect(s.punish[0]).toMatchObject({ san: "dxe5", captured: "knight" });
+    expect(s.actualReply).toMatchObject({ san: "Qxe5", captured: "knight" });
+    expect(s.followed).toBe(0);
+    expect(s.replyFound).toBe(false);
+    expect(brief(s)).toEqual(["dxe5"]);
+    expect(s.lost).toEqual({ square: "e5", piece: "knight", color: "black" });
+    expect(s.lostInGame).toBe(false);
+  });
+
+  describe("1.Qc1? Ne2+ Kh1 Nxc1, as far as the game went", () => {
+    const FEN = "r4rk1/ppp2ppp/8/8/3n4/8/PPPQ1PPP/5RK1 w - - 0 1";
+    const EVALS: Record<string, ScriptedEval> = {
+      // +7.65, best Qd4.
+      1: { cp: 765, pv: ["d2d4", "b7b6", "d4a4", "c7c5", "h2h4", "h7h6", "f1e1", "f8c8", "c2c3", "c8c7"] },
+      // After Qc1 Black is +7.50.
+      2: { cp: -750, pv: ["d4e2", "g1h1", "e2c1", "f1c1", "a8d8", "g2g3", "f7f5", "c1e1", "g8f7", "h1g2"] },
+    };
+    const QUEEN = { square: "c1", piece: "queen", color: "white" };
+
+    it("follows two plies, then deviates: the queen was never taken", async () => {
+      const g = await fixtureGame({ pgn: fenPgn(FEN, "1. Qc1 Ne2+ 2. Kh1 Rad8"), as: "white", evals: EVALS });
+      const s = story(g, 1);
+      expect(brief(s)).toEqual(["Ne2+", "Kh1", "Nxc1", "Rxc1"]);
+      expect(s.lost).toEqual(QUEEN);
+      expect(s.lostFor).toBe("knight");
+      expect(s.followed).toBe(2);
+      expect(s.replyFound).toBe(true);
+      expect(s.lostInGame).toBe(false);
+    });
+
+    it("follows the whole line", async () => {
+      const g = await fixtureGame({ pgn: fenPgn(FEN, "1. Qc1 Ne2+ 2. Kh1 Nxc1 3. Rxc1 Rad8"), as: "white", evals: EVALS });
+      const s = story(g, 1);
+      expect(s.followed).toBe(4);
+      expect(s.lostInGame).toBe(true);
+    });
+
+    it("the opponent plays something else at once", async () => {
+      const g = await fixtureGame({ pgn: fenPgn(FEN, "1. Qc1 Rad8"), as: "white", evals: EVALS });
+      const s = story(g, 1);
+      expect(s.followed).toBe(0);
+      expect(s.replyFound).toBe(false);
+      expect(s.actualReply).toMatchObject({ san: "Rad8" });
+      expect(s.lostInGame).toBe(false);
+    });
+
+    it("the game ends on the played move", async () => {
+      const g = await fixtureGame({ pgn: fenPgn(FEN, "1. Qc1"), as: "white", evals: EVALS });
+      const s = story(g, 1);
+      expect(brief(s)).toEqual(["Ne2+", "Kh1", "Nxc1", "Rxc1"]);
+      expect(s.followed).toBe(0);
+      expect(s.actualReply).toBeUndefined();
+      expect(s.lostInGame).toBe(false);
+    });
+
+    it("the game ends mid-line", async () => {
+      const g = await fixtureGame({ pgn: fenPgn(FEN, "1. Qc1 Ne2+ 2. Kh1"), as: "white", evals: EVALS });
+      const s = story(g, 1);
+      expect(s.followed).toBe(2);
+      expect(s.lostInGame).toBe(false);
+    });
   });
 
   it("1.Ne4? Nxe4 Qxd8 Rxd8: the knight is lost, not the traded queen", async () => {

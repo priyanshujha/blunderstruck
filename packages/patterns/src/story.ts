@@ -18,7 +18,7 @@ import type { Move, Role, Square } from "chessops/types";
 import { makeSquare, makeUci, opposite } from "chessops/util";
 import { legalMove, lineOutcome, material, PIECE_VALUES, positionFromFen, see } from "./board";
 import { answerTo, moveAt, replyTo } from "./game";
-import { lostPiece } from "./lost";
+import { lineLoss } from "./lost";
 import { TACTIC_MIN_GAIN } from "./rules";
 import type { PlayerGame } from "./types";
 
@@ -279,8 +279,10 @@ function betterReasonOf(
  * legal-move rules (no engine call). A game whose moves carry a deeper check is expected to be
  * resolved to the checked values before it is passed in; the lines are read the same way.
  *
- * - `played` is the finding's move; `actualReply` the game's next move, if any. `replyFound`
- *   holds when that reply is the engine's first answer, or captures the piece named in `lost`.
+ * - `played` is the finding's move; `actualReply` the game's next move, if any. `followed` is
+ *   how many leading plies of `punish` the game actually played; `replyFound` is
+ *   `followed >= 1`. Past `followed`, `punish` is the engine's line, not the game. `better` is
+ *   never played.
  * - `punish` is the engine's answer to the move, read over the plies the detectors score the
  *   played line on (`lineOutcome`) and cut after its last capture, promotion, check or mate;
  *   empty when that stretch has none. `better` is the engine's line cut the same way, at least
@@ -291,7 +293,9 @@ function betterReasonOf(
  *   `punish`; from the other line when that one is empty.
  * - `gain` and `betterGain` are the player's material change from before the move to the end
  *   of the played move plus `punish`, and to the end of `better`.
- * - `lost` is the piece the played move and `punish` cost the player, by `lostPiece`.
+ * - `lost` and `lostFor` are the piece the played move and `punish` cost the player and what
+ *   was won for it, by `lineLoss`; `lostInGame` says the capture of `lost` was among the
+ *   `followed` plies.
  *
  * Undefined when the finding is for another game, its ply is not in the game, or the stored
  * move is not legal in its own position.
@@ -316,15 +320,18 @@ export function storyOf(
   const punishPos = afterPlayed.clone();
   const punish = cutAtLastEvent(replay(punishPos, answer, punishWindow), 0);
   const gain = materialChange(start.board, punishPos.board, player);
-  const lost = lostPiece(move.fenBefore, [move.uci, ...punish.map((s) => s.detail.uci)], player);
+  const loss = lineLoss(move.fenBefore, [move.uci, ...punish.map((s) => s.detail.uci)], player);
+  const lost = loss.piece;
 
   const reply = replyTo(g, move);
   const actualReply = reply ? moveDetail(move.fenAfter, reply.uci) : undefined;
-  // Found: the engine's first answer, or another move that takes the piece the line costs.
-  const replyFound =
-    !!reply &&
-    ((answer.length > 0 && reply.uci === answer[0]) ||
-      (!!lost && !!actualReply?.captured && actualReply.to === lost.square));
+  // The game's moves after the played one, compared ply by ply with `punish`.
+  let followed = 0;
+  while (followed < punish.length && moveAt(g, move.ply + 1 + followed)?.uci === punish[followed]!.detail.uci) followed++;
+  const replyFound = followed >= 1;
+  const lostAt = lost
+    ? punish.findIndex((s) => s.detail.color !== player && s.detail.captured === lost.piece && s.detail.to === lost.square)
+    : -1;
 
   const bestLine = move.bestLine ?? (move.bestUci ? [move.bestUci] : []);
   const bestIsPlayed = bestLine[0] === move.uci;
@@ -350,7 +357,9 @@ export function storyOf(
     ...(key ? { key: { line: key.line, index: key.index } } : {}),
     targets: key?.targets ?? [],
     ...(key?.rear ? { rear: key.rear } : {}),
-    ...(lost ? { lost } : {}),
+    followed,
+    ...(lost ? { lost, lostInGame: lostAt !== -1 && lostAt < followed } : {}),
+    ...(loss.for ? { lostFor: loss.for } : {}),
     gain,
     ...(betterGain !== undefined ? { betterGain } : {}),
     ...(betterReason ? { betterReason } : {}),

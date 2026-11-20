@@ -61,9 +61,51 @@ describe("lostPiece", () => {
       expect(lineLoss(fen, ["d1d4", "d8d4", "f3d4"], "white")).toEqual({ net: 1, exchange: false });
     });
 
-    it("the exchange (a rook for a knight) names no piece and sets the flag", () => {
+    it("the exchange (a rook for a knight) names the rook for the knight and sets the flag", () => {
       const fen = "2r3k1/5ppp/8/8/8/2N5/1P3PPP/6K1 b - - 0 1";
-      expect(lineLoss(fen, ["c8c3", "b2c3"], "black")).toEqual({ net: 2, exchange: true });
+      expect(lineLoss(fen, ["c8c3", "b2c3"], "black")).toEqual({
+        net: 2,
+        piece: { square: "c3", piece: "rook", color: "black" },
+        for: "knight",
+        exchange: true,
+      });
+    });
+  });
+
+  describe("pairs and recaptures", () => {
+    it("queen for a knight names the knight it went for", () => {
+      const fen = "r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2Q3R w - - 0 1";
+      expect(lineLoss(fen, ["d1d2", "f6e4", "f2e1", "e4d2", "e1d2"], "white")).toMatchObject({ net: 6, for: "knight", exchange: false });
+    });
+
+    it("cancels the bishop against the recapture on its own square, so the knight is lost", () => {
+      // Constructed line (the engine prefers Nd1 here): ...bxc3, ...Nxf3, gxf3.
+      const fen = "4k3/8/8/8/1p5n/2N2B2/6P1/4K3 w - - 0 1";
+      expect(lineLoss(fen, ["e1e2", "b4c3", "e2d3", "h4f3", "g2f3"], "white")).toEqual({
+        net: 3,
+        piece: { square: "c3", piece: "knight", color: "white" },
+        exchange: false,
+      });
+    });
+
+    it("Rd4? Nxd4 exd4 gxf3: the rook for a knight (and a pawn)", () => {
+      const fen = "6k1/8/2n5/8/6p1/4PP2/8/3R2K1 w - - 0 1";
+      expect(lineLoss(fen, ["d1d4", "c6d4", "e3d4", "g4f3"], "white")).toEqual({
+        net: 3,
+        piece: { square: "d4", piece: "rook", color: "white" },
+        for: "knight",
+        exchange: true,
+      });
+    });
+
+    it("...d5? exd6 e.p. Qxe1+ Qxe1: the queen for a rook (and a pawn)", () => {
+      const fen = "6k1/pprpqppp/8/4P3/8/8/PP3PPP/3QR1K1 b - - 0 1";
+      expect(lineLoss(fen, ["d7d5", "e5d6", "e7e1", "d1e1"], "black")).toEqual({
+        net: 5,
+        piece: { square: "e1", piece: "queen", color: "black" },
+        for: "rook",
+        exchange: false,
+      });
     });
   });
 });

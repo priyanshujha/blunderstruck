@@ -1,4 +1,4 @@
-import type { Color, StoryPiece } from "@blunderstruck/contracts";
+import type { Color, PieceRole, StoryPiece } from "@blunderstruck/contracts";
 import type { Role } from "chessops/types";
 import { legalMove, material, PIECE_VALUES, positionFromFen } from "./board";
 import { HUNG_MIN_NET } from "./rules";
@@ -10,58 +10,88 @@ const MINORS: ReadonlySet<Role> = new Set(["knight", "bishop"]);
 export interface LineLoss {
   /** Material `side` is down at the end of the line, in pawns (negative when it is up). */
   net: number;
-  /** The piece lost, by the rule of `lostPiece`. */
+  /** The piece lost. */
   piece?: StoryPiece;
-  /** No piece is named, but `side` gave a rook for a knight or bishop and is down for it: "the exchange". */
+  /**
+   * The most valuable enemy piece won for `piece` ("your rook for a knight"). Absent when the
+   * piece went for nothing or for pawns only.
+   */
+  for?: PieceRole;
+  /**
+   * The exchange: a rook of `side` went for a knight or bishop (neither cancelled by a trade)
+   * and `side` is down for it. The one definition of "the exchange".
+   */
   exchange: boolean;
+}
+
+interface Capture {
+  index: number;
+  square: string;
+  role: Role;
 }
 
 /**
  * Reads what `line` (UCI from `fen`, replayed up to its first illegal move) cost `side`:
  * - `net` is the line's net material loss for `side`;
  * - trades are set aside first: each knight, bishop, rook or queen `side` took cancels one of
- *   its own pieces taken in the line of the same value (queen for queen, knight for bishop);
- * - `piece` is the most valuable of `side`'s remaining taken pieces whose value is at most
- *   twice the net loss, when the net loss is at least `HUNG_MIN_NET` (a minor piece for a
- *   pawn). A piece for a pawn and a queen for a knight name the piece; a queen for a rook and a
- *   knight, a knight for a knight and a pawn, and the exchange (a rook for a minor piece) do not.
+ *   its own pieces of the same value taken in the line, preferring one taken earlier on the
+ *   same square (a recapture), then one of the same role;
+ * - `piece` is the most valuable of `side`'s pieces left after that, when the net loss is at
+ *   least `HUNG_MIN_NET` (a minor piece for a pawn) and either an enemy piece was won for it
+ *   (`for`), or the piece is worth at most twice the net loss (it went for nothing or pawns).
+ *
+ * A queen for a knight is the queen for a knight; a queen for a rook and a knight, or a knight
+ * for a knight and a pawn, name nothing.
  */
 export function lineLoss(fen: string, line: readonly string[], side: Color): LineLoss {
   const pos = positionFromFen(fen);
   const start = material(pos.board, side);
-  const lost: StoryPiece[] = [];
-  const won: Role[] = [];
-  for (const uci of line) {
+  const lost: Capture[] = [];
+  const won: Capture[] = [];
+  line.some((uci, index) => {
     const m = legalMove(pos, uci);
-    if (!m || !("from" in m)) break;
+    if (!m || !("from" in m)) return true;
     const mover = pos.board.get(m.from)!;
     const target = pos.board.get(m.to);
     if (target && target.color !== mover.color && PIECES.has(target.role)) {
-      if (mover.color === side) won.push(target.role);
-      else lost.push({ square: uci.slice(2, 4), piece: target.role, color: side });
+      (mover.color === side ? won : lost).push({ index, square: uci.slice(2, 4), role: target.role });
     }
     pos.play(m);
-  }
+    return false;
+  });
   const net = start - material(pos.board, side);
 
   const open = [...lost];
-  const unmatchedWon: Role[] = [];
-  for (const role of won) {
-    const i = open.findIndex((p) => PIECE_VALUES[p.piece] === PIECE_VALUES[role]);
-    if (i === -1) unmatchedWon.push(role);
-    else open.splice(i, 1);
+  const unmatched: Capture[] = [];
+  // Only pieces of equal value cancel; among them a recapture on the same square comes first.
+  const same = (l: Capture, w: Capture): boolean => PIECE_VALUES[l.role] === PIECE_VALUES[w.role];
+  const passes: ((l: Capture, w: Capture) => boolean)[] = [
+    (l, w) => same(l, w) && l.square === w.square && l.index < w.index,
+    (l, w) => l.role === w.role,
+    same,
+  ];
+  let pending = [...won];
+  for (const matches of passes) {
+    pending = pending.filter((w) => {
+      const i = open.findIndex((l) => matches(l, w));
+      if (i === -1) return true;
+      open.splice(i, 1);
+      return false;
+    });
   }
+  unmatched.push(...pending);
 
-  let piece: StoryPiece | undefined;
-  if (net >= HUNG_MIN_NET) {
-    for (const p of open) {
-      if (PIECE_VALUES[p.piece] > 2 * net) continue;
-      if (!piece || PIECE_VALUES[p.piece] > PIECE_VALUES[piece.piece]) piece = p;
-    }
-  }
-  const exchange =
-    !piece && net >= 1 && open.some((p) => p.piece === "rook") && unmatchedWon.some((r) => MINORS.has(r));
-  return { net, ...(piece ? { piece } : {}), exchange };
+  const byValue = (a: Capture, b: Capture): number => PIECE_VALUES[b.role] - PIECE_VALUES[a.role] || a.index - b.index;
+  const top = [...open].sort(byValue)[0];
+  const gotFor = [...unmatched].sort(byValue)[0];
+  const named = !!top && net >= HUNG_MIN_NET && (!!gotFor || PIECE_VALUES[top.role] <= 2 * net);
+  const exchange = net >= 1 && open.some((l) => l.role === "rook") && unmatched.some((w) => MINORS.has(w.role));
+  return {
+    net,
+    ...(named ? { piece: { square: top!.square, piece: top!.role, color: side } } : {}),
+    ...(named && gotFor ? { for: gotFor.role } : {}),
+    exchange,
+  };
 }
 
 /** The piece `side` lost along `line` (see `lineLoss`), or undefined when none is named. */
