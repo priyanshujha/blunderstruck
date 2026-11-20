@@ -204,6 +204,20 @@ describe("parseWording", () => {
     expect(errorsOf(withWhy(why))).toEqual([]);
   });
 
+  it("allows the weeks tokens only when at least three weeks were counted for the item", () => {
+    const persist = "It came up in {weeksRecurred} of your last {weeksCounted} weeks.";
+    const text = answer({ focus: [{ why: persist }, {}] });
+    expect(errorsOf(text, draft([choice("hung-piece", "new", 3), choice("missed-tactic")]))).toEqual([]);
+    for (const counted of [0, 2]) {
+      const errors = errorsOf(text, draft([choice("hung-piece", "new", counted), choice("missed-tactic")]));
+      expect(errors.join("\n")).toMatch(/focus\[0\] \(hung-piece\)\.why cites weeks, but too few weeks/);
+    }
+    const inTitle = answer({ focus: [{}, { title: "Back {weeksRecurred} weeks" }] });
+    expect(errorsOf(inTitle, draft([choice("hung-piece"), choice("missed-tactic", "new", 1)])).join("\n")).toMatch(
+      /focus\[1\] \(missed-tactic\)\.title cites weeks/,
+    );
+  });
+
   it("rejects unknown tokens and tokens from the wrong field", () => {
     expect(errorsOf(withWhy("In {bogus} games."))[0]).toMatch(/\{bogus\}/);
     expect(errorsOf(withWhy("At {mistakeRate} per hundred moves."))[0]).toMatch(/\{mistakeRate\}/);
@@ -252,14 +266,14 @@ describe("templateWording", () => {
 
   it.each(bands)("passes the checks and renders for every pattern at band %s", (band) => {
     for (const id of PATTERN_IDS) {
-      for (const kind of ["new", "kept", "rose", "returned"] as const) {
-        const d = draft([choice(id, kind)], band);
+      for (const [kind, weeksCounted] of [["new", 5], ["kept", 2], ["rose", 0], ["returned", 6]] as const) {
+        const d = draft([choice(id, kind, weeksCounted)], band);
         const w = templateWording(d);
         expect(parseWording(JSON.stringify(w), d)).toMatchObject({ ok: true });
         const values = focusTokenValues(d.focus[0]!, d);
         const why = renderText(w.focus[0]!.why, values);
         expect(why).toContain("9 of your 31 games");
-        expect(why).toContain("0.90 per hundred moves");
+        expect(why.split(/(?<=\.)\s+/).length).toBeLessThanOrEqual(2);
         renderText(w.focus[0]!.title, values);
         renderText(w.focus[0]!.drill, values);
         renderText(w.summary, summaryTokenValues(d));
@@ -275,9 +289,17 @@ describe("templateWording", () => {
     expect(templateWording(draft([choice("hung-piece")], "beginner")).focus[0]!.drill).toBe(novice);
   });
 
-  it("mentions persistence only when weeks were counted", () => {
-    expect(templateWording(draft([choice("thrown-win")])).focus[0]!.why).toContain("{weeksRecurred} of your last {weeksCounted} weeks");
-    expect(templateWording(draft([choice("thrown-win", "new", 0)])).focus[0]!.why).not.toContain("{weeksRecurred}");
+  it("leaves weeks, rate and target out of why, since the report prints them below it", () => {
+    for (const id of PATTERN_IDS) {
+      const w = templateWording(draft([choice(id)])).focus[0]!;
+      for (const text of [w.why, w.drill]) {
+        expect(text).not.toMatch(/\{(weeksRecurred|weeksCounted|rate|baselineRate|target)\}/);
+        expect(text).not.toMatch(/weeks?\b/i);
+      }
+    }
+    expect(templateWording(draft([choice("missed-tactic")])).focus[0]!.why).toBe(
+      "You had a winning tactic and did not play it in {gamesAffected} of your {games} games. Those were games you could have decided on the spot.",
+    );
   });
 
   it("writes a summary for none, one or two items, few games, and earlier progress", () => {

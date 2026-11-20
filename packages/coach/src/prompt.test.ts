@@ -132,6 +132,9 @@ describe("buildPrompt", () => {
     const parsed = JSON.parse(example!) as { summary: string };
     expect(parsed.summary).not.toMatch(/\b(one|two|both|pair|couple)\b/i);
     expect(system).toMatch(/illustrative only: never reuse them/);
+    expect(system).toContain("Do not restate them");
+    expect(system).toContain("weeksCounted of three or more and weeksRecurred is more than half of weeksCounted");
+    expect(example).not.toMatch(/\{(weeksRecurred|weeksCounted|rate|target)\}/);
   });
 
   it("puts the band, reasons, targets and example positions in the user part, not the username", () => {

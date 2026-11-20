@@ -16,8 +16,10 @@ interface PatternText {
   title: string;
   /** Short noun phrase for the summary, e.g. "pieces left hanging". */
   noun: string;
-  /** The first sentence of `why`, in the player's numbers (tokens only). */
+  /** The first sentence of `why`: what happened, in the player's numbers (tokens only). */
   what: string;
+  /** The second sentence of `why`: why it matters. */
+  matters: string;
   drill: Record<DrillLevel, string>;
 }
 
@@ -30,6 +32,7 @@ const TEXT: Record<PatternId, PatternText> = {
     title: "Checkmates left on the board",
     noun: "missed mates",
     what: "You had a quick checkmate and played something else in {gamesAffected} of your {games} games.",
+    matters: "A mate on the board ends the game; letting it go gives the opponent another chance.",
     drill: {
       plain:
         "Every time the other king looks short of room, stop and try every check before any other move. A few mate-in-one puzzles a day make this a habit.",
@@ -43,6 +46,7 @@ const TEXT: Record<PatternId, PatternText> = {
     title: "Quick mates against you",
     noun: "quick mates allowed",
     what: "A move let the other side force checkmate within a couple of moves in {gamesAffected} of your {games} games.",
+    matters: "Nothing else on the board matters if the king falls first.",
     drill: {
       plain:
         "Before every move, look at your own king and ask: after my move, can they check me, and what happens then? If a check looks dangerous, deal with it first.",
@@ -56,6 +60,7 @@ const TEXT: Record<PatternId, PatternText> = {
     title: "Pieces left out in the open",
     noun: "pieces left hanging",
     what: "A piece was left where it could simply be taken in {gamesAffected} of your {games} games.",
+    matters: "A free piece is often the whole game, and it is the easiest loss to stop.",
     drill: {
       plain:
         "Before you let go of a piece, ask: after this move, can anything of mine be taken for free? Look at every piece, not only the one you moved.",
@@ -69,6 +74,7 @@ const TEXT: Record<PatternId, PatternText> = {
     title: "Shots left open for the opponent",
     noun: "tactics allowed",
     what: "A move left the other side a winning tactic, such as a fork, in {gamesAffected} of your {games} games.",
+    matters: "Each one hands over material without the opponent having to work for it.",
     drill: {
       plain:
         "After choosing a move, pretend you are your opponent: what is their best check, capture or attack now? If you find one that hurts, choose again.",
@@ -82,6 +88,7 @@ const TEXT: Record<PatternId, PatternText> = {
     title: "Free material left on the board",
     noun: "missed captures",
     what: "You could have won material with a capture and played something else in {gamesAffected} of your {games} games.",
+    matters: "Free material is the simplest advantage there is, and it was already sitting there.",
     drill: {
       plain:
         "Before every move, look at each of your opponent's pieces and ask: is it guarded? If one is not, see if you can take it safely.",
@@ -95,6 +102,7 @@ const TEXT: Record<PatternId, PatternText> = {
     title: "Tactics that went unplayed",
     noun: "missed tactics",
     what: "You had a winning tactic and did not play it in {gamesAffected} of your {games} games.",
+    matters: "Those were games you could have decided on the spot.",
     drill: {
       plain:
         "When the other side has pieces bunched together or one left unguarded, stop and look for a move that attacks two things at once. A few fork puzzles a day help.",
@@ -108,6 +116,7 @@ const TEXT: Record<PatternId, PatternText> = {
     title: "Wins that got away",
     noun: "thrown wins",
     what: "You reached a winning position and did not win in {gamesAffected} of your {games} games.",
+    matters: "The hard part was already done, so these are the cheapest points to win back.",
     drill: {
       plain:
         "Once you are well ahead, play safe: trade pieces, guard your king and check every move for free captures. Slow and sure wins the game.",
@@ -121,6 +130,7 @@ const TEXT: Record<PatternId, PatternText> = {
     title: "When the clock gets short",
     noun: "mistakes in time trouble",
     what: "Mistakes came with the clock nearly empty in {gamesAffected} of your {games} games.",
+    matters: "The position was often fine; the clock made the decision.",
     drill: {
       plain:
         "Spend less time on the first few moves so you have time later. When your clock gets low, keep it simple: protect your pieces and make safe moves.",
@@ -134,6 +144,7 @@ const TEXT: Record<PatternId, PatternText> = {
     title: "The same opening hole, again",
     noun: "repeated opening mistakes",
     what: "The same early position went wrong more than once, in {gamesAffected} of your {games} games.",
+    matters: "Fix the position once and it stays fixed in every game that reaches it.",
     drill: {
       plain:
         "Look up the position from your example games and learn one good move for it. Play it a few times against a friend or a computer until it feels normal.",
@@ -149,6 +160,7 @@ const FALLBACK: PatternText = {
   title: "A recurring mistake",
   noun: "recurring mistakes",
   what: "This mistake turned up in {gamesAffected} of your {games} games.",
+  matters: "It costs more than it looks.",
   drill: {
     plain: "Before every move, check what your move leaves open and what your opponent can do next.",
     club: "Before every move, list checks, captures and threats for both sides, then choose.",
@@ -160,15 +172,13 @@ function textFor(patternId: string): PatternText {
   return (TEXT as Record<string, PatternText>)[patternId] ?? FALLBACK;
 }
 
+/**
+ * What happened and why it matters, in two sentences. No weeks, rate or target: the report
+ * prints those lines itself, right under the wording.
+ */
 function why(item: FocusChoice): string {
-  const parts: string[] = [];
-  if (item.reason.kind === "kept") parts.push("Still the one to work on.");
-  if (item.reason.kind === "returned") parts.push("This one is back.");
-  parts.push(textFor(item.patternId).what);
-  parts.push("That is {rate} times per hundred moves.");
-  if (item.reason.weeksCounted > 0) parts.push("It came up in {weeksRecurred} of your last {weeksCounted} weeks.");
-  parts.push("The aim is {target} per hundred moves or fewer.");
-  return parts.join(" ");
+  const t = textFor(item.patternId);
+  return `${t.what} ${t.matters}`;
 }
 
 function summary(draft: ReportDraft): string {

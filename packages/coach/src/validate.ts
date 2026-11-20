@@ -10,6 +10,15 @@ export type WordingResult = { ok: true; value: WordingText } | { ok: false; erro
 
 const LIMITS = { title: 60, why: 400, drill: 400, summary: 600 } as const;
 
+/**
+ * Persistence ("{weeksRecurred} of your last {weeksCounted} weeks") means something only
+ * over this many counted weeks; below it the weeks tokens are rejected for that item.
+ */
+const MIN_WEEKS_FOR_PERSISTENCE = 3;
+const FOCUS_TOKENS_WITHOUT_WEEKS: readonly string[] = FOCUS_TOKENS.filter(
+  (t) => t !== "weeksRecurred" && t !== "weeksCounted",
+);
+
 /*
  * Numbers. The player's numbers reach the text only through tokens, which code fills in. So
  * any digit is rejected unless it sits inside one of the chess notations below, each of
@@ -226,9 +235,14 @@ export function parseWording(text: string, draft: ReportDraft, only?: string[]):
   errors.push(...checkField("summary", value.summary, LIMITS.summary, SUMMARY_TOKENS));
   value.focus.forEach((f, i) => {
     const at = `focus[${i}] (${f.patternId})`;
-    errors.push(...checkField(`${at}.title`, f.title, LIMITS.title, FOCUS_TOKENS));
-    errors.push(...checkField(`${at}.why`, f.why, LIMITS.why, FOCUS_TOKENS));
-    errors.push(...checkField(`${at}.drill`, f.drill, LIMITS.drill, FOCUS_TOKENS));
+    const weeksCounted = draft.focus.find((c) => c.patternId === f.patternId)?.reason.weeksCounted ?? 0;
+    const allowed = weeksCounted >= MIN_WEEKS_FOR_PERSISTENCE ? FOCUS_TOKENS : FOCUS_TOKENS_WITHOUT_WEEKS;
+    for (const [field, text] of [["title", f.title], ["why", f.why], ["drill", f.drill]] as const) {
+      errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], allowed));
+      if (allowed !== FOCUS_TOKENS && /\{weeks(?:Recurred|Counted)\}/.test(text)) {
+        errors.push(`${at}.${field} cites weeks, but too few weeks were counted for this item; leave persistence out`);
+      }
+    }
   });
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value };
 }
