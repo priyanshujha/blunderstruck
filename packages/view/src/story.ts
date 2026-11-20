@@ -137,12 +137,20 @@ function aligned(from: string, to: string, piece: PieceRole): boolean {
 }
 
 /** " Moving it opened the line behind it: their bishop on b7 was now aimed at your queen." */
-function discovered(s: Sentence, m: MoveDetail, rear: StoryPiece, targets: readonly StoryPiece[], player: Color): void {
+function discovered(
+  s: Sentence,
+  m: MoveDetail,
+  rear: StoryPiece,
+  targets: readonly StoryPiece[],
+  player: Color,
+  tense: Tense = "past",
+): void {
   const owner = (c: Color): string => (c === player ? "your" : "their");
-  s.text(" Moving it opened the line behind it");
+  const w = tense === "would";
+  s.text(w ? " Moving it would open the line behind it" : " Moving it opened the line behind it");
   const aim = targets.find((t) => t.color !== rear.color && t.square !== m.to && aligned(rear.square, t.square, rear.piece));
   if (aim) {
-    s.text(`: ${owner(rear.color)} `).piece(rear.piece, rear.color).text(` on ${rear.square} was now aimed at ${owner(aim.color)} `);
+    s.text(`: ${owner(rear.color)} `).piece(rear.piece, rear.color).text(` on ${rear.square} ${w ? "would be" : "was now"} aimed at ${owner(aim.color)} `);
     s.piece(aim.piece, aim.color).text(".");
   } else {
     s.text(` for ${owner(rear.color)} `).piece(rear.piece, rear.color).text(` on ${rear.square}.`);
@@ -182,101 +190,136 @@ function youSentence(story: ExampleStory, patternId: string | undefined): StoryS
   return s.done();
 }
 
-/** The opponent's reply that punished the move: "That let the knight jump to e4 with check, …". */
-function theySentence(
-  story: ExampleStory,
-  m: MoveDetail,
-  isKey: boolean,
-  patternId: string | undefined,
-  happened: boolean,
-): StorySentence {
+/**
+ * How many leading plies of `punish` the game actually played. Stories stored before the
+ * builder counted them only say whether the first one was played.
+ */
+export const followedOf = (story: ExampleStory): number =>
+  Math.min(story.punish.length, story.followed ?? (story.replyFound ? 1 : 0));
+
+type Tense = "past" | "would";
+
+/**
+ * The opponent's reply. Not played: what the move allowed ("That let the knight jump to e4 with
+ * check, …"). Played: "They found it: the knight jumped to e4 with check, …".
+ */
+function theySentence(story: ExampleStory, m: MoveDetail, isKey: boolean, played: boolean): StorySentence {
   const player = story.played.color;
   const s = new Sentence(player);
   s.willName(m.captured, player);
   if (isKey) for (const t of story.targets) s.willName(t.piece, t.color);
-  const hungReply = patternId === "hung-piece" && story.lost && m.captured && m.to === story.lost.square;
-  if (hungReply) {
-    // "Their knight took your knight." only when it did; otherwise what the move allowed.
-    if (happened) s.named(m.piece, m.color).text(" took ").named(m.captured!, player).text(`${checkWords(m)}.`);
-    else s.text("That let ").named(m.piece, m.color).text(" take ").named(m.captured!, player).text(`${checkWords(m)}.`);
-    return s.done();
-  }
-  if (m.castle) {
-    s.text(`That let them castle ${SIDE[m.castle]}${checkWords(m)}.`);
-    return s.done();
-  }
-  s.text("That let ").named(m.piece, m.color);
-  if (m.captured) {
-    s.text(" take ").named(m.captured, player).text(onSquare(m));
-    if (m.promotion) s.text(" and become a ").piece(m.promotion, m.color);
-  } else if (m.promotion) {
-    s.text(` reach ${m.to} and become a `).piece(m.promotion, m.color);
+  if (played) {
+    s.text("They found it: ");
+    clause(s, m, undefined, player, "past", true);
+  } else if (m.castle) {
+    s.text(`That let them castle ${SIDE[m.castle]}${checkWords(m)}`);
   } else {
-    s.text(` ${m.piece === "knight" ? "jump" : "come"} to ${m.to}`);
+    s.text("That let ").named(m.piece, m.color);
+    if (m.captured) {
+      s.text(" take ").named(m.captured, player).text(onSquare(m));
+      if (m.promotion) s.text(" and become a ").piece(m.promotion, m.color);
+    } else if (m.promotion) {
+      s.text(` reach ${m.to} and become a `).piece(m.promotion, m.color);
+    } else {
+      s.text(` ${m.piece === "knight" ? "jump" : "come"} to ${m.to}`);
+    }
+    s.text(checkWords(m));
   }
-  s.text(checkWords(m));
   if (isKey && !story.rear) hitting(s, m, story.targets, player);
   s.text(".");
-  if (isKey && story.rear) discovered(s, m, story.rear, story.targets, player);
+  if (isKey && story.rear) discovered(s, m, story.rear, story.targets, player, played ? "past" : "would");
   return s.done();
 }
 
-/** One clause of the rest of a line: "your king had to step aside", "the knight took your queen". */
-function clause(s: Sentence, m: MoveDetail, prev: MoveDetail | undefined, player: Color): void {
+/**
+ * One move of a line as a clause, in the past ("the knight took your queen", "your king had to
+ * step aside") or as what would follow ("the knight would take your queen"). `jump` says
+ * "jumped" for a knight's quiet move, and names the square of a capture.
+ */
+function clause(s: Sentence, m: MoveDetail, prev: MoveDetail | undefined, player: Color, tense: Tense, jump = false): void {
   const mine = m.color === player;
+  const w = tense === "would";
   if (m.castle) {
-    s.text(`${mine ? "you" : "they"} castled ${SIDE[m.castle]}${checkWords(m)}`);
+    s.text(`${mine ? "you" : "they"} ${w ? "would castle" : "castled"} ${SIDE[m.castle]}${checkWords(m)}`);
     return;
   }
   s.named(m.piece, m.color);
   if (m.captured) {
-    s.text(" took ").named(m.captured, other(m.color));
-    if (m.enPassant) s.text(" en passant");
+    s.text(w ? " would take " : " took ").named(m.captured, other(m.color));
+    if (jump) s.text(onSquare(m));
+    else if (m.enPassant) s.text(" en passant");
   } else if (mine && m.piece === "king" && prev?.check) {
-    s.text(" had to step aside");
+    s.text(w ? " would have to step aside" : " had to step aside");
+  } else if (jump && m.piece === "knight") {
+    s.text(` jumped to ${m.to}`);
   } else {
-    s.text(` went to ${m.to}`);
+    s.text(` ${w ? "would go" : "went"} to ${m.to}`);
   }
-  if (m.promotion) s.text(" and became a ").piece(m.promotion, m.color);
+  if (m.promotion) s.text(w ? " and become a " : " and became a ").piece(m.promotion, m.color);
   s.text(checkWords(m));
 }
 
-/** The rest of the punishing line as one sentence, the key move's targets on its clause. */
-function thenSentence(story: ExampleStory, from: number, keyIndex: number | undefined): StorySentence | undefined {
-  const rest = story.punish.slice(from);
-  if (rest.length === 0) return undefined;
+/** Plies `from` to `to` of the punishing line as one sentence, the key move's targets on its clause. */
+function lineSentence(
+  s: Sentence,
+  story: ExampleStory,
+  from: number,
+  to: number,
+  keyIndex: number | undefined,
+  tense: Tense,
+): void {
+  const rest = story.punish.slice(from, to);
   const player = story.played.color;
-  const s = new Sentence(player);
   let rearAfter: MoveDetail | undefined;
   rest.forEach((m, i) => {
     if (i > 0) s.text(i === rest.length - 1 ? ", and " : ", ");
-    clause(s, m, story.punish[from + i - 1], player);
+    clause(s, m, story.punish[from + i - 1], player, tense);
     if (from + i === keyIndex) {
       if (story.rear) rearAfter = m;
       else hitting(s, m, story.targets, player);
     }
   });
   s.text(".");
-  if (rearAfter && story.rear) discovered(s, rearAfter, story.rear, story.targets, player);
-  return s.done();
+  if (rearAfter && story.rear) discovered(s, rearAfter, story.rear, story.targets, player, tense);
 }
 
-/** "They missed it. The game went on with the rook to b8.", or "The game ended there." */
-function missedSentence(story: ExampleStory): StorySentence {
+/** A capture, promotion or mate: something that would change the material or end the game. */
+const material = (m: MoveDetail): boolean => !!m.captured || !!m.promotion || m.mate;
+
+/**
+ * After a played reply: the further plies the game played, in the past, then what the engine's
+ * line would still have done from there ("From there the knight would take your queen."), left
+ * out when nothing material remains.
+ */
+function thenSentence(story: ExampleStory, followed: number, keyIndex: number | undefined): StorySentence | undefined {
+  const player = story.played.color;
+  const s = new Sentence(player);
+  if (followed > 1) lineSentence(s, story, 1, followed, keyIndex, "past");
+  const rest = story.punish.slice(followed);
+  if (rest.some(material)) {
+    if (followed > 1) s.text(" ");
+    s.text("From there ");
+    lineSentence(s, story, followed, story.punish.length, keyIndex, "would");
+  }
+  return s.segments.length > 0 ? s.done() : undefined;
+}
+
+/** When the game left the line at once: what it played, as a plain fact, or that it ended. */
+function gameSentence(story: ExampleStory): StorySentence {
   const player = story.played.color;
   const m = story.actualReply;
   // No reply in the game: it ended on the move (the last move, a resignation, a timeout).
   if (!m) return new Sentence(player).text("The game ended there.").done();
-  const s = new Sentence(player).text("They missed it. The game went on with ");
+  const s = new Sentence(player);
   if (m.castle) {
-    s.text(`them castling ${SIDE[m.castle]}`);
+    s.text(`In the game they castled ${SIDE[m.castle]}`);
   } else {
-    s.named(m.piece, m.color);
-    if (m.captured) s.text(" taking ").named(m.captured, player).text(onSquare(m));
+    s.text("In the game they played ").piece(m.piece, m.color);
+    if (m.captured) s.text(" takes ").named(m.captured, player).text(onSquare(m));
     else s.text(` to ${m.to}`);
     if (m.promotion) s.text(", becoming a ").piece(m.promotion, m.color);
   }
-  s.text(`${m.mate ? ", checkmate" : m.check ? ", with check" : ""}.`);
+  s.text(`${m.mate ? ", checkmate," : m.check ? ", with check," : ""} instead.`);
   return s.done();
 }
 
@@ -377,39 +420,25 @@ function betterSentence(story: ExampleStory): StorySentence | undefined {
 
 const line = (tag: StoryTag, sentence: StorySentence): StoryLine => ({ tag, ...sentence });
 
-/**
- * Whether the opponent played the punishment: the engine's reply, or another move that took
- * the piece lost (then `other` is that move, as the game had it).
- */
-function punishment(story: ExampleStory): { found: boolean; other?: MoveDetail } {
-  const a = story.actualReply;
-  const takesLost = !!a && !!story.lost && !!a.captured && a.to === story.lost.square && a.color !== story.played.color;
-  const differs = !!a && a.uci !== story.punish[0]?.uci;
-  if (takesLost && differs) return { found: true, other: a };
-  return { found: story.replyFound || takesLost };
-}
 
 /**
- * An example told move by move: the player's move, the reply that punished it, what followed
- * (or that the opponent missed it), and the better move with its reason. Pure function of the story.
+ * An example told move by move: the player's move, the reply it allowed, what followed, and the
+ * better move with its reason. Only moves the game played are told in the past; the rest of the
+ * engine's line is what the move allowed or what would have followed. Pure function of the story.
  */
 export function storyLines(story: ExampleStory, patternId?: string): StoryLine[] {
   const out: StoryLine[] = [line("you", youSentence(story, patternId))];
   const key = keyMove(story);
   const keyIndex = key.line === "punish" && key.move ? key.index : undefined;
   const reply = story.punish[0];
-  const { found, other: actual } = punishment(story);
-  if (actual) {
-    // The punishment was played with another move: tell that move; the engine's continuation
-    // after its own reply did not happen, so it is not told.
-    out.push(line("they", theySentence(story, actual, false, patternId, true)));
-  } else if (reply) {
-    out.push(line("they", theySentence(story, reply, keyIndex === 0, patternId, found)));
-    if (found) {
-      const then = thenSentence(story, 1, keyIndex);
+  const followed = followedOf(story);
+  if (reply) {
+    out.push(line("they", theySentence(story, reply, keyIndex === 0, followed >= 1)));
+    if (followed >= 1) {
+      const then = thenSentence(story, followed, keyIndex);
       if (then) out.push(line("then", then));
     } else {
-      out.push(line("then", missedSentence(story)));
+      out.push(line("then", gameSentence(story)));
     }
   }
   const better = betterSentence(story);
@@ -437,23 +466,6 @@ function pieceWorth(story: ExampleStory, diff: number): PieceRole | undefined {
   return story.better.find((m) => m.color === player && m.captured && m.captured !== "king" && VALUE[m.captured] === diff)?.captured;
 }
 
-/**
- * The minor piece a rook went for, when the story is exactly that trade: a knight or bishop of
- * theirs takes the rook, the player takes that piece back, and nothing else changes hands.
- */
-function exchangeOf(story: ExampleStory): "knight" | "bishop" | undefined {
-  // A rook for a minor piece is two pawns net, whether or not the builder names the rook as lost.
-  if (story.gain !== -2 || (story.lost && story.lost.piece !== "rook")) return undefined;
-  const player = story.played.color;
-  const moves = [story.played, ...story.punish];
-  const captures = moves.filter((m) => m.captured);
-  if (captures.length !== 2) return undefined;
-  const take = moves.findIndex((m) => m.color !== player && m.captured === "rook");
-  const taker = moves[take];
-  if (!taker || (taker.piece !== "knight" && taker.piece !== "bishop")) return undefined;
-  const back = moves.slice(take + 1).some((m) => m.color === player && m.to === taker.to && m.captured === taker.piece);
-  return back ? taker.piece : undefined;
-}
 
 /**
  * The pieces to name for a material swing, or undefined when no single piece tells it: the
@@ -490,16 +502,25 @@ export function storyCost(story: ExampleStory, patternId?: string): StoryCost {
   const s = new Sentence(player);
   const missed = patternId !== undefined && blindSpotFamilyOf(patternId) === "missed";
   const r = story.betterReason;
-  // Only the punishment the opponent played (or a missed chance, which is gone either way) cost anything.
-  const cost = missed || punishment(story).found ? "It cost" : "It could have cost";
-  const exchange = !missed ? exchangeOf(story) : undefined;
   const chances = winChances(story);
+  // The whole punishing line was played: what it took was taken.
+  const whole = story.punish.length > 0 && followedOf(story) >= story.punish.length;
+  const lost = story.lost;
+  // What was won for the piece is a fact only when the game played the line that far; while the
+  // whole loss is a possibility, the trade is part of it.
+  const lostFor = story.lostInGame && !whole ? undefined : story.lostFor;
   if (!missed && story.punish.at(-1)?.mate) {
-    s.text(story.replyFound ? "It allowed checkmate." : "It could have allowed checkmate.");
-  } else if (exchange) {
-    s.text(`${cost} the exchange (a `).piece("rook", player).text(" for a ").piece(exchange, other(player)).text(").");
-  } else if (!missed && story.lost) {
-    s.text(`${cost} `).named(story.lost.piece, story.lost.color).text(".");
+    s.text(whole ? "It allowed checkmate." : "It could have allowed checkmate.");
+  } else if (!missed && lost) {
+    // A piece is said as lost only when the game took it.
+    const cost = story.lostInGame ? "It cost" : "It could have cost";
+    if (lost.piece === "rook" && (lostFor === "knight" || lostFor === "bishop")) {
+      s.text(`${cost} the exchange (a `).piece("rook", player).text(" for a ").piece(lostFor, other(player)).text(").");
+    } else {
+      s.text(`${cost} `).named(lost.piece, lost.color);
+      if (lostFor) s.text(" for a ").piece(lostFor, other(player));
+      s.text(".");
+    }
   } else if (missed && r?.kind === "mates") {
     s.text("It cost a forced mate.");
   } else if (missed && missedBy(story) >= 1) {
@@ -517,6 +538,7 @@ export function storyCost(story: ExampleStory, patternId?: string): StoryCost {
       s.text(materialWorth("It cost the chance to win material", diff));
     }
   } else if (!missed && story.gain <= -1) {
+    const cost = whole ? "It cost" : "It could have cost";
     const n = Math.round(-story.gain);
     s.text(n === 1 ? `${cost} a pawn.` : `${cost} about ${n} pawns of material.`);
   } else {

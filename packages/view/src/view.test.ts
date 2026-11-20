@@ -15,6 +15,8 @@ const F1 = {
     move("Kxd2", "e1", "d2", "king", "white", { captured: "knight" }),
   ],
   replyFound: true,
+  followed: 4,
+  lostInGame: true,
   better: [move("Re1", "h1", "e1", "rook", "white")],
   targets: [{ square: "f2", piece: "king", color: "white" }, { square: "d2", piece: "queen", color: "white" }],
   lost: { square: "d2", piece: "queen", color: "white" },
@@ -351,7 +353,7 @@ describe("focus items in games and words", () => {
     expect(ex.moveLabel).toBe("Move 12, you had White");
     expect(ex.story?.map((l) => l.text).slice(0, 2)).toEqual([
       "Your queen went to d2.",
-      "That let the knight jump to e4 with check, hitting your king and queen at once.",
+      "They found it: the knight jumped to e4 with check, hitting your king and queen at once.",
     ]);
     expect(ex.cost?.text).toBe("It cost your queen.");
     expect(v.details.focus).toEqual(["Allowed a tactic: Now 0.20 per 100 moves; started at 1.32; target 1.00."]);
