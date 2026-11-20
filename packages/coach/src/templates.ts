@@ -97,7 +97,7 @@ const TEXT: Record<PatternId, PatternText> = {
     what: "You had a winning tactic and did not play it in {gamesAffected} of your {games} games.",
     drill: {
       plain:
-        "When the other side has two pieces close together or an unguarded piece, stop and look for a move that attacks two things at once. A few fork puzzles a day help.",
+        "When the other side has pieces bunched together or one left unguarded, stop and look for a move that attacks two things at once. A few fork puzzles a day help.",
       club:
         "Look at every check, capture and threat before choosing a move, even in quiet positions. Solve a themed puzzle set each day: forks, pins and discovered attacks.",
       training:

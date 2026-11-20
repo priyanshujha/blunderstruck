@@ -201,11 +201,13 @@ describe("writeReport", () => {
     await expect(writeReport(draft(["hung-piece"]), p)).rejects.toThrow(TypeError);
   });
 
-  it("reports two failed validations with the first error", async () => {
+  it("reports two failed validations with the repair attempt's error", async () => {
     const messages: string[] = [];
-    const p = stub(["not json", "still not json"]);
+    const p = stub(["not json", "[]"]);
     await writeReport(draft(["hung-piece"]), p, undefined, { onModelError: (m) => messages.push(m) });
-    expect(messages).toEqual(["the reply failed validation twice: the answer is not valid JSON"]);
+    expect(messages).toEqual([
+      "the reply failed validation twice: the answer must be a JSON object with summary and focus",
+    ]);
   });
 
   it("makes no call for a few-games draft", async () => {

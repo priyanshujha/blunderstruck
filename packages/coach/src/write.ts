@@ -83,7 +83,7 @@ async function ask(
   if (second === undefined) return { calls };
   const parsed = parseWording(second, draft, only);
   if (parsed.ok) return { text: parsed.value, calls };
-  onError(`the reply failed validation twice: ${first.errors[0]}`);
+  onError(`the reply failed validation twice: ${parsed.errors[0]}`);
   return { calls };
 }
 
