@@ -1,209 +1,157 @@
 # Blunderstruck
 
-Find the chess mistakes you keep making, get at most two things to fix, and see next week
-whether you actually fixed them.
+Blunderstruck finds the chess mistakes you keep making across your games. It picks at most two
+of them to work on, sized for your rating. Each later report shows whether they got rarer in
+the games you played since.
 
-Blunderstruck pulls your games from Chess.com or Lichess and analyses each one once with
-Stockfish. It sorts your mistakes into nine recurring patterns, such as hung pieces, missed
-tactics or thrown wins. It then picks at most two of them to work on, chosen by how much they
-cost you and how often they come back, and only from the patterns that suit your rating band.
-Each later report counts the same patterns again in the games you played since, and says
-whether they got rarer.
+![The report page](docs/report.png)
 
-Code does all of the choosing and counting. A model (Claude or Gemini, with your own key) is
-optional and only writes the words.
+([The same page in dark mode](docs/report-dark.png).)
 
-## Requirements
+## See it in one minute
 
-- Node 22.13 or newer. The database uses Node's built-in SQLite. Node 22 prints one
-  experimental warning about it on each run; later versions do not.
-- pnpm.
-- Stockfish (`brew install stockfish`, or your package manager), either on `PATH` or named
-  by `STOCKFISH_PATH`.
-
-## Quick start
+You need Node 22.13 or newer and pnpm (`npm install -g pnpm`).
 
 ```bash
+git clone https://github.com/priyanshujha/blunderstruck.git
+cd blunderstruck
 pnpm install
-pnpm cli report lichess <user>
-pnpm cli report chesscom <user>
+pnpm web --demo
 ```
 
-**The first run** fetches your rated games and looks back 30 days. If those 30 days hold
-fewer than 20 games, it goes back further, up to 90 days, until it has 20. It reports on one
-time class (bullet, blitz, rapid or classical): the one you played most. Use
-`--time-class <class>` to start a report for another one. Daily and correspondence games are
-never used.
+Then open `http://127.0.0.1:4321/`. The demo is a made-up report for an invented player, held
+in memory. It needs no Stockfish, no model key and no database. `--port` picks another port.
 
-**Later runs** cover only the games played since the last report, and never use a game played
-before the first report's period. If there are fewer than 10 new games, the run shows the last
-report again and says how many more games a new one needs. `--now` makes a new report anyway;
-such a report keeps the focus items as they were and does not count toward moving them on.
+## Run it on your own games
 
-If two runs for the same player start at the same moment, the second one shows the report the
-first one stored instead of storing its own.
+1. **Install Stockfish.**
+   - macOS: `brew install stockfish`
+   - Debian or Ubuntu: `sudo apt install stockfish`
+   - Windows: download Stockfish and set `STOCKFISH_PATH` to the program's full path.
 
-To read the report in a browser on your own machine:
+   On any system, `stockfish` must be on your `PATH`, or `STOCKFISH_PATH` must name it.
+2. **Make a report**, with your own username:
+
+   ```bash
+   pnpm cli report lichess <you>
+   pnpm cli report chesscom <you>
+   ```
+
+3. **Read it in your browser** at `http://127.0.0.1:4321/`, reachable from this machine only:
+
+   ```bash
+   pnpm web lichess <you>
+   ```
+
+Chess.com and Lichess need no key or account.
+
+**How long it takes.** Every move gets a quick first look. The moves that look like mistakes
+are then checked again more deeply, at about 1.3 seconds a position on a laptop. A first report
+on about 160 games took about half an hour. A first look at a sample is printed before the end.
+Later runs only analyse the games played since, and a report rebuilt from stored analyses
+takes seconds. Ctrl-C stops a run; the next run continues where it stopped.
+
+**No model key needed.** Without one, the report has every number, the focus items and the
+examples, with plain built-in wording. A key only lets a model write the words. To add one:
 
 ```bash
-pnpm web lichess <user>
+cp .env.example .env
 ```
 
-This serves the latest report at `http://127.0.0.1:4321/`, reachable from this machine only.
-While games are still being analysed, the page refreshes itself every 30 seconds.
+Then set `ANTHROPIC_API_KEY` (Claude) or `GEMINI_API_KEY` (Gemini) in `.env`. If both are set,
+Claude is used; `--provider anthropic|gemini|none` chooses. `pnpm -s cli models` prints which
+model each provider uses. The model never chooses anything and never writes your numbers: it
+writes placeholders that code fills in, and any move it names must be in your examples. A
+report makes at most three model calls. Keys are read only from the environment or `.env`
+(`--env <path>` reads another file). Keep `.env` out of folders that sync to other people.
 
-## The model key
+Other optional settings are listed in `.env.example`: `BLUNDERSTRUCK_CONTACT` (sent to
+Chess.com and Lichess in the User-Agent, as their API guidelines ask) and `LICHESS_TOKEN`
+(raises Lichess's limits).
 
-A key is optional. Without one, the report still has every number and the focus items, with
-plain built-in wording.
+## What a report looks like
 
-With a key, a model writes the summary and the text of each focus item. It never chooses the
-items, and it never writes a number: it writes placeholders, and code fills in your numbers.
+The start of the terminal report for the demo's invented player:
 
-Copy `.env.example` to `.env` and set one of:
+```
+Weekly report for tidy_rookling (lichess, rapid)
+Rating band: club, from your median rating of 1240 in these games
+Period: 30 Nov to 7 Dec 2026
+Games: 18 found, all analysed
 
-| Variable | Provider |
-|---|---|
-| `ANTHROPIC_API_KEY` | Claude (`claude-opus-5-5`) |
-| `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Gemini (`gemini-3.8-flash`; `BLUNDERSTRUCK_GEMINI_SMART_MODEL` picks another) |
+Over 18 games you made about 3.4 mistakes a game.
 
-`report`, `db` and `pnpm web` read `.env` from the working directory; `--env <path>` reads
-another file instead. A variable already set in your shell wins over the file.
+Focus (2 things)
+1. Moves that let a fork in [Allowed a tactic]
+   In 5 of your 18 games a move of yours handed the other side something for free.
+   In 5 of your 18 games, about 3 in every 10 games.
+   Goal: at most 1 game in 4. In these 18 games that means 4 or fewer; you are at 5.
+   It came up in 6 of your last 6 weeks. Kept from your last report (since 16 Nov).
+   Looking at all 27 times in your last 96 games:
+   - Their best reply gave check: 11 of your 27, against about 1 in 8 of your mistakes overall. 6 of them from the knight that moved.
+   - The piece you had just moved was taken: 10 of your 27, against about 1 in 4 of your mistakes overall.
+   The habit to build:
+   1. Before you let go of the piece, find every check they would have, knight checks first.
+   2. Look at the square you are moving to. Count what attacks the piece there and what guards it.
+```
 
-If both keys are set, Claude is used. To choose, pass `--provider anthropic|gemini|none` or set
-`BLUNDERSTRUCK_PROVIDER`; the flag wins over the variable. Naming a provider whose key is
-missing is an error.
+## What it measures, and what it does not
 
-One report is one model call, and at most three (one repair, and one reword when a large
-account's focus changes after the full analysis), each of roughly 5,000 input
-tokens, most of them a fixed prefix the provider caches, and 1,000 output tokens; set
-`BLUNDERSTRUCK_MODEL_WEEKLY_PLAN` to use a different model, for example a cheaper Claude model.
+It measures moves that cost you a lot of winning chances, by Stockfish, and sorts them into
+nine patterns: missed mate, allowed mate, hung piece, allowed tactic, missed capture, missed
+tactic, thrown win, time trouble and opening trouble. Frequencies and goals are counted in
+games. Each focus item shows its blind spots (what its mistakes have in common more often than
+your mistakes overall), one practice step for each, and positions from your games. An example
+says what your move allowed, the better move, and what the game played next. It states a cost
+as fact only when the game really took what the move allowed.
 
-Keep `.env` out of folders that sync to the cloud or to other people: anyone who can read the
-file can use your key.
-
-## Many games
-
-If a period holds more than 150 games, the report first appears from a sample of 150 spread
-evenly across its weeks. The rest are then analysed in the same run, and the report is updated
-when they are done. To stop, press Ctrl-C: the game being analysed finishes, then the run
-stops. A second Ctrl-C quits at once. Either way the games already analysed are kept, and the
-next `report` run continues where this one stopped.
-
-- `--sample-only` stops after the sample. A later run without it finishes the analysis.
-- `--max-games N` analyses at most N of the period's games, chosen the same even way. The
-  rest are never analysed.
+It does not judge slow or positional play: most mistakes that are not a one-move tactic carry
+no pattern. It uses rated bullet, blitz, rapid and classical games only, one time class per
+report, never daily or correspondence games. One week of games is a small sample, so "no clear
+change" is a common and honest answer.
 
 ## Your data
 
-Everything is kept in one SQLite file, by default `~/.blunderstruck/blunderstruck.db`.
-`--db <path>` or the `BLUNDERSTRUCK_DB` variable (in the shell or in `.env`) puts it
-elsewhere.
-
-A game is fetched and analysed once. Later runs reuse what is stored, unless the analysis
-settings changed (a different depth or Stockfish version), in which case the games a report
-needs are analysed again and the report says so.
-
-To back up the database or move it to another machine:
+Everything is kept in one SQLite file, by default `~/.blunderstruck/blunderstruck.db`, outside
+the repository. `--db <path>` or `BLUNDERSTRUCK_DB` puts it elsewhere. To back it up or move it:
 
 ```bash
 pnpm cli db export backup.ndjson
 pnpm cli db import backup.ndjson
 ```
 
-The export is written to a temporary file and then renamed, so a failed export never leaves
-half a file. It refuses to overwrite an existing file unless you pass `--force`. Importing the
-same file twice changes nothing. The code only talks to storage through a small
-interface (`Store` in `packages/store`), so another database can be added by implementing it.
-
-## How to read the report
-
-**Rates are per 100 of your own moves**, not per game, so weeks with different numbers of
-games compare fairly.
-
-**Each earlier focus item gets one of four verdicts**, comparing the new games with the 30 days
-before them:
-
-| Verdict | Meaning |
-|---|---|
-| improved | the rate fell by at least 20%, and a fall that large is unlikely to be chance |
-| no clear change | neither improved nor worse |
-| worse | the rate rose by at least 20%, and a rise that large is unlikely to be chance |
-| not enough games yet | fewer than 10 games or 300 moves on either side, or too few mistakes of that kind to judge |
-
-One week of games is a small sample, so only large changes show, roughly halving or rising by
-half. "No clear change" is common, and does not mean the work is not helping.
-
-**Why an item is on the list.** The report gives the reason, for example "It came up in 5 of
-your last 6 weeks", together with its rate now, its rate when it was chosen, and its target (a
-quarter lower).
-
-**How an item leaves the list.** It graduates once it has been at or below its target, and not
-worse, in two reports in a row that had enough games to judge. It can be swapped out after six
-such reports if another pattern now costs you more, and it is dropped if your rating band
-changes so that it no longer suits you. A graduated or swapped-out pattern is not chosen again
-for the next two reports.
+The export refuses to overwrite a file unless you pass `--force`. Importing twice changes
+nothing.
 
 ## Commands
 
-All commands run from the repository root. `pnpm -s cli` with no arguments prints this list.
+All commands run from the repository root. `pnpm -s cli --help` prints every command and flag.
 
 ```
-pnpm cli report <lichess|chesscom> <user> [--time-class <class>] [--depth 12] [--db <path>]
-         [--provider anthropic|gemini|none] [--env <path>] [--band <band>]
+pnpm cli report <lichess|chesscom> <user> [--time-class <class>] [--depth 12] [--check-depth 18]
+         [--db <path>] [--provider anthropic|gemini|none] [--env <path>] [--band <band>]
          [--as-of <ISO date>] [--now] [--sample-only] [--max-games N] [--json] [--all]
 pnpm cli db export <file> [--db <path>] [--force] [--env <path>]
 pnpm cli db import <file> [--db <path>] [--env <path>]
+pnpm cli models
 pnpm web <lichess|chesscom> <user> [--port 4321] [--db <path>] [--time-class <class>] [--env <path>]
+pnpm web --demo [--port 4321]
 ```
 
-| `report` flag | Effect |
+The most useful `report` flags:
+
+| Flag | Effect |
 |---|---|
-| `--time-class` | bullet, blitz, rapid or classical (default: the time class used before, or the one with the most recent rated games) |
-| `--depth` | Stockfish search depth, 1 to 30 (default 12) |
-| `--db` | database file |
-| `--provider` | which model writes the wording; `none` uses the built-in wording |
-| `--env` | read settings from this file instead of `./.env` |
-| `--band` | rating band to coach for: novice, beginner, club, advanced or expert (default: from your ratings) |
-| `--as-of` | end the period at this time instead of now; not earlier than the last report |
+| `--time-class` | bullet, blitz, rapid or classical (default: the one used before, or the one you played most) |
+| `--check-depth` | depth of the deeper check of likely mistakes (default 18; 0 turns it off: faster, noisier) |
 | `--now` | make a new report even with fewer than 10 new games |
-| `--sample-only` | stop after the sample of 150 games |
+| `--sample-only` | stop after a sample of 150 games; a later run finishes the rest |
 | `--max-games N` | analyse at most N of the period's games |
-| `--json` | print the stored report as JSON on stdout (messages go to stderr) |
+| `--json` | print the stored report as JSON |
 | `--all` | also print the week-by-week table and every pattern's trend |
 
-The CLI's number flags take digits only and are checked against their range: `--depth` is 1
-to 30 (here and for `analyze`, `patterns` and `eval`), `--max-games` and `--max` are at least
-1, `--index` is at least 0 and `--examples` is 0 to 2. A bad value exits with status 2. The web
-`--port` is 0 to 65535.
-
-Lower-level commands work on a JSON file of games instead of the database:
-
-```bash
-pnpm cli fetch lichess <user> --max 20
-pnpm cli analyze data/lichess-<user>.json --player <user>
-pnpm cli patterns data/lichess-<user>.json --player <user>
-pnpm cli eval "<fen>" --depth 16
-pnpm cli models
-```
-
-`analyze` lists the mistakes in one game. `patterns` analyses every game in the file (results
-are cached next to it) and prints your top two habits with example positions; `--all` lists
-every pattern and your repeated opening mistakes. `eval` asks Stockfish about one position,
-and `models` prints which model handles which wording task.
-
-`analyze` output looks like this (illustrative):
-
-```
-https://lichess.org/abcd1234
-<user> as white (loss), 34 moves, Stockfish 19 depth 12, 1.8s
-  12.   Nd5     mistake    -11.2 win%   best c1e3
-  19.   Qxb7    blunder    -31.0 win%   best f1e1
-```
-
-Other optional settings are listed in `.env.example`: `BLUNDERSTRUCK_CONTACT` (sent to
-Chess.com and Lichess in the User-Agent, as their API guidelines ask), `LICHESS_TOKEN` (raises
-Lichess rate limits) and `BLUNDERSTRUCK_MODEL_WEEKLY_PLAN` (another model id for the wording).
+Lower-level commands work on a JSON file of games instead of the database: `fetch`, `analyze`,
+`patterns` and `eval`. See `pnpm -s cli --help`.
 
 How it all works is in [docs/architecture.md](docs/architecture.md).
 
