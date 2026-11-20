@@ -4,6 +4,10 @@ import {
   AnalyzedGame,
   AnalyzedMove,
   BEST_LINE_MAX_PLIES,
+  ExportLine,
+  FOCUS_TOKENS,
+  FocusChoice,
+  FocusItem,
   MAX_FOCUS_ITEMS,
   PATTERN_IDS,
   PATTERNS_VERSION,
@@ -11,7 +15,16 @@ import {
   PatternId,
   PatternStat,
   PatternSummary,
+  Persistence,
+  ReportDraft,
+  SUMMARY_TOKENS,
   TopHabit,
+  WeeklyReport,
+  focusTokenValues,
+  renderText,
+  settingsKey,
+  summaryTokenValues,
+  trackKey,
 } from "./index";
 
 const move = {
@@ -109,5 +122,193 @@ describe("pattern contracts", () => {
     };
     expect(PatternSummary.safeParse(summary).success).toBe(true);
     expect(PatternSummary.safeParse({ ...summary, top: [habit, habit, habit] }).success).toBe(false);
+  });
+});
+
+const stat = (patternId: string, per100Moves: number) => ({
+  patternId,
+  games: 30,
+  moves: 1000,
+  gamesAffected: 9,
+  occurrences: 12,
+  per100Moves,
+  avgWinPctLoss: 30,
+});
+
+const settings = { analysisVersion: 2, patternsVersion: 1, engine: { name: "stockfish", depth: 12 } };
+
+const periodStats = (start: string, end: string) => ({
+  start,
+  end,
+  games: 30,
+  moves: 1000,
+  mistakesPer100Moves: 4.256,
+  settings,
+  stats: [stat("hung-piece", 1.2)],
+});
+
+const weeks = [true, false, null, true, true, false];
+
+const reason = {
+  kind: "new",
+  previousRank: null,
+  score: 28.5,
+  recentCost: 14.3,
+  naiveCostThisPeriod: 12,
+  rate: 1.4,
+  severity: 30,
+  chronicity: 0.6,
+  weeksRecurred: 3,
+  weeksCounted: 5,
+  weeks,
+};
+
+const choice = {
+  patternId: "hung-piece",
+  exampleGameIds: ["g1"],
+  baseline: stat("hung-piece", 1.6),
+  target: 1.2,
+  since: "2026-11-19T00:00:00Z",
+  reason,
+  examples: [finding],
+};
+
+const item = {
+  ...choice,
+  title: "Count the defenders",
+  why: "Pieces hung in {gamesAffected} of {games} games.",
+  drill: "Before each move, check what is undefended.",
+};
+
+const progress = {
+  patternId: "hung-piece",
+  previous: stat("hung-piece", 1.6),
+  current: stat("hung-piece", 1.2),
+  verdict: "flat",
+  pValue: 0.196,
+};
+
+const report = {
+  player: "TestPlayer",
+  track: { platform: "lichess", username: "TestPlayer", timeClass: "blitz" },
+  kind: "weekly",
+  revision: 0,
+  periodStart: "2026-11-12T00:00:00Z",
+  periodEnd: "2026-11-19T00:00:00Z",
+  rating: 1650,
+  band: "club",
+  bandSource: "ratings",
+  settings,
+  gamesFound: 30,
+  gamesAnalyzed: 30,
+  gameIds: ["g1"],
+  coverage: { sampled: 30, analysed: 30, total: 30, complete: true, sampleOnly: false },
+  current: periodStats("2026-11-12T00:00:00Z", "2026-11-19T00:00:00Z"),
+  comparison: null,
+  weeks: Array.from({ length: 6 }, () => periodStats("2026-11-12T00:00:00Z", "2026-11-19T00:00:00Z")),
+  trends: [],
+  priorities: [
+    {
+      patternId: "hung-piece",
+      eligible: true,
+      rank: 1,
+      rate: 1.4,
+      severity: 30,
+      recentCost: 14.3,
+      naiveCostThisPeriod: 12,
+      chronicity: 0.6,
+      score: 28.5,
+      persistence: { weeksRecurred: 3, weeksCounted: 5, weeks, chronicity: 0.6 },
+    },
+  ],
+  focus: [item],
+  progress: [progress],
+  retired: [],
+  summary: "{games} games, {focusCount} thing to work on.",
+  wording: { source: "template", wordedFor: [], calls: 0 },
+  notes: ["no-key"],
+};
+
+describe("report contracts", () => {
+  it("accepts a full report and its draft", () => {
+    expect(WeeklyReport.safeParse(report).success).toBe(true);
+    const { summary: _s, wording: _w, ...draft } = report;
+    expect(ReportDraft.safeParse({ ...draft, focus: [choice] }).success).toBe(true);
+    expect(FocusChoice.safeParse(choice).success).toBe(true);
+    expect(FocusItem.safeParse(choice).success).toBe(false);
+  });
+
+  it("rejects three focus items", () => {
+    expect(WeeklyReport.safeParse({ ...report, focus: [item, item] }).success).toBe(true);
+    expect(WeeklyReport.safeParse({ ...report, focus: [item, item, item] }).success).toBe(false);
+    const { summary: _s, wording: _w, ...draft } = report;
+    expect(ReportDraft.safeParse({ ...draft, focus: [choice, choice, choice] }).success).toBe(false);
+  });
+
+  it("requires six weeks, newest first", () => {
+    const p = { weeksRecurred: 3, weeksCounted: 5, weeks, chronicity: 0.6 };
+    expect(Persistence.safeParse(p).success).toBe(true);
+    expect(Persistence.safeParse({ ...p, weeks: weeks.slice(0, 5) }).success).toBe(false);
+    expect(Persistence.safeParse({ ...p, weeks: [...weeks, true] }).success).toBe(false);
+    expect(Persistence.safeParse({ ...p, chronicity: 1.2 }).success).toBe(false);
+    expect(FocusItem.safeParse({ ...item, reason: { ...reason, weeks: weeks.slice(1) } }).success).toBe(false);
+    expect(WeeklyReport.safeParse({ ...report, weeks: report.weeks.slice(1) }).success).toBe(false);
+  });
+
+  it("caps wording calls and examples", () => {
+    expect(WeeklyReport.safeParse({ ...report, wording: { ...report.wording, calls: 4 } }).success).toBe(false);
+    expect(FocusItem.safeParse({ ...item, examples: [finding, finding, finding] }).success).toBe(false);
+    expect(WeeklyReport.safeParse({ ...report, notes: ["unknown-note"] }).success).toBe(false);
+  });
+
+  it("builds track and settings keys", () => {
+    expect(trackKey({ platform: "lichess", username: "TestPlayer", timeClass: "blitz" })).toBe(
+      "lichess:testplayer:blitz",
+    );
+    expect(settingsKey(settings)).toBe("a2.p1.d12.stockfish");
+  });
+
+  it("renders known tokens and throws on unknown ones", () => {
+    expect(renderText("in {gamesAffected} of {games} games", { gamesAffected: "9", games: "30" })).toBe(
+      "in 9 of 30 games",
+    );
+    expect(renderText("no tokens", {})).toBe("no tokens");
+    expect(() => renderText("{bogus} here", { games: "30" })).toThrow("bogus");
+  });
+
+  it("formats token values with two-decimal rates", () => {
+    const values = focusTokenValues(choice as FocusChoice, report as WeeklyReport);
+    expect(Object.keys(values).sort()).toEqual([...FOCUS_TOKENS].sort());
+    expect(values).toMatchObject({
+      games: "30",
+      gamesAffected: "9",
+      occurrences: "12",
+      rate: "1.20",
+      baselineRate: "1.60",
+      target: "1.20",
+      weeksRecurred: "3",
+      weeksCounted: "5",
+    });
+    const summary = summaryTokenValues(report as WeeklyReport);
+    expect(Object.keys(summary).sort()).toEqual([...SUMMARY_TOKENS].sort());
+    expect(summary).toEqual({ games: "30", mistakeRate: "4.26", focusCount: "1" });
+    expect(renderText(report.summary, summary)).toBe("30 games, 1 thing to work on.");
+  });
+
+  it("parses every export line kind", () => {
+    const header = {
+      type: "header",
+      format: "blunderstruck-export",
+      schemaVersion: 1,
+      exportedAt: "2026-11-19T00:00:00Z",
+    };
+    expect(ExportLine.safeParse(header).success).toBe(true);
+    expect(ExportLine.safeParse({ ...header, format: "other" }).success).toBe(false);
+    expect(
+      ExportLine.safeParse({ type: "track", data: { ...report.track, createdAt: "2026-11-19T00:00:00Z" } }).success,
+    ).toBe(true);
+    expect(ExportLine.safeParse({ type: "report", data: report }).success).toBe(true);
+    expect(ExportLine.safeParse({ type: "game", data: {} }).success).toBe(false);
+    expect(ExportLine.safeParse({ type: "other", data: {} }).success).toBe(false);
   });
 });
