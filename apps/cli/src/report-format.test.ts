@@ -153,16 +153,20 @@ describe("formatReport", () => {
     expect(text).toContain("1. Look before you let go of a piece");
     expect(text).toContain("You left a piece hanging in 23 of 31 games, 2.10 per 100 moves.");
     expect(text).toContain("It came up in 5 of your last 6 weeks.");
-    expect(text).toContain("Now 2.10 per 100 moves; started at 3.00; target 2.25.");
-    expect(text).toContain(`Position (FEN): ${FEN}`);
-    expect(text).toContain("You played Qxf7; better was Nf3 (-32.4 win%)");
+    // Games, not rates, without `all`; the older item's goal comes from its baseline.
+    expect(text).toContain("   In 23 of your 31 games.");
+    expect(text).toContain("   Goal: at most 7 in every 10 games. In these 31 games that means 21 or fewer; you are at 23.");
+    expect(text).not.toContain("per 100 moves; started");
+    expect(text).not.toContain("Position (FEN)");
+    expect(text).toContain("   - Move 12, you had White\n     You played Qxf7; better was Nf3 (-32.4 win%)");
     expect(text).toContain("You played Bxf7 (-25.0 win%)");
-    expect(text).toContain("Left a piece hanging: improved (3.00 before, 2.10 now, per 100 moves, p = 0.040)");
+    expect(text).toContain("How often, week by week (goal: at most 7 in every 10 games):\n   - 2026-10-15: 6 of 6 games");
+    expect(text).toContain("Left a piece hanging: improved. 30 of 30 games (in every game) before, 22 of 30 games (about 7 in every 10 games) since.");
     expect(text).toContain("Missed a winning tactic: not enough games yet");
     expect(text).toContain("Let a winning position slip: reached its target and stayed there");
     expect(text).not.toMatch(/\{\w+\}/);
-    // No week table or trends without `all`.
-    expect(text).not.toContain("Week by week");
+    // No per-100 week table or trends without `all`.
+    expect(text).not.toContain("rates per 100 moves");
     expect(text).not.toContain("All patterns");
 
     const order = ["Focus", "Last report's focus", "Retired from your list"].map((h) => text.indexOf(h));
@@ -187,8 +191,12 @@ describe("formatReport", () => {
     expect(text).toContain("New on your list.");
   });
 
-  it("shows the week table and all nine trends with all", () => {
+  it("shows the precise figures, the week table and all nine trends with all", () => {
     const text = formatReport(weekly(), { all: true });
+    expect(text).toContain("Now 2.10 per 100 moves; started at 3.00; target 2.25.");
+    expect(text).not.toContain("In 23 of your 31 games");
+    expect(text).toContain(`Position (FEN): ${FEN}`);
+    expect(text).toContain("Left a piece hanging: improved (3.00 before, 2.10 now, per 100 moves, p = 0.040)");
     expect(text).toContain("Week by week");
     const rows = text.split("\n").filter((l) => /^2026-\d\d-\d\d\s+6\s/.test(l));
     expect(rows).toHaveLength(6);
@@ -201,7 +209,7 @@ describe("formatReport", () => {
     }
   });
 
-  it("prints the week table on a first report without all, and no verdicts", () => {
+  it("prints the weeks in games on a first report without all, and no verdicts", () => {
     const text = formatReport(
       weekly({
         kind: "first",
@@ -214,7 +222,8 @@ describe("formatReport", () => {
       }),
     );
     expect(text.split("\n")[0]).toBe("First report for quiet_rook_test (lichess, rapid)");
-    expect(text).toContain("Week by week");
+    expect(text).toContain("How often, week by week");
+    expect(text).not.toContain("rates per 100 moves");
     expect(text).not.toContain("Last report's focus");
     expect(text).not.toContain("Retired from your list");
     expect(formatReport(weekly({ kind: "first", comparison: null, trends: [], progress: [], retired: [] }), { all: true })).toContain(
@@ -244,7 +253,12 @@ describe("formatReport", () => {
     expect(text).toContain("Too few games to pick focus items (7 games found).");
     expect(text).toContain("7 games so far, 6.50 mistakes per 100 moves.");
     expect(text).toContain("The numbers");
-    expect(text).toMatch(/Left a piece hanging\s+1\.50\s+/);
+    expect(text).toContain("- Left a piece hanging: in 4 of your 7 games, about 6 in every 10 games.");
+    expect(text).toContain("- Missed a mate: not once in your 7 games.");
+    expect(text).not.toMatch(/Left a piece hanging\s+1\.50\s+/);
+    expect(formatReport(weekly({ kind: "first", gamesFound: 7, focus: [], notes: ["few-games"], current: period("2026-11-19T00:00:00.000Z", 7, { "hung-piece": 1.5 }) }), { all: true })).toMatch(
+      /Left a piece hanging\s+1\.50\s+/,
+    );
     expect(text).not.toContain("Focus");
     expect(text).not.toContain("Week by week");
     expect(text).toContain("No model key was set, so the wording comes from built-in templates.");
@@ -328,5 +342,101 @@ describe("formatReport", () => {
     const text = formatReport(weekly({ focus: [], gamesFound: 5, notes: [] }));
     expect(text).toContain("No habit repeated often enough to pick a focus item this week.");
     expect(text).not.toContain("Too few games");
+  });
+
+  describe("blind spots, steps and stories", () => {
+    const mv = (san: string, from: string, to: string, piece: string, color: string, o: Record<string, unknown> = {}) => ({
+      san, uci: `${from}${to}`, from, to, piece, color, check: false, mate: false, fenAfter: "8/8/8/8/8/8/8/8 w - - 0 1", ...o,
+    });
+    // Fixture F1: r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2Q3R w - - 0 1; Qd2 allows Ne4+.
+    const F1_FEN = "r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2Q3R w - - 0 1";
+    const story = {
+      played: mv("Qd2", "d1", "d2", "queen", "white"),
+      punish: [
+        mv("Ne4+", "f6", "e4", "knight", "black", { check: true }),
+        mv("Ke1", "f2", "e1", "king", "white"),
+        mv("Nxd2", "e4", "d2", "knight", "black", { captured: "queen" }),
+        mv("Kxd2", "e1", "d2", "king", "white", { captured: "knight" }),
+      ],
+      replyFound: true,
+      better: [mv("Re1", "h1", "e1", "rook", "white")],
+      targets: [{ square: "f2", piece: "king", color: "white" }, { square: "d2", piece: "queen", color: "white" }],
+      lost: { square: "d2", piece: "queen", color: "white" },
+      gain: -6,
+      betterReason: { kind: "covers-square", square: "e4" },
+      winPctBefore: 94.2,
+      winPctAfter: 26.4,
+      depth: 18,
+    };
+    const spot = (id: string, count: number, baselineCount: number, refinement?: { id: string; count: number }) => ({
+      id, basis: "line" as const, count, games: count, of: 24, baselineCount, baselineOf: 160, ...(refinement ? { refinement } : {}), examples: [],
+    });
+    const item = focusItem("allowed-tactic", {
+      title: "Look at their checks before you move",
+      why: "You allowed a tactic in {gamesAffected} of {games} games.",
+      drill: "Before every move, name each check and capture they would have.",
+      baseline: { ...stat("allowed-tactic", 31, 1085, 2.0), gamesAffected: 17 },
+      goal: { per: 1, of: 3 },
+      blindSpots: [spot("answer-check", 11, 20, { id: "answer-knight-check", count: 7 }), spot("moved-piece-lost", 9, 40)],
+      blindSpotWindow: { start: "2026-10-08T00:00:00.000Z", end: "2026-11-19T00:00:00.000Z", games: 64, mistakes: 160 },
+      steps: [
+        { blindSpot: "answer-check", text: "{count} of your {of} began with a check: before you let go, find every check they would have." },
+        { blindSpot: "moved-piece-lost", text: "Ask what now attacks the square your piece lands on." },
+      ],
+      examples: [
+        { patternId: "allowed-tactic", gameId: "g1", ply: 23, winPctLoss: 67.8, fen: F1_FEN, played: "Qd2", best: "Re1", motif: "fork", story },
+      ],
+    } as unknown as Partial<FocusItem>);
+    const r = (): WeeklyReport => {
+      const current = period("2026-11-19T00:00:00.000Z", 31);
+      current.stats = current.stats.map((s) => (s.patternId === "allowed-tactic" ? { ...s, gamesAffected: 12 } : s));
+      return weekly({ focus: [item], current, progress: [], retired: [] });
+    };
+
+    it("prints them in words without all", () => {
+      const text = formatReport(r());
+      expect(text).toContain(
+        [
+          "   In 12 of your 31 games, about 4 in every 10 games.",
+          "   Goal: at most 1 game in 3. In these 31 games that means 10 or fewer; you are at 12.",
+        ].join("\n"),
+      );
+      expect(text).toContain(
+        [
+          "   Looking at all 24 times in your last 64 games:",
+          "   - Their reply gave check: 11 of your 24, against about 1 in 8 of your mistakes overall. 7 of them from the knight that moved.",
+          "   - The piece you had just moved was the one you lost: 9 of your 24, against about 1 in 4 of your mistakes overall.",
+          "   The habit to build:",
+          "   1. 11 of your 24 began with a check: before you let go, find every check they would have.",
+          "   2. Ask what now attacks the square your piece lands on.",
+          "   Drill: Before every move, name each check and capture they would have.",
+        ].join("\n"),
+      );
+      expect(text).toContain(
+        [
+          "   - Move 12, you had White",
+          "     You: Your queen went to d2.",
+          "     They: That let the knight jump to e4 with check, hitting your king and queen at once.",
+          "     Then: Your king had to step aside, the knight took your queen, and your king took the knight.",
+          "     Better: Rook to e1. It covers e4, so the knight cannot land there safely.",
+          "     It cost your queen.",
+        ].join("\n"),
+      );
+      expect(text).not.toContain("per 100 moves; started");
+      expect(text).not.toContain("winning chances went");
+      expect(text).not.toContain("Position (FEN)");
+      expect(text).not.toContain("motif: fork");
+    });
+
+    it("adds the precise figures, the position and the winning chances with all", () => {
+      const text = formatReport(r(), { all: true });
+      expect(text).toContain("   Now 0.20 per 100 moves; started at 2.00; target 2.25.");
+      expect(text).not.toContain("In 12 of your 31 games");
+      expect(text).toContain("The habit to build:");
+      expect(text).toContain(`   - Position (FEN): ${F1_FEN}`);
+      expect(text).toContain("     It cost your queen. Your winning chances went from 94% to 26%.");
+      expect(text).toContain("     You played Qd2; better was Re1 (-67.8 win%)");
+      expect(text).toContain("motif: fork");
+    });
   });
 });

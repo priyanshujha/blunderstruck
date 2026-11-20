@@ -1,17 +1,26 @@
 import {
+  type BlindSpot,
   type FocusExample,
   type FocusItem,
+  GAMES_TENTHS_FROM,
+  type GameGoal,
   type PatternProgress,
   type PatternStat,
   type PeriodStats,
   type ProgressVerdict,
   type RetiredFocus,
   type WeeklyReport,
+  blindSpotTokenValues,
   focusTokenValues,
+  gameGoalOf,
+  meetsGoal,
   renderText,
   summaryTokenValues,
 } from "@blunderstruck/contracts";
-import { patternName } from "./names";
+import { REFINEMENT_PHRASES, blindSpotLabel, patternName } from "./names";
+import { type StoryCost, type StoryLine, storyCost, storyLines } from "./story";
+
+export * from "./story";
 
 /** A table as text cells; the first column is a label, the rest are figures. */
 export interface TableView {
@@ -32,6 +41,49 @@ export interface ExampleView {
   line: string;
   /** The detector's own words and the motif, when there are any. */
   evidence?: string;
+  /** "Move 12, you had White". */
+  moveLabel: string;
+  /** The example told move by move; absent on examples stored without a story (use `line`). */
+  story?: StoryLine[];
+  /** "It cost your queen.", with winning chances before and after as its detail. */
+  cost?: StoryCost;
+}
+
+/** One week of a focus pattern, in games, for a chart. */
+export interface WeekShare {
+  /** "2026-10-22 to 2026-10-29" on a first report, the end day on later ones. */
+  label: string;
+  end: string;
+  games: number;
+  /** Games of the week the pattern came up in; null when the week had no games or no figure. */
+  affected: number | null;
+  /** `affected / games`; null when not drawn. */
+  share: number | null;
+  /** The week had no games: mark it, do not draw it as zero. */
+  noGames: boolean;
+  /** "5 of 23 games", "no games" or "no data". */
+  text: string;
+}
+
+export interface BlindSpotView {
+  id: string;
+  basis: BlindSpot["basis"];
+  label: string;
+  /** "23 of your 62". */
+  count: string;
+  /** "against about 1 in 8 of your mistakes overall"; absent when there is nothing to compare with. */
+  comparison?: string;
+  /** "9 of them by a knight." */
+  refinement?: string;
+  /** Label, count and comparison as one sentence. */
+  sentence: string;
+}
+
+export interface StepView {
+  blindSpot: string;
+  /** The blind spot's label, so the step can be shown beside it. */
+  label: string;
+  text: string;
 }
 
 export interface FocusView {
@@ -50,6 +102,23 @@ export interface FocusView {
   /** "Now 2.10 per 100 moves; started at 3.00; target 2.25." */
   figures: string;
   examples: ExampleView[];
+  /** "In 51 of your 162 games, about 1 game in 3." */
+  frequency: string;
+  /** The goal in games: the item's own, or derived from its baseline on older items. */
+  goal: GameGoal;
+  /** "at most 1 game in 4". */
+  goalText: string;
+  /** "Goal: at most 1 game in 4." */
+  goalLine: string;
+  /** Where the player stands against the goal, in games. */
+  standing: string;
+  /** Week by week in games, oldest first, with the goal line at `goal.per / goal.of`. */
+  weeks: WeekShare[];
+  /** "Looking at all 62 times in your last 80 games:"; absent without blind spots. */
+  blindSpotsIntro?: string;
+  blindSpots: BlindSpotView[];
+  /** One step per blind spot; `drill` is the general drill that follows them. */
+  steps: StepView[];
 }
 
 export interface SectionView {
@@ -68,12 +137,35 @@ export interface ReportView {
   /** Focus items, or the numbers when there are none. */
   body:
     | { kind: "focus"; heading: string; items: FocusView[] }
-    | { kind: "numbers"; heading: string; intro: string; table: TableView };
+    | {
+        kind: "numbers";
+        heading: string;
+        intro: string;
+        table: TableView;
+        /** Each pattern in games: "Left a piece hanging: 5 of 7 games, about 7 in every 10 games." */
+        lines: string[];
+      };
+  /** Per 100 moves; `progressInGames` says the same in games. */
   progress?: SectionView;
   retired?: SectionView;
+  progressInGames?: SectionView;
+  retiredInGames?: SectionView;
+  /** "How often, week by week": the heading for each focus item's `weeks`. */
+  weeksInGames: string;
+  /** Per 100 moves. */
   weeks: { heading: string; table: TableView };
   trends: { heading: string; table?: TableView; empty?: string };
   notes: SectionView;
+  /** The precise figures, per 100 moves, for whoever wants them. */
+  details: {
+    heading: string;
+    /** "Left a piece hanging: Now 2.10 per 100 moves; started at 3.00; target 2.25." */
+    focus: string[];
+    progress?: SectionView;
+    retired?: SectionView;
+    weeks: ReportView["weeks"];
+    trends: ReportView["trends"];
+  };
 }
 
 export interface ReportViewOptions {
@@ -131,6 +223,124 @@ function tryRender(template: string, values: Record<string, string>): string | u
   }
 }
 
+/** `GAMES_TENTHS_FROM` as thousandths, so shares compare in integers. */
+const TENTHS_FROM_MILLI = Math.round(GAMES_TENTHS_FROM * 1000);
+
+/** `a / g` is at least `GAMES_TENTHS_FROM`, the share from which counts are said in tenths. */
+const inTenths = (a: number, g: number): boolean => a * 1000 >= TENTHS_FROM_MILLI * g;
+/** round(10a / g), halves up, in integers. */
+const tenthsOf = (a: number, g: number): number => Math.floor((20 * a + g) / (2 * g));
+/** round(g / a), halves up, in integers. */
+const oneIn = (a: number, g: number): number => Math.floor((2 * g + a) / (2 * a));
+
+/**
+ * How often something happened in a set of games, as a player can picture it: "not once",
+ * "about 1 game in 3" (only when the share is within a tenth of 1 in 3, else the tenths form),
+ * "about 8 in every 10 games" (from a share of `GAMES_TENTHS_FROM`),
+ * "in almost every game" (when that rounds to 10 of 10 but was not all), "in every game", and
+ * "in your only game" when there was one game and it happened there.
+ */
+export function gamesPhrase(affected: number, games: number): string {
+  if (games <= 0) return "no games yet";
+  if (affected <= 0) return "not once";
+  if (affected >= games) return games === 1 ? "in your only game" : "in every game";
+  if (inTenths(affected, games)) {
+    const x = tenthsOf(affected, games);
+    return x >= 10 ? "in almost every game" : `about ${x} in every 10 games`;
+  }
+  const n = oneIn(affected, games);
+  // "1 game in N" only when the true share is within a tenth of 1/N: |a·N − g| ≤ g/10.
+  if (10 * Math.abs(affected * n - games) <= games) return `about 1 game in ${n}`;
+  return `about ${tenthsOf(affected, games)} in every 10 games`;
+}
+
+/** A goal in the same words: "at most 1 game in 4", "at most 6 in every 10 games", "not in a single game". */
+export function goalPhrase(goal: GameGoal): string {
+  if (goal.per <= 0) return "not in a single game";
+  if (goal.of === 10) return `at most ${goal.per} in every 10 games`;
+  if (goal.per === 1) return `at most 1 game in ${goal.of}`;
+  return `at most ${goal.per} games in every ${goal.of}`;
+}
+
+/** The item's goal, or for an item stored before goals were in games, the one its baseline gives. */
+export const goalOf = (item: Pick<FocusItem, "goal" | "baseline">): GameGoal => item.goal ?? gameGoalOf(item.baseline);
+
+/** A frequency or goal phrase without its hedge, so the two can be compared. */
+const phraseCore = (p: string): string => p.replace(/^(about|at most) /, "");
+
+/**
+ * "In 51 of your 162 games, about 1 game in 3." and the edges. Given an unmet goal whose words
+ * would read the same as the frequency ("about 6 in every 10" against "at most 6 in every 10"),
+ * only the exact counts are said, so a missed goal never looks reached.
+ */
+export function frequencySentence(stat: Pick<PatternStat, "games" | "gamesAffected"> | undefined, goal?: GameGoal): string {
+  if (!stat) return "No data for this period.";
+  const { games: g, gamesAffected: a } = stat;
+  if (g <= 0) return "No games this period.";
+  if (a <= 0) return g === 1 ? "Not once in your one game." : `Not once in your ${count(g)} games.`;
+  if (a >= g) return g === 1 ? "In your one game." : `In all ${count(g)} of your games.`;
+  const phrase = gamesPhrase(a, g);
+  if (goal && !meetsGoal(stat, goal) && phraseCore(phrase) === phraseCore(goalPhrase(goal))) {
+    return `In ${count(a)} of your ${count(g)} games.`;
+  }
+  return `In ${count(a)} of your ${count(g)} games, ${phrase}.`;
+}
+
+/**
+ * What the goal means in this period's games, after "Goal: …": "In these 31 games that means 10
+ * or fewer; you are at 12." Checks for no games first, as `meetsGoal` passes those.
+ */
+export function standingSentence(stat: Pick<PatternStat, "games" | "gamesAffected"> | undefined, goal: GameGoal): string {
+  if (!stat || stat.games <= 0) return "No games this period to measure it against.";
+  const allowed = Math.floor((goal.per * stat.games) / goal.of);
+  const limit = allowed === 0 ? "none" : `${count(allowed)} or fewer`;
+  const games = stat.games === 1 ? "In your one game" : `In these ${count(stat.games)} games`;
+  const inside = meetsGoal(stat, goal) ? ", inside the goal" : "";
+  return `${games} that means ${limit}; you are at ${count(stat.gamesAffected)}${inside}.`;
+}
+
+/** "38 of 120 games (about 1 game in 3)". */
+const gamesShort = (s: Pick<PatternStat, "games" | "gamesAffected">): string =>
+  `${count(s.gamesAffected)} of ${plural(s.games, "game")} (${gamesPhrase(s.gamesAffected, s.games)})`;
+
+/** "against about 1 in 8 of your mistakes overall": the share of all the player's mistakes with the property. */
+function baselinePhrase(bc: number, bo: number): string | undefined {
+  if (bo <= 0) return undefined;
+  const tail = "of your mistakes overall";
+  if (bc <= 0) return `against none ${tail}`;
+  if (bc >= bo) return `against all ${tail}`;
+  // Small numbers are given exactly; "about 1 in 3" of 7 mistakes says more than it knows.
+  if (bo < SMALL_BASELINE) return `against ${count(bc)} of your ${plural(bo, "mistake")} overall`;
+  if (inTenths(bc, bo)) return `against about ${Math.min(9, tenthsOf(bc, bo))} in 10 ${tail}`;
+  return `against about 1 in ${oneIn(bc, bo)} ${tail}`;
+}
+
+/** Below this many mistakes in all, the comparison gives the exact counts. */
+const SMALL_BASELINE = 20;
+
+function blindSpotView(spot: BlindSpot): BlindSpotView {
+  const label = blindSpotLabel(spot.id);
+  const countText = `${count(spot.count)} of your ${count(spot.of)}`;
+  const comparison = baselinePhrase(spot.baselineCount, spot.baselineOf);
+  const ref = spot.refinement;
+  const phrase = ref ? REFINEMENT_PHRASES[ref.id] : undefined;
+  return {
+    id: spot.id,
+    basis: spot.basis,
+    label,
+    count: countText,
+    ...(comparison ? { comparison } : {}),
+    ...(ref && phrase ? { refinement: `${count(ref.count)} of them ${phrase}.` } : {}),
+    sentence: `${label}: ${countText}${comparison ? `, ${comparison}` : ""}.`,
+  };
+}
+
+/** "Move 12, you had White", from the ply and the side to move in the position before it. */
+function moveLabel(ex: FocusExample): string {
+  const side = ex.story?.played.color ?? (ex.fen.split(" ")[1] === "b" ? "black" : "white");
+  return `Move ${Math.ceil(ex.ply / 2)}, you had ${side === "white" ? "White" : "Black"}`;
+}
+
 function exampleView(ex: FocusExample): ExampleView {
   const loss = `-${f1(ex.winPctLoss)} win%`;
   const better = ex.best ? `; better was ${ex.best}` : "";
@@ -144,10 +354,47 @@ function exampleView(ex: FocusExample): ExampleView {
     loss,
     line: `You played ${ex.played}${better} (${loss})`,
     ...(evidence ? { evidence } : {}),
+    moveLabel: moveLabel(ex),
+    ...(ex.story ? { story: storyLines(ex.story, ex.patternId), cost: storyCost(ex.story, ex.patternId) } : {}),
   };
 }
 
-function focusView(item: FocusItem, index: number, r: WeeklyReport, failed: () => void): FocusView {
+/** The weeks a report shows, oldest first, with their labels (see `weekTable`). */
+function shownWeeks(r: WeeklyReport, weeks: readonly PeriodStats[]): { week: PeriodStats; label: string }[] {
+  const first = r.kind === "first";
+  const periodStart = Date.parse(r.periodStart);
+  return [...weeks]
+    .filter((w) => !first || Date.parse(w.end) > periodStart)
+    .sort((a, b) => Date.parse(a.end) - Date.parse(b.end))
+    .map((w) => ({
+      week: w,
+      label: first ? `${day(Date.parse(w.start) < periodStart ? r.periodStart : w.start)} to ${day(w.end)}` : day(w.end),
+    }));
+}
+
+function weekShares(r: WeeklyReport, weeks: readonly PeriodStats[], patternId: string): WeekShare[] {
+  return shownWeeks(r, weeks).map(({ week, label }) => {
+    const base = { label, end: week.end, games: week.games };
+    if (week.games === 0) return { ...base, affected: null, share: null, noGames: true, text: "no games" };
+    const s = statOf(week.stats, patternId);
+    if (!s) return { ...base, affected: null, share: null, noGames: false, text: NO_DATA };
+    return {
+      ...base,
+      affected: s.gamesAffected,
+      share: s.gamesAffected / week.games,
+      noGames: false,
+      text: `${count(s.gamesAffected)} of ${plural(week.games, "game")}`,
+    };
+  });
+}
+
+function focusView(
+  item: FocusItem,
+  index: number,
+  r: WeeklyReport,
+  weeks: readonly PeriodStats[],
+  failed: () => void,
+): FocusView {
   const stat = statOf(r.current.stats, item.patternId);
   const values: Record<string, string> = focusTokenValues(item, r);
   if (!stat) {
@@ -173,6 +420,8 @@ function focusView(item: FocusItem, index: number, r: WeeklyReport, failed: () =
   else if (kind === "rose") bits.push("It has moved up the list.");
   else bits.push("New on your list.");
 
+  const goal = goalOf(item);
+  const spots = item.blindSpots ?? [];
   const now = stat ? f2(stat.per100Moves) : NO_DATA;
   const started = f2(item.baseline.per100Moves);
   const target = f2(item.target);
@@ -193,7 +442,29 @@ function focusView(item: FocusItem, index: number, r: WeeklyReport, failed: () =
     target,
     figures,
     examples: item.examples.map(exampleView),
+    frequency: frequencySentence(stat, goal),
+    goal,
+    goalText: goalPhrase(goal),
+    goalLine: `Goal: ${goalPhrase(goal)}.`,
+    standing: standingSentence(stat, goal),
+    weeks: weekShares(r, weeks, item.patternId),
+    ...(spots.length > 0 ? { blindSpotsIntro: blindSpotsIntro(item) } : {}),
+    blindSpots: spots.map(blindSpotView),
+    steps: (item.steps ?? []).map((step) => {
+      const spot = spots.find((b) => b.id === step.blindSpot);
+      const out = spot ? tryRender(step.text, blindSpotTokenValues(spot)) : undefined;
+      if (out === undefined) failed();
+      return { blindSpot: step.blindSpot, label: blindSpotLabel(step.blindSpot), text: out ?? UNSHOWN_WORDING };
+    }),
   };
+}
+
+/** "Looking at all 62 times in your last 80 games:". */
+function blindSpotsIntro(item: FocusItem): string {
+  const of = item.blindSpots[0]?.of ?? 0;
+  const times = of === 1 ? "the one time" : `all ${count(of)} times`;
+  const w = item.blindSpotWindow;
+  return w ? `Looking at ${times} in your last ${plural(w.games, "game")}:` : `Looking at ${times}:`;
 }
 
 function progressLine(p: PatternProgress): string {
@@ -201,6 +472,17 @@ function progressLine(p: PatternProgress): string {
   return (
     `${patternName(p.patternId)}: ${VERDICT_WORDS[p.verdict]} ` +
     `(${f2(p.previous.per100Moves)} before, ${f2(p.current.per100Moves)} now, per 100 moves${p3})`
+  );
+}
+
+function progressGamesLine(p: PatternProgress): string {
+  return `${patternName(p.patternId)}: ${VERDICT_WORDS[p.verdict]}. ${gamesShort(p.previous)} before, ${gamesShort(p.current)} since.`;
+}
+
+function retiredGamesLine(x: RetiredFocus): string {
+  return (
+    `${patternName(x.patternId)}: ${RETIRED_WHY[x.why]}. ` +
+    `${gamesShort(x.baseline)} when it was chosen on ${day(x.since)}, ${gamesShort(x.current)} now.`
   );
 }
 
@@ -217,17 +499,10 @@ function retiredLine(x: RetiredFocus): string {
  */
 function weekTable(r: WeeklyReport, weeks: readonly PeriodStats[]): TableView {
   const ids = r.focus.map((f) => f.patternId);
-  const first = r.kind === "first";
-  const periodStart = Date.parse(r.periodStart);
-  const sorted = [...weeks]
-    .filter((w) => !first || Date.parse(w.end) > periodStart)
-    .sort((a, b) => Date.parse(a.end) - Date.parse(b.end));
-  const label = (w: PeriodStats): string =>
-    first ? `${day(Date.parse(w.start) < periodStart ? r.periodStart : w.start)} to ${day(w.end)}` : day(w.end);
   return {
-    head: [first ? "Week" : "Week ending", "Games", "Mistakes /100", ...ids.map((id) => `${patternName(id)} /100`)],
-    rows: sorted.map((w) => [
-      label(w),
+    head: [r.kind === "first" ? "Week" : "Week ending", "Games", "Mistakes /100", ...ids.map((id) => `${patternName(id)} /100`)],
+    rows: shownWeeks(r, weeks).map(({ week: w, label }) => [
+      label,
       count(w.games),
       w.games === 0 ? "-" : f2(w.mistakesPer100Moves),
       ...ids.map((id) => {
@@ -292,6 +567,7 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
     summary = UNSHOWN_SUMMARY;
   }
 
+  const weeks = opts.weeks ?? r.weeks;
   const fewGames = r.focus.length === 0 && r.notes.includes("few-games");
   let body: ReportView["body"];
   if (r.focus.length === 0) {
@@ -301,6 +577,12 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
       intro: fewGames
         ? `Too few games to pick focus items (${plural(r.gamesFound, "game")} found). Here are the numbers.`
         : "No habit repeated often enough to pick a focus item this week. Here are the numbers.",
+      lines: r.current.stats.map(
+        (s) => {
+          const f = frequencySentence(s);
+          return `${patternName(s.patternId)}: ${f.charAt(0).toLowerCase()}${f.slice(1)}`;
+        },
+      ),
       table: {
         head: ["Pattern", "Per 100 moves", "Count", "Games"],
         rows: r.current.stats.map((s) => [
@@ -315,7 +597,7 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
     body = {
       kind: "focus",
       heading: r.focus.length === 1 ? "Focus" : `Focus (${r.focus.length} things)`,
-      items: r.focus.map((item, i) => focusView(item, i, r, failed)),
+      items: r.focus.map((item, i) => focusView(item, i, r, weeks, failed)),
     };
   }
 
@@ -336,6 +618,13 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
           },
         };
 
+  const progress: SectionView | undefined =
+    r.progress.length > 0 ? { heading: "Last report's focus, since then", lines: r.progress.map(progressLine) } : undefined;
+  const retired: SectionView | undefined =
+    r.retired.length > 0 ? { heading: "Retired from your list", lines: r.retired.map(retiredLine) } : undefined;
+  const weekView = { heading: "Week by week (rates per 100 moves)", table: weekTable(r, weeks) };
+  const items = body.kind === "focus" ? body.items : [];
+
   return {
     header,
     ...(coverage ? { coverage } : {}),
@@ -343,12 +632,23 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
     pending,
     ...(summary ? { summary } : {}),
     body,
+    ...(progress ? { progress } : {}),
+    ...(retired ? { retired } : {}),
     ...(r.progress.length > 0
-      ? { progress: { heading: "Last report's focus, since then", lines: r.progress.map(progressLine) } }
+      ? { progressInGames: { heading: progress!.heading, lines: r.progress.map(progressGamesLine) } }
       : {}),
-    ...(r.retired.length > 0 ? { retired: { heading: "Retired from your list", lines: r.retired.map(retiredLine) } } : {}),
-    weeks: { heading: "Week by week (rates per 100 moves)", table: weekTable(r, opts.weeks ?? r.weeks) },
+    ...(r.retired.length > 0 ? { retiredInGames: { heading: retired!.heading, lines: r.retired.map(retiredGamesLine) } } : {}),
+    weeksInGames: "How often, week by week",
+    weeks: weekView,
     trends,
     notes: { heading: "Notes", lines: noteLines(r, fewGames, wordingFailed) },
+    details: {
+      heading: "Precise figures (per 100 moves)",
+      focus: items.map((i) => `${i.patternName}: ${i.figures}`),
+      ...(progress ? { progress } : {}),
+      ...(retired ? { retired } : {}),
+      weeks: weekView,
+      trends,
+    },
   };
 }
