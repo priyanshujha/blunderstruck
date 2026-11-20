@@ -18,6 +18,23 @@ pnpm test
   a short hand-written PGN.
 - New dependencies must be compatible with AGPL-3.0.
 
+## Engineering rules
+
+1. **Shared shapes start in `packages/contracts`.** Change the schema there first, then the
+   code that uses it. If the change is breaking, say so in the pull request description.
+2. **Analysis is deterministic.** Stockfish runs at a fixed depth on one thread, with no
+   time limits. If you change engine settings or judgment thresholds, bump
+   `ANALYSIS_VERSION`; analyses from different versions are never compared.
+3. **Code finds and counts mistakes; a model only words the advice.** Detection, counting
+   and progress are plain code over Stockfish output. A model sees aggregated numbers and a
+   few example positions. Never add a model call per move or per game.
+4. **At most two focus items.** The contract enforces the limit; do not work around it.
+5. **Keeping tests offline:** inject `fetchImpl` instead of calling the network, and pass a
+   stub `Evaluator` instead of starting Stockfish.
+6. **Be a polite API client.** Fetch Chess.com archives one at a time, send a User-Agent on
+   every request, and do not add parallel fetching.
+7. **Compatible licences** include GPL-3.0, MIT, Apache-2.0 and BSD.
+
 ## Licensing of contributions
 
 The project is AGPL-3.0-only, and the maintainers also run a hosted service built on it. To
