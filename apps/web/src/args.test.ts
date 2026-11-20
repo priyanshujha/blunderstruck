@@ -27,6 +27,7 @@ describe("parseWebArgs", () => {
       expect(() => parseWebArgs(bad), bad.join(" ")).toThrow(UsageError);
     }
     expect(() => parseWebArgs(["--demo", "--db", "x.db"])).toThrow(/--demo .* takes no --db/);
+    expect(() => parseWebArgs(["--demo", "lichess", "someone"])).toThrow(/takes no player\n/);
     expect(() => parseWebArgs([])).toThrow(UsageError);
   });
 });

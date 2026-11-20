@@ -543,6 +543,16 @@ describe("words that are true", () => {
     expect(row).not.toMatch(/weeks/);
   });
 
+  it("names other reports by their end, not as weeks", () => {
+    const rows = reportsList([{ periodEnd: weekEnd(3), kind: "first" }, { periodEnd: weekEnd(1), kind: "weekly" }, { periodEnd: END, kind: "weekly" }], END);
+    expect(rows.map((x) => x.text)).toEqual([
+      `Report ending ${END.slice(0, 10)} (latest) (this one)`,
+      `Report ending ${weekEnd(1).slice(0, 10)}`,
+      `First report ending ${weekEnd(3).slice(0, 10)}`,
+    ]);
+    expect(rows.some((x) => x.text.startsWith("Week"))).toBe(false);
+  });
+
   it("titles a hung piece with no stored loss without saying it was unguarded", () => {
     expect(exampleTitle({ patternId: "hung-piece" })).toBe("A piece left to be taken");
   });
@@ -555,6 +565,7 @@ describe("words that are true", () => {
     expect(checking.lede.map((x) => x.text).join("")).toBe("A first look at your one rapid game. The deeper check is running.");
     const none = view(one({ gamesAnalyzed: 0, coverage: { sampled: 0, analysed: 0, total: 1, complete: false, sampleOnly: false } }), 1).page;
     expect(none.lede.map((x) => x.text).join("")).toBe("Your one rapid game has not been analysed yet.");
+    expect(none.headline).toBe(`${PLAYER}, your game is waiting to be analysed.`);
     const item = focusItem("allowed-tactic", [], {
       goal: { per: 0, of: 1 },
       blindSpots: [{ id: "answer-check", basis: "line", count: 1, games: 1, of: 1, baselineCount: 1, baselineOf: 1, examples: [] }],
@@ -564,7 +575,7 @@ describe("words that are true", () => {
     const cur = period(END, 18);
     const r = sampleReport([item], { current: { ...cur, stats: cur.stats.map((s) => (s.patternId === "allowed-tactic" ? { ...s, gamesAffected: 1 } : s)) } });
     const v = view(r);
-    expect(v.page.items[0]!.dots!.label).toBe("One dot per game. 1 of 18 is filled in; 1 of it is ringed.");
+    expect(v.page.items[0]!.dots!.label).toBe("One dot per game. 1 of 18 is filled in; it is ringed.");
     expect(v.page.about.find((x) => x.key === "Blind spots")!.value).toContain("Looked for across your one mistake in your 1 game from 30 Dec 2026 to 2 Jan 2027.");
     expect(v.page.tables[0]!.caption).toBe("Blind spots (1 game, 1 mistake)");
     const text = JSON.stringify(v.page);

@@ -405,7 +405,7 @@ function itemText(r: WeeklyReport, v: Omit<ReportView, "page">, item: FocusView,
             games: stat.games,
             affected: stat.gamesAffected,
             over,
-            label: `One dot per game. ${count(stat.gamesAffected)} of ${count(stat.games)} ${stat.gamesAffected === 1 ? "is" : "are"} filled in${over ? `; ${count(over)} of ${stat.gamesAffected === 1 ? "it" : "those"} ${over === 1 ? "is" : "are"} ringed.` : "."}`,
+            label: `One dot per game. ${count(stat.gamesAffected)} of ${count(stat.games)} ${stat.gamesAffected === 1 ? "is" : "are"} filled in${over ? (stat.gamesAffected === 1 ? "; it is ringed." : `; ${count(over)} of those ${over === 1 ? "is" : "are"} ringed.`) : "."}`,
           },
         }
       : {}),
@@ -430,7 +430,7 @@ function itemText(r: WeeklyReport, v: Omit<ReportView, "page">, item: FocusView,
 
 function headline(r: WeeklyReport, stage: PageStage, k: number): string {
   const p = r.player;
-  if (stage === "analysing" && r.coverage.analysed <= 0 && k > 0) return `${p}, your games are waiting to be analysed.`;
+  if (stage === "analysing" && r.coverage.analysed <= 0 && k > 0) return r.coverage.total === 1 ? `${p}, your game is waiting to be analysed.` : `${p}, your games are waiting to be analysed.`;
   if (stage !== "complete" && stage !== "sample" && k > 0) return `${p}, ${k === 1 ? "one habit stands out" : `${word(k)} habits stand out`} so far.`;
   if (k === 0 && r.notes.includes("few-games")) {
     const g = r.gamesFound;
@@ -679,7 +679,7 @@ export function reportsList(
   const sorted = [...reports].sort((a, b) => Date.parse(b.periodEnd) - Date.parse(a.periodEnd));
   return sorted.map((x, i) => {
     const here = Date.parse(x.periodEnd) === Date.parse(current);
-    const label = `${x.kind === "first" ? "First report" : "Week"} ending ${x.periodEnd.slice(0, 10)}${i === 0 ? " (latest)" : ""}${here ? " (this one)" : ""}`;
+    const label = `${x.kind === "first" ? "First report" : "Report"} ending ${x.periodEnd.slice(0, 10)}${i === 0 ? " (latest)" : ""}${here ? " (this one)" : ""}`;
     return { text: label, periodEnd: x.periodEnd, latest: i === 0, current: here };
   });
 }

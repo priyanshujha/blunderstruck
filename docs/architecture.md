@@ -166,15 +166,17 @@ game is looked for, by the first rule that applies:
 2. the punishing line ends in mate, and the game mated the player within as many plies;
 3. the opponent's very next move took the named lost piece on its square, and the captures on
    that square ended within 8 plies;
-4. the opponent's next move was the first move of the punishing line, and within the plies
-   read the opponent took the lost piece on the square it stood on after the move, without it
-   having moved, and the captures there ended inside those plies;
-5. the same as 4, taken a move late: the first move of the punishing line was itself the
-   capture of the lost piece, the game played something else first, and then took it.
+4. the opponent's next move was the first move of the punishing line, the player answered
+   without capturing and left the lost piece where it stood, and the opponent's very next
+   move took it there.
+
+A piece that is taken later than that is not counted: by then another move of the player's
+may be the reason, and that move has its own example.
 
 A stretch found this way is paid only when the player is mated in it, or when the player's net
-loss over it, and over all the plies read, is at least one pawn and at least what the engine's
-line costs. A game that won the material back is never told as having cost it.
+loss over it, and over every game ply replayed (up to 10), is at least one pawn and at least
+what the engine's line costs. A game that won the material back is never told as having cost
+it.
 `inGame.mated` is set when the punishing line ends in mate and the game's mate falls inside the
 stretch; only then is a mate stated as the move's cost. `net`, `lost`, `lostFor` and `exchange`
 are set on `inGame` only when it is paid. A story stored before `paid` existed has no `paid`

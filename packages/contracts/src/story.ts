@@ -106,9 +106,10 @@ export const ExampleStory = z.object({
       /**
        * The game took what the move allowed: it played the engine's punishing line through the
        * plies `gain` counts, or it took the piece named in `lost` where it stood (at once, or
-       * after the punishing move, or a move late), or it mated the player as the punishing line
-       * does; the exchange was over inside the moves read; and, short of mate, the player was
-       * down at least a pawn and at least what the punishing line costs. Absent on stories
+       * right after the punishing move and the player's reply), or it mated the player as the
+       * punishing line does; the exchange was over inside the moves read; and, short of mate,
+       * the player was down at least a pawn and at least what the punishing line costs, over
+       * those moves and over every game move read after them. Absent on stories
        * stored before the field existed: read as false.
        */
       paid: z.boolean().optional(),

@@ -801,14 +801,14 @@ describe("storyOf: paid needs the game to have cost what the move allowed", () =
     expect(s.inGame).toEqual({ moves: expect.any(Array), ended: true, paid: false });
   });
 
-  it("1...Ne5 2.Qe4 Kf8 3.Nxe5: takeable at once, taken a move late where it stood (rule 4)", async () => {
+  it("1...Ne5 2.Qe4 Kf8 3.Nxe5: taken a move late is not attributed to the move", async () => {
     const g = await read("r3k3/pp3ppp/2n5/8/8/3P1N2/PP2QPPP/4K2R b K - 0 1", "1... Ne5 2. Qe4 Kf8 3. Nxe5", "black", {
       2: { cp: 913, pv: ["e8f8", "e1d1", "f8g8", "h1e1", "h7h5", "e2e3", "g7g6"] },
       3: { cp: 1166, pv: ["f3e5", "e8f8", "e2f3", "f8g8", "f3f7", "g8h8", "f7b7", "a8f8", "e1d1", "g7g6"] },
     }, 4);
     const s = story(g, 2);
     expect(s.followed).toBe(0);
-    expect(s.inGame).toMatchObject({ paid: true, net: 3, lost: { square: "e5", piece: "knight", color: "black" }, ended: true });
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: true, paid: false });
   });
 
   it("a punishing line that needs a fork first is not paid when the game took a move late", async () => {
@@ -817,5 +817,61 @@ describe("storyOf: paid needs the game to have cost what the move allowed", () =
       2: { cp: -750, pv: ["d4e2", "g1h1", "e2c1", "f1c1", "a8d8", "g2g3", "f7f5", "c1e1", "g8f7", "h1g2"] },
     }, 6);
     expect(story(g, 1).inGame?.paid).toBe(false);
+  });
+});
+
+describe("storyOf: later blunders and pieces won back are not the move's cost", () => {
+  /** "1... Ne5 2. a3 ..." from a list of SAN moves, the first by `first`. */
+  const pgnOf = (sans: string[], first: "white" | "black"): string =>
+    sans
+      .map((m, i) => {
+        const j = first === "white" ? i : i + 1;
+        const n = Math.floor(j / 2) + 1;
+        if (j % 2 === 0) return `${n}. ${m}`;
+        return i === 0 ? `${n}... ${m}` : m;
+      })
+      .join(" ");
+  const read = async (fen: string, moves: string, as: "white" | "black", evals: Record<string, ScriptedEval>) => {
+    const sans = moves.split(" ");
+    const g = await fixtureGame({ pgn: fenPgn(fen, pgnOf(sans, as)), as, evals });
+    expect(g.analysis.moves).toHaveLength(sans.length);
+    return g;
+  };
+
+  it("n16b: 1...Ne5 2.a3 Rc8 3.Rxc8+ Kh7 4.Nxe5: the knight went with the later ...Rc8, not paid", async () => {
+    const g = await read("3r2k1/pp3pp1/2n4p/8/8/3P1N2/PP3PPP/2R3K1 b - - 0 1", "Ne5 a3 Rc8 Rxc8+ Kh7 Nxe5", "black", {
+      2: { cp: -4, pv: ["d8d3", "g1f1", "g8f8", "f1e1", "d3d5", "a2a3", "d5b5", "b2b4", "b5d5", "c1c3"] },
+      3: { cp: 635, pv: ["f3e5", "d8d5", "e5c4", "d5d3", "g2g3", "d3d5", "b2b3", "a7a6", "c4e3"] },
+    });
+    expect(story(g, 2).inGame?.paid).toBe(false);
+  });
+
+  it("n11: the knight defended by ...Qe7, undefended by ...Qd7, then taken: not paid", async () => {
+    const g = await read("r2qk2r/ppp2ppp/2n5/8/P7/5N2/1P3PPP/5BK1 b kq - 0 1", "Ne5 b3 Qe7 Bb5+ Qd7 Nxe5 Qxb5 axb5 a6 bxa6", "black", {
+      2: { cp: -1337, pv: ["d8d1", "a4a5", "a7a6", "h2h4", "a8d8", "h4h5", "d1b3", "h5h6", "g7g6", "f3g5"] },
+      3: { cp: -1108, pv: ["f3e5", "d8e7", "e5c4", "a8d8", "c4e3", "e7f6", "b2b3", "d8d2", "e3g4", "f6e7"] },
+    });
+    expect(story(g, 2).inGame?.paid).toBe(false);
+  });
+
+  it("n15: 1...Ne5 2.axb4 Kf8 3.Nxe5: the bishop was the one hanging; the knight is not this move's cost", async () => {
+    const g = await read("6k1/pp3ppp/2n5/8/1b6/P4N2/1P3PPP/6K1 b - - 0 1", "Ne5 axb4 Kf8 Nxe5 Ke7 Kf1", "black", {
+      2: { cp: -619, pv: ["b4d6", "g1f1", "g8f8", "f1e2", "f8e8", "e2d3", "d6c5", "d3e2", "c5b6", "f3g5"] },
+      3: { cp: -69, pv: ["f3e5", "b4c5", "g1f1", "c5d4", "e5d3", "g8f8", "f1e2", "f8e7", "e2f3", "f7f5"] },
+    });
+    const s = story(g, 2);
+    expect(s.lost).toMatchObject({ square: "e5", piece: "knight" });
+    expect(s.inGame?.paid).toBe(false);
+  });
+
+  it("n19: 1.Ke1 Nc2+ 2.Kd2 Nxa1 3.Kc1 ... 5.Kxa1: the trapped knight is won back, not paid", async () => {
+    const g = await read("6k1/5ppp/8/8/1n6/8/P4PPP/R4K2 w - - 0 1", "Ke1 Nc2+ Kd2 Nxa1 Kc1 h6 Kb2 h5 Kxa1 h4", "white", {
+      1: { cp: 795, pv: ["a1b1", "b4a6", "b1b6", "h7h5", "b6a6", "h5h4", "a2a4", "h4h3", "g2h3", "g7g5"] },
+      2: { cp: 523, pv: ["b4c2", "e1d2", "c2a1", "d2c3", "g8f8", "c3b2", "f8e7", "b2a1", "e7d6", "a1b2"] },
+    });
+    const s = story(g, 1);
+    expect(s.followed).toBe(3);
+    expect(s.lost).toMatchObject({ square: "a1", piece: "rook" });
+    expect(s.inGame?.paid).toBe(false);
   });
 });

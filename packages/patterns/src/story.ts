@@ -291,13 +291,12 @@ const capturesOn = (d: MoveDetail, square: string): boolean => !!d.captured && d
  * 2. `punish` ends in mate and the game mated the player within as many plies;
  * 3. the opponent's very next move took the piece `lost` names on its square, and the run of
  *    captures on that square ended within `STORY_LINE_MAX_PLIES` plies;
- * 4. the opponent's next move was the first move of `punish`, or (taken a move late) the first
- *    move of `punish` was itself the capture of `lost` on its square and the game played
- *    something else first; and within the window the opponent took that piece on the square it
- *    stood on after the move, without it having moved, and the captures there ended inside the
- *    window.
+ * 4. the game played the first move of `punish`, the player replied with a quiet move that
+ *    did not move the piece `lost` names, and the opponent's next move took that piece on the
+ *    square it stood on after the move; the captures there ended within the plies kept.
  * The stretch is `paid` when it contains the player being mated, or when the player's net loss
- * over it, and over the whole window, is at least 1 and at least what the engine's line costs
+ * over it, and over every game ply replayed (up to `BEST_LINE_MAX_PLIES`), is at least 1 and
+ * at least what the engine's line costs
  * (`-gain`): a game that won the material back is never told as having cost it. `mated` is set
  * when `punish` ends in mate and the game's mate falls inside the stretch. `net`, `lost`,
  * `lostFor` and `exchange` are `lineLoss` over the move and the paid stretch, set only when paid.
@@ -320,7 +319,7 @@ function gameAfter(
   const notPaid = { moves: moves.map((s) => s.detail), ended, paid: false };
 
   const { punish, followed, lost } = engine;
-  const paidPlies = paidStretch(game, window, afterPlayed, player, punish, followed, engine.capped, lost);
+  const paidPlies = paidStretch(game, afterPlayed, player, punish, followed, engine.capped, lost);
   if (paidPlies === undefined) return notPaid;
 
   const stretch = game.slice(0, paidPlies);
@@ -328,7 +327,8 @@ function gameAfter(
   const loss = lineLoss(fenBefore, [uci, ...stretch.map((s) => s.detail.uci)], player);
   if (mateIn === -1) {
     const need = Math.max(1, -engine.gain);
-    const whole = lineLoss(fenBefore, [uci, ...game.slice(0, Math.max(window, paidPlies)).map((s) => s.detail.uci)], player);
+    // Every ply replayed, not just the window: a piece won back shortly after is seen.
+    const whole = lineLoss(fenBefore, [uci, ...game.map((s) => s.detail.uci)], player);
     if (loss.net < need || whole.net < need) return notPaid;
   }
   const mated = mateIn !== -1 && punish.length > 0 && punish[punish.length - 1]!.detail.mate;
@@ -347,7 +347,6 @@ function gameAfter(
 /** The number of game plies the rules of `gameAfter` attribute to the move, or undefined. */
 function paidStretch(
   game: readonly Step[],
-  window: number,
   afterPlayed: Chess,
   player: Color,
   punish: readonly Step[],
@@ -377,21 +376,18 @@ function paidStretch(
     while (run < game.length && capturesOn(game[run]!.detail, lost.square)) run++;
     return run <= STORY_LINE_MAX_PLIES ? run : undefined;
   }
-  // 4. The punishing move played, or the piece takeable at once and taken a move late.
+  // 4. The punishing move played, the player replied, and the next move took the unmoved piece.
   const key = punish[0]?.detail;
-  if (!key) return undefined;
-  const played = game[0]?.detail.uci === key.uci;
-  const takeable = key.captured === lost.piece && key.to === lost.square;
-  if (!played && !takeable) return undefined;
+  const [first, reply, take] = [game[0]?.detail, game[1]?.detail, game[2]?.detail];
+  if (!key || !first || !reply || !take || first.uci !== key.uci) return undefined;
+  // Nothing taken elsewhere on the way: the cost is only what goes on the piece's square.
+  if (first.captured || reply.captured || reply.from === lost.square) return undefined;
   const there = afterPlayed.board.get(squareIndex(lost.square));
   if (there?.color !== player || there.role !== lost.piece) return undefined;
-  const at = game
-    .slice(0, window)
-    .findIndex((s) => s.detail.color !== player && s.detail.captured === lost.piece && s.detail.to === lost.square);
-  if (at === -1 || game.slice(0, at).some((s) => s.detail.color === player && s.detail.from === lost.square)) return undefined;
-  let end = at;
+  if (!capturesOn(take, lost.square) || take.captured !== lost.piece) return undefined;
+  let end = 2;
   while (end < game.length && capturesOn(game[end]!.detail, lost.square)) end++;
-  return end <= window ? end : undefined;
+  return end <= STORY_LINE_MAX_PLIES ? end : undefined;
 }
 
 /**

@@ -50,7 +50,7 @@ export function parseWebArgs(argv: readonly string[]): WebArgs {
   const { values, positionals } = parsed;
   const port = values.port === undefined ? DEFAULT_PORT : parsePort(values.port);
   if (values.demo) {
-    const extra = [values.db !== undefined && "--db", values["time-class"] !== undefined && "--time-class", values.env !== undefined && "--env", positionals.length > 0 && "a player"].filter(Boolean);
+    const extra = [values.db !== undefined && "--db", values["time-class"] !== undefined && "--time-class", values.env !== undefined && "--env", positionals.length > 0 && "player"].filter(Boolean);
     if (extra.length > 0) throw new UsageError(`--demo shows a made-up report and takes no ${extra.join(", ")}\n${USAGE}`);
     return { demo: true, port };
   }

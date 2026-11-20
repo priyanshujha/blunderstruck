@@ -308,11 +308,11 @@ function costWords(lost: StoryPiece, lostFor: string | undefined, me: MoveDetail
   return `${pieceWords(lost, me)}${lostFor ? `, for their ${lostFor}` : ", for nothing"}`;
 }
 
-/** "3 pawns' worth down"; only called for a loss of a pawn or more. */
+/** "1 pawn's worth down", "3 pawns' worth down"; only called for a loss of a pawn or more. */
 function materialWords(net: number): string {
   const n = Math.round(Math.abs(net));
   if (n === 0) return "level";
-  return `${n} pawn${n === 1 ? "" : "s"}' worth ${net > 0 ? "down" : "up"}`;
+  return `${n} ${n === 1 ? "pawn's" : "pawns'"} worth ${net > 0 ? "down" : "up"}`;
 }
 
 /**

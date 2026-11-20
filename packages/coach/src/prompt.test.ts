@@ -444,6 +444,12 @@ describe("buildPrompt", () => {
     expect(JSON.stringify([traded, up, mate].map(exampleOf))).not.toMatch(/no piece|"level"|worth up|nothing/);
   });
 
+  it("writes the material lost with the right apostrophe for one pawn and for several", () => {
+    const at = (net: number) => exampleOf(withStory(qc1Story({ moves: [mv("Ne2+", "f4e2", "knight", "black")], paid: true, net, ended: false }))).inGame.material;
+    expect(at(1)).toBe("1 pawn's worth down");
+    expect(at(3)).toBe("3 pawns' worth down");
+  });
+
   it("sends no paid for a missed pattern, whose cost is the win not taken", () => {
     const d = storiedDraft("x", WORKED);
     const missed = d.focus[1]!;
