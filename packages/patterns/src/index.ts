@@ -37,7 +37,7 @@ export {
   toPlayerGame,
 } from "./game";
 export { findPatterns } from "./find";
-export { lostPiece } from "./lost";
+export { lineLoss, lostPiece, type LineLoss } from "./lost";
 export { moveDetail, storyOf } from "./story";
 export { openingStats, patternStats, rankTop, summarize } from "./aggregate";
 export { DETECTORS } from "./detectors";

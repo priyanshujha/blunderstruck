@@ -279,7 +279,8 @@ function betterReasonOf(
  * legal-move rules (no engine call). A game whose moves carry a deeper check is expected to be
  * resolved to the checked values before it is passed in; the lines are read the same way.
  *
- * - `played` is the finding's move; `actualReply` the game's next move, if any.
+ * - `played` is the finding's move; `actualReply` the game's next move, if any. `replyFound`
+ *   holds when that reply is the engine's first answer, or captures the piece named in `lost`.
  * - `punish` is the engine's answer to the move, read over the plies the detectors score the
  *   played line on (`lineOutcome`) and cut after its last capture, promotion, check or mate;
  *   empty when that stretch has none. `better` is the engine's line cut the same way, at least
@@ -319,7 +320,11 @@ export function storyOf(
 
   const reply = replyTo(g, move);
   const actualReply = reply ? moveDetail(move.fenAfter, reply.uci) : undefined;
-  const replyFound = !!reply && answer.length > 0 && reply.uci === answer[0];
+  // Found: the engine's first answer, or another move that takes the piece the line costs.
+  const replyFound =
+    !!reply &&
+    ((answer.length > 0 && reply.uci === answer[0]) ||
+      (!!lost && !!actualReply?.captured && actualReply.to === lost.square));
 
   const bestLine = move.bestLine ?? (move.bestUci ? [move.bestUci] : []);
   const bestIsPlayed = bestLine[0] === move.uci;

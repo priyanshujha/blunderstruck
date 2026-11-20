@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lostPiece } from "./lost";
+import { lineLoss, lostPiece } from "./lost";
 
 /* Lines checked with Stockfish 19 at depth 18 (the scored part of each engine line). */
 
@@ -36,6 +36,34 @@ describe("lostPiece", () => {
       square: "c2",
       piece: "queen",
       color: "white",
+    });
+  });
+
+  describe("trades are set aside", () => {
+    const NE4 = "3q1rk1/ppp2ppp/5n2/8/8/2N5/PPP2PPP/3Q1RK1 w - - 0 1";
+    const KNIGHT = { square: "e4", piece: "knight", color: "white" };
+
+    it("1.Ne4? Nxe4 Qxd8 Rxd8 (the engine's line): the queens are traded, the knight is lost", () => {
+      expect(lineLoss(NE4, ["c3e4", "f6e4", "d1d8", "f8d8"], "white")).toEqual({ net: 3, piece: KNIGHT, exchange: false });
+    });
+
+    it("the same knight when the queens or rooks are traded first", () => {
+      expect(lostPiece(NE4, ["c3e4", "d8d1", "f1d1", "f6e4"], "white")).toEqual(KNIGHT);
+      const rooks = "3r2k1/ppp2ppp/5n2/8/8/2N5/PPP2PPP/3R1RK1 w - - 0 1";
+      expect(lostPiece(rooks, ["c3e4", "d8d1", "f1d1", "f6e4"], "white")).toEqual(KNIGHT);
+    });
+  });
+
+  // Constructed lines, for the counting rule only.
+  describe("value against net loss", () => {
+    it("a queen for a rook and a knight names no piece", () => {
+      const fen = "3r2k1/5ppp/8/8/3n4/5N2/5PPP/3Q2K1 w - - 0 1";
+      expect(lineLoss(fen, ["d1d4", "d8d4", "f3d4"], "white")).toEqual({ net: 1, exchange: false });
+    });
+
+    it("the exchange (a rook for a knight) names no piece and sets the flag", () => {
+      const fen = "2r3k1/5ppp/8/8/8/2N5/1P3PPP/6K1 b - - 0 1";
+      expect(lineLoss(fen, ["c8c3", "b2c3"], "black")).toEqual({ net: 2, exchange: true });
     });
   });
 });

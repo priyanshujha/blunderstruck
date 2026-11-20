@@ -355,3 +355,37 @@ describe("storyOf: no square reason the better move did not earn", () => {
     expect(s.lost).toBeUndefined();
   });
 });
+
+describe("storyOf: the punishment found by another capture", () => {
+  it("1...Qe4?? 2.Nxe4 counts as found when the stored answer was Bxe4", async () => {
+    // Depth 18 prefers Nxe4 (+6.43); depth 12 answers Bxe4 (+6.53). Either takes the queen.
+    const g = await fixtureGame({
+      pgn: fenPgn("2b2rk1/ppp1qppp/8/8/8/2NB4/PPP2PPP/5RK1 b - - 0 1", "1... Qe4 2. Nxe4"),
+      as: "black",
+      evals: {
+        2: { cp: -792, pv: ["f8e8", "a2a4", "g8f8", "f1d1", "e7h4", "c3e4", "h4d8", "g2g3", "c8g4", "d1e1"] },
+        3: { cp: 653, pv: ["d3e4", "c8e6", "e4d3", "f8d8", "f1d1", "e6g4", "d1e1", "g4e6"] },
+      },
+    });
+    const s = story(g, 2);
+    expect(brief(s)).toEqual(["Bxe4"]);
+    expect(s.lost).toEqual({ square: "e4", piece: "queen", color: "black" });
+    expect(s.actualReply).toMatchObject({ san: "Nxe4", captured: "queen" });
+    expect(s.replyFound).toBe(true);
+  });
+
+  it("1.Ne4? Nxe4 Qxd8 Rxd8: the knight is lost, not the traded queen", async () => {
+    const g = await fixtureGame({
+      pgn: fenPgn("3q1rk1/ppp2ppp/5n2/8/8/2N5/PPP2PPP/3Q1RK1 w - - 0 1", "1. Ne4 Nxe4"),
+      as: "white",
+      evals: {
+        1: { cp: 7, pv: ["f1e1", "d8d1", "e1d1", "f8e8", "f2f3", "g8f8", "g1f2", "e8e6", "d1d4", "e6b6"] },
+        2: { cp: -638, pv: ["f6e4", "d1d8", "f8d8", "f1e1", "e4d6", "g1f1", "d8e8", "e1d1", "e8e4", "d1d3"] },
+      },
+    });
+    const s = story(g, 1);
+    expect(brief(s)).toEqual(["Nxe4", "Qxd8", "Rxd8"]);
+    expect(s.gain).toBe(-3);
+    expect(s.lost).toEqual({ square: "e4", piece: "knight", color: "white" });
+  });
+});
