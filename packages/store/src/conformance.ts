@@ -66,6 +66,31 @@ export function fixtureAnalysis(gameId: string, over: Partial<AnalyzedGame> = {}
   };
 }
 
+/** An analysis whose flagged moves were checked at `depth`, for White's moves. */
+export function fixtureCheckedAnalysis(gameId: string, depth: number, over: Partial<AnalyzedGame> = {}): AnalyzedGame {
+  const base = fixtureAnalysis(gameId);
+  return {
+    ...base,
+    moves: base.moves.map((m) => ({
+      ...m,
+      check: {
+        depth,
+        scoreBefore: { cp: 22 },
+        scoreAfter: { cp: 24 },
+        bestUci: "e2e4",
+        bestLine: ["e2e4", "e7e5"],
+        answerLine: ["e7e5"],
+        winPctBefore: 52,
+        winPctAfter: 52.2,
+        winPctLoss: 0,
+        judgment: "ok",
+      },
+    })),
+    check: { depth, colors: ["white"] },
+    ...over,
+  };
+}
+
 export function fixturePeriodStats(start: string, end: string, games = 10): PeriodStats {
   return {
     start,
@@ -243,13 +268,13 @@ export function storeConformance(make: () => Promise<Store>): void {
       await store.putAnalysis(fixtureAnalysis("lichess:g0003", { analysisVersion: 1 }));
       const ids = ["lichess:g0001", "lichess:g0002", "lichess:g0003"];
 
-      const any = await store.getAnalyses(ids, { analysisVersion: 2, depth: 12 });
+      const any = await store.getAnalyses(ids, { analysisVersion: 2, depth: 12, checkDepth: 0 });
       expect([...any.keys()].sort()).toEqual(["lichess:g0001", "lichess:g0002"]);
       expect(any.get("lichess:g0001")).toEqual(fixtureAnalysis("lichess:g0001"));
 
-      const sf = await store.analysedIds(ids, { analysisVersion: 2, depth: 12, engineName: "stockfish" });
+      const sf = await store.analysedIds(ids, { analysisVersion: 2, depth: 12, checkDepth: 0, engineName: "stockfish" });
       expect([...sf]).toEqual(["lichess:g0001"]);
-      expect((await store.analysedIds(ids, { analysisVersion: 2, depth: 20 })).size).toBe(0);
+      expect((await store.analysedIds(ids, { analysisVersion: 2, depth: 20, checkDepth: 0 })).size).toBe(0);
     });
 
     it("upserts by game, version, depth and engine", async () => {
@@ -263,19 +288,63 @@ export function storeConformance(make: () => Promise<Store>): void {
       ]);
     });
 
-    it("streams analyses ordered by game, version, depth and engine", async () => {
+    it("keeps an unchecked and a checked analysis of one game apart, each lookup returning its own", async () => {
+      const plain = fixtureAnalysis("lichess:g0001");
+      const checked = fixtureCheckedAnalysis("lichess:g0001", 18);
+      await store.putAnalysis(plain);
+      await store.putAnalysis(checked);
+      await store.putAnalysis(fixtureCheckedAnalysis("lichess:g0002", 22));
+      const ids = ["lichess:g0001", "lichess:g0002", "lichess:g0003"];
+
+      const at0 = await store.getAnalyses(ids, { analysisVersion: 2, depth: 12, checkDepth: 0 });
+      expect([...at0.keys()]).toEqual(["lichess:g0001"]);
+      expect(at0.get("lichess:g0001")).toEqual(plain);
+
+      const at18 = await store.getAnalyses(ids, { analysisVersion: 2, depth: 12, checkDepth: 18, engineName: "stockfish" });
+      expect([...at18.keys()]).toEqual(["lichess:g0001"]);
+      expect(at18.get("lichess:g0001")).toEqual(checked);
+
+      expect([...(await store.analysedIds(ids, { analysisVersion: 2, depth: 12, checkDepth: 0 }))]).toEqual([
+        "lichess:g0001",
+      ]);
+      expect([...(await store.analysedIds(ids, { analysisVersion: 2, depth: 12, checkDepth: 18 }))]).toEqual([
+        "lichess:g0001",
+      ]);
+      expect([...(await store.analysedIds(ids, { analysisVersion: 2, depth: 12, checkDepth: 22 }))]).toEqual([
+        "lichess:g0002",
+      ]);
+      expect((await store.analysedIds(ids, { analysisVersion: 2, depth: 18, checkDepth: 0 })).size).toBe(0);
+    });
+
+    it("upserts a checked analysis by its check depth without touching the unchecked one", async () => {
+      await store.putAnalysis(fixtureAnalysis("lichess:g0001"));
+      await store.putAnalysis(fixtureCheckedAnalysis("lichess:g0001", 18));
+      await store.putAnalysis(fixtureCheckedAnalysis("lichess:g0001", 18, { finalLine: ["e7e5"] }));
+      const all = await collect(store.allAnalyses());
+      expect(all.map((a) => [a.check?.depth ?? 0, a.finalLine ?? null])).toEqual([
+        [0, null],
+        [18, ["e7e5"]],
+      ]);
+    });
+
+    it("streams analyses ordered by game, version, depth, check depth and engine", async () => {
+      await store.putAnalysis(fixtureCheckedAnalysis("lichess:g0001", 18));
+      await store.putAnalysis(fixtureCheckedAnalysis("lichess:g0001", 9, { engine: { name: "zeta", depth: 12 } }));
+
       await store.putAnalysis(fixtureAnalysis("lichess:g0002"));
       await store.putAnalysis(fixtureAnalysis("lichess:g0001", { engine: { name: "zeta", depth: 12 } }));
       await store.putAnalysis(fixtureAnalysis("lichess:g0001", { analysisVersion: 1 }));
       await store.putAnalysis(fixtureAnalysis("lichess:g0001"));
       const keys = (await collect(store.allAnalyses())).map(
-        (a) => `${a.gameId}/${a.analysisVersion}/${a.engine.depth}/${a.engine.name}`,
+        (a) => `${a.gameId}/${a.analysisVersion}/${a.engine.depth}/${a.check?.depth ?? 0}/${a.engine.name}`,
       );
       expect(keys).toEqual([
-        "lichess:g0001/1/12/stockfish",
-        "lichess:g0001/2/12/stockfish",
-        "lichess:g0001/2/12/zeta",
-        "lichess:g0002/2/12/stockfish",
+        "lichess:g0001/1/12/0/stockfish",
+        "lichess:g0001/2/12/0/stockfish",
+        "lichess:g0001/2/12/0/zeta",
+        "lichess:g0001/2/12/9/zeta",
+        "lichess:g0001/2/12/18/stockfish",
+        "lichess:g0002/2/12/0/stockfish",
       ]);
     });
   });

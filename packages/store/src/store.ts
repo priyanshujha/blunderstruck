@@ -8,10 +8,19 @@ import type {
   WeeklyReport,
 } from "@blunderstruck/contracts";
 
-/** Which stored analyses count: the analysis version and depth, and optionally the engine name. */
+/**
+ * Which stored analyses count: the analysis version, the depth, the depth of the deeper check,
+ * and optionally the engine name.
+ */
 export interface AnalysisKey {
   analysisVersion: number;
   depth: number;
+  /**
+   * Depth of the deeper check of flagged moves, 0 for an analysis that was not checked. An
+   * analysis is stored under `check.depth`, or 0 when it has no `check`, so an unchecked and a
+   * checked analysis of the same game coexist and each lookup returns only its own.
+   */
+  checkDepth: number;
   engineName?: string;
 }
 
@@ -39,6 +48,7 @@ export interface Store {
   gamesById(ids: readonly string[]): Promise<Map<string, GameRecord>>;
   getAnalyses(ids: readonly string[], key: AnalysisKey): Promise<Map<string, AnalyzedGame>>;
   analysedIds(ids: readonly string[], key: AnalysisKey): Promise<Set<string>>;
+  /** Upsert by game id, analysis version, depth, check depth (`checkDepthOf`) and engine name. */
   putAnalysis(a: AnalyzedGame): Promise<void>;
   /** Weekly stats by period end, for one track and settings key. */
   getPeriodStats(
@@ -63,4 +73,17 @@ export interface Store {
   /** Every stored report, ordered by (track key, period end). */
   allReports(): AsyncIterable<WeeklyReport>;
   close(): Promise<void>;
+}
+
+/** The check depth an analysis is stored under: its `check.depth`, or 0 when it was not checked. */
+export function checkDepthOf(a: Pick<AnalyzedGame, "check">): number {
+  return a.check?.depth ?? 0;
+}
+
+/**
+ * The check depth a lookup asks for. The field is required; a caller from untyped code that
+ * leaves it out asks for unchecked analyses, as an absent `AnalysisSettings.checkDepth` means 0.
+ */
+export function keyCheckDepth(key: AnalysisKey): number {
+  return (key as Partial<AnalysisKey>).checkDepth ?? 0;
 }

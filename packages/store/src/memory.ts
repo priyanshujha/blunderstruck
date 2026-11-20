@@ -6,20 +6,21 @@ import {
   WeeklyReport,
   trackKey,
 } from "@blunderstruck/contracts";
-import type { AnalysisKey, GameQuery, Store } from "./store";
+import { checkDepthOf, keyCheckDepth, type AnalysisKey, type GameQuery, type Store } from "./store";
 
 type StoredTrack = Track & { createdAt: string };
 
 const instant = (s: string): string => new Date(s).toISOString();
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const analysisKey = (a: AnalyzedGame): string =>
-  JSON.stringify([a.gameId, a.analysisVersion, a.engine.depth, a.engine.name]);
+  JSON.stringify([a.gameId, a.analysisVersion, a.engine.depth, checkDepthOf(a), a.engine.name]);
 
 function compareAnalyses(a: AnalyzedGame, b: AnalyzedGame): number {
   return (
     cmp(a.gameId, b.gameId) ||
     a.analysisVersion - b.analysisVersion ||
     a.engine.depth - b.engine.depth ||
+    checkDepthOf(a) - checkDepthOf(b) ||
     cmp(a.engine.name, b.engine.name)
   );
 }
@@ -47,6 +48,7 @@ export function memoryStore(): Store {
           wanted.has(a.gameId) &&
           a.analysisVersion === key.analysisVersion &&
           a.engine.depth === key.depth &&
+          checkDepthOf(a) === keyCheckDepth(key) &&
           (key.engineName === undefined || a.engine.name === key.engineName),
       )
       .sort(compareAnalyses);

@@ -10,7 +10,7 @@ import {
   trackKey,
 } from "@blunderstruck/contracts";
 import { BUSY_TIMEOUT_MS, migrate, requireCurrentSchema, rollbackQuietly } from "./migrations";
-import type { AnalysisKey, Store } from "./store";
+import { checkDepthOf, keyCheckDepth, type AnalysisKey, type Store } from "./store";
 
 /** Placeholders per `IN (...)` list, well under SQLite's variable limit. */
 const CHUNK = 500;
@@ -106,8 +106,8 @@ export async function openSqliteStore(path: string, opts: OpenSqliteOptions = {}
       played_at = excluded.played_at, time_class = excluded.time_class, rated = excluded.rated,
       json = excluded.json`);
   const putAnalysisStmt = db.prepare(`
-    INSERT INTO analyses (game_id, analysis_version, depth, engine, json) VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT (game_id, analysis_version, depth, engine) DO UPDATE SET json = excluded.json`);
+    INSERT INTO analyses (game_id, analysis_version, depth, check_depth, engine, json) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (game_id, analysis_version, depth, check_depth, engine) DO UPDATE SET json = excluded.json`);
   const putStats = db.prepare(`
     INSERT INTO period_stats (track_key, period_end, settings_key, json) VALUES (?, ?, ?, ?)
     ON CONFLICT (track_key, period_end, settings_key) DO UPDATE SET json = excluded.json`);
@@ -115,9 +115,9 @@ export async function openSqliteStore(path: string, opts: OpenSqliteOptions = {}
   function matching(ids: readonly string[], key: AnalysisKey): Map<string, AnalyzedGame> {
     const out = new Map<string, AnalyzedGame>();
     for (const part of chunks([...new Set(ids)])) {
-      const params: SQLInputValue[] = [key.analysisVersion, key.depth, ...part];
+      const params: SQLInputValue[] = [key.analysisVersion, key.depth, keyCheckDepth(key), ...part];
       let sql = `SELECT game_id, engine, json FROM analyses
-        WHERE analysis_version = ? AND depth = ? AND game_id IN (${marks(part.length)})`;
+        WHERE analysis_version = ? AND depth = ? AND check_depth = ? AND game_id IN (${marks(part.length)})`;
       if (key.engineName !== undefined) {
         sql += " AND engine = ?";
         params.push(key.engineName);
@@ -218,9 +218,9 @@ export async function openSqliteStore(path: string, opts: OpenSqliteOptions = {}
     async analysedIds(ids, key) {
       const out = new Set<string>();
       for (const part of chunks([...new Set(ids)])) {
-        const params: SQLInputValue[] = [key.analysisVersion, key.depth, ...part];
+        const params: SQLInputValue[] = [key.analysisVersion, key.depth, keyCheckDepth(key), ...part];
         let sql = `SELECT DISTINCT game_id FROM analyses
-          WHERE analysis_version = ? AND depth = ? AND game_id IN (${marks(part.length)})`;
+          WHERE analysis_version = ? AND depth = ? AND check_depth = ? AND game_id IN (${marks(part.length)})`;
         if (key.engineName !== undefined) {
           sql += " AND engine = ?";
           params.push(key.engineName);
@@ -238,6 +238,7 @@ export async function openSqliteStore(path: string, opts: OpenSqliteOptions = {}
             parsed.gameId,
             parsed.analysisVersion,
             parsed.engine.depth,
+            checkDepthOf(parsed),
             parsed.engine.name,
             JSON.stringify(parsed),
           ),
@@ -359,17 +360,23 @@ export async function openSqliteStore(path: string, opts: OpenSqliteOptions = {}
 
     async *allAnalyses() {
       let after: SQLInputValue[] | null = null;
-      const cols = "game_id, analysis_version, depth, engine";
+      const cols = "game_id, analysis_version, depth, check_depth, engine";
       for (;;) {
         const rows: Record<string, SQLInputValue>[] =
           after === null
             ? all(`SELECT ${cols}, json FROM analyses ORDER BY ${cols} LIMIT ?`, PAGE)
-            : all(`SELECT ${cols}, json FROM analyses WHERE (${cols}) > (?, ?, ?, ?) ORDER BY ${cols} LIMIT ?`, ...after, PAGE);
+            : all(`SELECT ${cols}, json FROM analyses WHERE (${cols}) > (?, ?, ?, ?, ?) ORDER BY ${cols} LIMIT ?`, ...after, PAGE);
         for (const row of rows) yield read(AnalyzedGame, row.json, `analysis ${String(row.game_id)}`);
         if (rows.length < PAGE) return;
         const last = rows[rows.length - 1];
         if (!last) return;
-        after = [last.game_id ?? null, last.analysis_version ?? null, last.depth ?? null, last.engine ?? null];
+        after = [
+          last.game_id ?? null,
+          last.analysis_version ?? null,
+          last.depth ?? null,
+          last.check_depth ?? null,
+          last.engine ?? null,
+        ];
       }
     },
 

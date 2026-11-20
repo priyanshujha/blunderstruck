@@ -3,4 +3,5 @@ export * from "./memory";
 export * from "./sqlite";
 export * from "./migrations";
 export * from "./export";
-// `conformance.ts` is imported by tests directly, so test tooling never loads in a run.
+// `conformance.ts` imports the test runner, so it is not re-exported here: tests import it as
+// `@blunderstruck/store/conformance`, and a normal run never loads test tooling.

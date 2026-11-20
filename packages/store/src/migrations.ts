@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 /** The schema version this code writes. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /** How long a connection waits for another writer, in milliseconds. */
 export const BUSY_TIMEOUT_MS = 5000;
@@ -62,6 +62,28 @@ const MIGRATIONS: readonly ((db: DatabaseSync) => void)[] = [
         json TEXT NOT NULL,
         PRIMARY KEY (track_key, period_end)
       );
+    `);
+  },
+  // 1 -> 2: analyses are also keyed by the depth of the deeper check (0 when none). Every
+  // existing row keeps its data; its check depth is read from its JSON, which before this
+  // version never held a check, so in practice every row becomes check depth 0.
+  (db) => {
+    db.exec(`
+      CREATE TABLE analyses_v2 (
+        game_id TEXT NOT NULL REFERENCES games (id),
+        analysis_version INTEGER NOT NULL,
+        depth INTEGER NOT NULL,
+        check_depth INTEGER NOT NULL DEFAULT 0,
+        engine TEXT NOT NULL,
+        json TEXT NOT NULL,
+        PRIMARY KEY (game_id, analysis_version, depth, check_depth, engine)
+      );
+      INSERT INTO analyses_v2 (game_id, analysis_version, depth, check_depth, engine, json)
+        SELECT game_id, analysis_version, depth,
+          COALESCE(CAST(json_extract(json, '$.check.depth') AS INTEGER), 0), engine, json
+        FROM analyses;
+      DROP TABLE analyses;
+      ALTER TABLE analyses_v2 RENAME TO analyses;
     `);
   },
 ];

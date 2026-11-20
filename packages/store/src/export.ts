@@ -10,7 +10,9 @@ const GAME_BATCH = 500;
  * Each call of `write` gets one line without its newline. A track that has reports but was never
  * stored with `putTrack` is written too, taken from its reports, with `createdAt` set to its
  * earliest report's period end; so an export always imports into a complete store. Period stats
- * are not exported; they are rebuilt from the games and analyses.
+ * are not exported; they are rebuilt from the games and analyses. The header carries
+ * `SCHEMA_VERSION`. Each analysis line carries its check depth in `data.check.depth` (absent for
+ * an unchecked analysis, check depth 0), which is the key it is stored under again on import.
  */
 export async function exportStore(store: Store, write: (line: string) => Promise<void>): Promise<void> {
   const emit = (line: ExportLine) => write(JSON.stringify(line));
@@ -53,7 +55,8 @@ function summarise(error: unknown): string {
 /**
  * Read NDJSON written by `exportStore`. Safe to run twice: it upserts and keeps higher report
  * revisions. Blank lines are skipped. The first line must be the export header; a header from a
- * newer schema is refused. Any line that is not valid JSON or does not match its schema stops the
+ * newer schema is refused. Exports from schema 1 import as they are: their analyses were never
+ * checked, so they are stored at check depth 0. Any line that is not valid JSON or does not match its schema stops the
  * import with an error naming its line number; lines before it have already been written.
  */
 export async function importStore(
