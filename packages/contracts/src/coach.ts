@@ -300,13 +300,24 @@ export const FOCUS_TOKENS = [
 /** Tokens a report's `summary` may use. */
 export const SUMMARY_TOKENS = ["games", "mistakeRate", "focusCount"] as const;
 
-/** Replaces every `{token}` in `template`. Throws on a token `values` does not define. */
+/** Replaces every `{token}` in `template`. Throws on any braced text that is not exactly a key of `values`. */
 export function renderText(template: string, values: Record<string, string>): string {
-  return template.replace(/\{([A-Za-z][A-Za-z0-9]*)\}/g, (_, name: string) => {
+  return template.replace(/\{([^{}]*)\}/g, (_, name: string) => {
     if (!Object.prototype.hasOwnProperty.call(values, name)) throw new Error(`unknown token {${name}}`);
     return values[name]!;
   });
 }
+
+/** A finding shown with its position, for the wording and the report pages. */
+export const FocusExample = PatternFinding.extend({
+  /** FEN of the position before the player's move. */
+  fen: z.string(),
+  /** The move played, in SAN. */
+  played: z.string(),
+  /** The engine's preferred move, in SAN. */
+  best: z.string().optional(),
+});
+export type FocusExample = z.infer<typeof FocusExample>;
 
 export const FocusItem = z.object({
   patternId: z.string(),
@@ -325,7 +336,7 @@ export const FocusItem = z.object({
   since: z.string().datetime(),
   reason: FocusReason,
   /** Largest losses first, separate games first. */
-  examples: z.array(PatternFinding).max(2),
+  examples: z.array(FocusExample).max(2),
 });
 export type FocusItem = z.infer<typeof FocusItem>;
 

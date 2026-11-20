@@ -125,6 +125,13 @@ describe("pattern contracts", () => {
   });
 });
 
+const example = {
+  ...finding,
+  fen: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+  played: "Nf6",
+  best: "e5",
+};
+
 const stat = (patternId: string, per100Moves: number) => ({
   patternId,
   games: 30,
@@ -170,7 +177,7 @@ const choice = {
   target: 1.2,
   since: "2026-11-19T00:00:00Z",
   reason,
-  examples: [finding],
+  examples: [example],
 };
 
 const item = {
@@ -257,7 +264,10 @@ describe("report contracts", () => {
 
   it("caps wording calls and examples", () => {
     expect(WeeklyReport.safeParse({ ...report, wording: { ...report.wording, calls: 4 } }).success).toBe(false);
-    expect(FocusItem.safeParse({ ...item, examples: [finding, finding, finding] }).success).toBe(false);
+    expect(FocusItem.safeParse({ ...item, examples: [example, example, example] }).success).toBe(false);
+    expect(FocusItem.safeParse({ ...item, examples: [finding] }).success).toBe(false);
+    const { best: _b, ...noBest } = example;
+    expect(FocusItem.safeParse({ ...item, examples: [noBest] }).success).toBe(true);
     expect(WeeklyReport.safeParse({ ...report, notes: ["unknown-note"] }).success).toBe(false);
   });
 
@@ -274,6 +284,10 @@ describe("report contracts", () => {
     );
     expect(renderText("no tokens", {})).toBe("no tokens");
     expect(() => renderText("{bogus} here", { games: "30" })).toThrow("bogus");
+    expect(() => renderText("{games_affected} games", { gamesAffected: "9" })).toThrow("games_affected");
+    expect(() => renderText("{ games } games", { games: "30" })).toThrow();
+    expect(() => renderText("{} games", { games: "30" })).toThrow();
+    expect(() => renderText("{toString}", {})).toThrow();
   });
 
   it("formats token values with two-decimal rates", () => {
