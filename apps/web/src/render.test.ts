@@ -3,7 +3,7 @@ import http from "node:http";
 import { readFileSync } from "node:fs";
 import { templateWording } from "@blunderstruck/coach/templates";
 import { type ExampleStory, type FocusItem, PATTERN_IDS, WeeklyReport } from "@blunderstruck/contracts";
-import { type ReportView, reportView, storyLines } from "@blunderstruck/view";
+import { OTHER_TRACKS_INTRO, type ReportView, exampleTitle, noReportText, otherTrackLabel, reportView, reportsList, storyLines } from "@blunderstruck/view";
 import { describe, expect, it, vi } from "vitest";
 import { formatReport } from "../../cli/src/report-format";
 import { piecesOf, xy } from "./board";
@@ -22,6 +22,7 @@ import {
   other,
   partway,
   period,
+  reason,
   sampleReport,
   stat,
   weekEnd,
@@ -106,7 +107,8 @@ describe("security", () => {
     expect(html).not.toMatch(/<img|<!--|-->|javascript:/);
     expect(html).not.toMatch(/="[^"]*"\s*onerror/);
     has(html, XSS);
-    has(html, `${XSS}, same habit, one week on.`);
+    has(html, view(r).page.headline);
+    expect(view(r).page.headline.startsWith(XSS)).toBe(true);
     expect(html).toContain(esc("Qd2</script><!--"));
     // The script's data parses and holds squares and flags only.
     const d = dataOf(html, "ex-1-1");
@@ -495,6 +497,8 @@ describe("truth", () => {
     const { report } = await fullReport({ gamesAnalyzed: 0, coverage: { sampled: 0, analysed: 0, total: 18, complete: false, sampleOnly: false } });
     const html = renderPage(report, { pending: 18, history: [] });
     expect(html).not.toContain("From the first");
+    expect(html).not.toContain("stand out so far");
+    has(html, `${PLAYER}, your games are waiting to be analysed.`);
     has(html, view(report, 18).page.lede.map((x) => x.text).join(""));
   });
 });
@@ -510,39 +514,156 @@ function strings(x: unknown, out = new Set<string>()): Set<string> {
   return out;
 }
 
+describe("words that are true", () => {
+  const items2 = async () => {
+    const [p, f] = await Promise.all([partway(), followed()]);
+    return [focusItem("allowed-tactic", [example(p, "allowed-tactic")]), focusItem("hung-piece", [example(f, "hung-piece")])];
+  };
+
+  it("says 'the same' only when every item is kept, and never 'one week'", async () => {
+    const two = await items2();
+    const rotated = (id: string) => ({ patternId: id, why: "rotated" as const, since: weekEnd(4), baseline: stat(id, 64, 10), current: stat(id, 18, 3) });
+    const flat = (id: string) => ({ patternId: id, previous: stat(id, 69, 20), current: stat(id, 18, 5), verdict: "flat" as const, pValue: 0.5 });
+    const fresh = sampleReport(two, { retired: [rotated("thrown-win"), rotated("time-trouble")], progress: [flat("thrown-win"), flat("time-trouble")] });
+    expect(view(fresh).page.headline).toBe(`${PLAYER}, two new habits to work on.`);
+    const kept = sampleReport(two.map((f) => ({ ...f, reason: { ...f.reason, kind: "kept" as const } })), { progress: [flat("allowed-tactic"), flat("hung-piece")] });
+    expect(view(kept).page.headline).toBe(`${PLAYER}, the same two habits as your last report.`);
+    for (const days of [2, 21]) {
+      const r = sampleReport(two, { periodStart: new Date(Date.parse(END) - days * 86_400_000).toISOString() });
+      const html = renderPage(r, CTX);
+      expect(html).not.toMatch(/one week|this week/);
+      has(html, "Two from your games since your last report".replace("Two", "One"));
+    }
+  });
+
+  it("names the blind-spot window by its dates", async () => {
+    const { report } = await fullReport();
+    const row = view(report).page.about.find((x) => x.key === "Blind spots")!.value;
+    expect(row).toContain("in your 96 games from 26 Oct to 7 Dec 2026.");
+    expect(row).not.toMatch(/weeks/);
+  });
+
+  it("titles a hung piece with no stored loss without saying it was unguarded", () => {
+    expect(exampleTitle({ patternId: "hung-piece" })).toBe("A piece left to be taken");
+  });
+
+  it("counts of one and zero read as English", async () => {
+    const one = (o: Record<string, unknown>) => sampleReport([focusItem("allowed-tactic", [])], { gamesFound: 1, current: period(END, 1), ...o });
+    const first = view(one({ kind: "first" })).page;
+    expect(first.lede.map((x) => x.text).join("")).toMatch(/^Your one rapid game from the last /);
+    const checking = view(one({ coverage: { sampled: 1, analysed: 1, total: 1, complete: false, sampleOnly: false, checked: 0 } }), 1).page;
+    expect(checking.lede.map((x) => x.text).join("")).toBe("A first look at your one rapid game. The deeper check is running.");
+    const none = view(one({ gamesAnalyzed: 0, coverage: { sampled: 0, analysed: 0, total: 1, complete: false, sampleOnly: false } }), 1).page;
+    expect(none.lede.map((x) => x.text).join("")).toBe("Your one rapid game has not been analysed yet.");
+    const item = focusItem("allowed-tactic", [], {
+      goal: { per: 0, of: 1 },
+      blindSpots: [{ id: "answer-check", basis: "line", count: 1, games: 1, of: 1, baselineCount: 1, baselineOf: 1, examples: [] }],
+      blindSpotWindow: { start: "2026-12-30T00:00:00.000Z", end: "2027-01-02T00:00:00.000Z", games: 1, mistakes: 1 },
+      steps: [{ blindSpot: "answer-check", text: "Look for checks." }],
+    });
+    const cur = period(END, 18);
+    const r = sampleReport([item], { current: { ...cur, stats: cur.stats.map((s) => (s.patternId === "allowed-tactic" ? { ...s, gamesAffected: 1 } : s)) } });
+    const v = view(r);
+    expect(v.page.items[0]!.dots!.label).toBe("One dot per game. 1 of 18 is filled in; 1 of it is ringed.");
+    expect(v.page.about.find((x) => x.key === "Blind spots")!.value).toContain("Looked for across your one mistake in your 1 game from 30 Dec 2026 to 2 Jan 2027.");
+    expect(v.page.tables[0]!.caption).toBe("Blind spots (1 game, 1 mistake)");
+    const text = JSON.stringify(v.page);
+    expect(text).not.toMatch(/\b1 (games|mistakes)\b|\ball 1 of\b|\b1 of those\b|\bin these 1\b|\b1 (days|weeks)\b/);
+  });
+
+  it("gives both years to a chart span across a year's end", async () => {
+    const s = await partway();
+    const r = sampleReport([focusItem("allowed-tactic", [example(s, "allowed-tactic")], { reason: reason("new", [true, true, true, null, null, null]) })], {
+      kind: "first",
+      periodStart: "2026-12-31T00:00:00.000Z",
+      periodEnd: "2027-01-24T00:00:00.000Z",
+    });
+    const weeks = [0, 1, 2, 3, 4].map((i) => period(new Date(Date.parse("2027-01-24T00:00:00.000Z") - i * 7 * 86_400_000).toISOString(), 10));
+    const note = reportView(r, { weeks, fallback: fallback(r) }).page.items[0]!.chart!.note;
+    expect(note).toContain("covers only 31 Dec 2026 to 3 Jan 2027");
+  });
+});
+
+
+/** Attributes that carry no words: names, places, drawing and state. Any other attribute is read as text. */
+const NOT_TEXT = new Set([
+  "class", "id", "href", "scope", "lang", "charset", "name", "http-equiv", "role", "type", "focusable", "hidden", "viewBox", "d", "transform",
+  "x", "y", "x1", "x2", "y1", "y2", "cx", "cy", "r", "rx", "width", "height", "overflow", "rel", "open",
+  "aria-hidden", "aria-pressed", "data-auto", "data-b", "data-sq", "data-k", "data-w", "data-v", "data-n", "data-do", "data-open", "data-fold",
+]);
+
+/** Text nodes and text-bearing attributes of a page, outside its head and script. */
+function shownText(html: string): string[] {
+  const decode = (t: string) => t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+  const body = html.replace(/<style>[\s\S]*?<\/style>/, "").replace(/<script>[\s\S]*?<\/script>/, "").replace(/<meta[^>]*>/g, "");
+  const out = [...body.matchAll(/>([^<]+)</g)].map((m) => decode(m[1]!).trim());
+  for (const tag of body.matchAll(/<[a-zA-Z][^>]*>/g)) {
+    for (const a of tag[0].matchAll(/\s([a-zA-Z-:]+)(?:="([^"]*)")?/g)) {
+      if (NOT_TEXT.has(a[1]!)) continue;
+      // Content and the head's title are checked as text nodes; every other attribute is text to check.
+      out.push(decode(a[2] ?? a[1]!).trim());
+    }
+  }
+  return out.filter((t) => /[A-Za-z0-9]/.test(t));
+}
+
 describe("parity, the other way", () => {
   /*
-   * Every text node and text alternative on the page that holds a word or a figure is a string
-   * of the view, or one of these, listed honestly: the fixed labels (`LABELS`), the arrow key's
+   * Every text node and every attribute that carries text, on every kind of page, is a string of
+   * the view, or one of these, listed honestly: the fixed labels (`LABELS`), the arrow key's
    * legend, the board's coordinates, a piece name capitalised at the start of a sentence, and
-   * the opening names and page title the game records and header give.
+   * what is not in a report: opening names, and the commands the server passes in.
    */
-  it("shows no sentence or number the view did not give", async () => {
-    const LEGEND = ["you played", "their reply", "what it allowed", "what could follow", "their move in the game", "better"];
-    for (const l of LABELS) expect(l, "a label is never a sentence or a figure").not.toMatch(/\d|\.$/);
+  const LEGEND = ["you played", "their reply", "what it allowed", "what could follow", "their move in the game", "better"];
+  const base = (): Set<string> => {
+    const allowed = new Set<string>();
+    for (const piece of ["pawn", "knight", "bishop", "rook", "queen", "king"]) allowed.add(piece.charAt(0).toUpperCase() + piece.slice(1));
+    for (const l of [...LABELS, ...LEGEND]) allowed.add(l);
+    for (const c of "12345678abcdefgh") allowed.add(c);
+    return allowed;
+  };
+  const others = [{ track: { platform: "lichess" as const, username: PLAYER, timeClass: "blitz" as const }, command: `pnpm web lichess ${PLAYER} --time-class blitz` }];
+
+  it("labels are never sentences or figures", () => {
+    for (const l of LABELS) expect(l).not.toMatch(/\d|\.$/);
+  });
+
+  it("shows no sentence or number the view did not give, on any page", async () => {
+    const old = focusItem("hung-piece", [{ patternId: "hung-piece", gameId: "lichess:old1", ply: 23, winPctLoss: 32, fen: "8/8/8/8/8/8/8/8 w - - 0 1", played: "Qxf7" }]);
     const variants = [
       await fullReport(),
       await fullReport({ kind: "first", progress: [], retired: [], periodStart: weekEnd(4) }),
       await fullReport({ coverage: { sampled: 18, analysed: 18, total: 18, complete: false, sampleOnly: false, checked: 7 } }),
+      { report: sampleReport([old]), games: new Map() },
       { report: sampleReport([], { notes: ["few-games"], gamesFound: 6, current: period(END, 6) }), games: new Map() },
     ];
     for (const { report, games } of variants) {
       const pending = report.coverage.complete ? 0 : 11;
-      const html = renderPage(report, { pending, history: [] }, { games });
-      const v = view(report, pending);
-      const allowed = strings(v);
-      for (const piece of ["pawn", "knight", "bishop", "rook", "queen", "king"]) allowed.add(piece.charAt(0).toUpperCase() + piece.slice(1));
-      for (const l of [...LABELS, ...LEGEND, "12345678", "abcdefgh"].flatMap((x) => (/^\d+$|^[a-h]+$/.test(x) ? x.split("") : [x]))) allowed.add(l);
+      const reports = [{ periodEnd: weekEnd(1), kind: "first" as const }, { periodEnd: report.periodEnd, kind: report.kind }];
+      const html = renderPage(report, { pending, history: [] }, { games, reports, otherTracks: others });
+      const allowed = base();
+      strings(view(report, pending), allowed);
+      strings(reportsList(reports, report.periodEnd), allowed);
+      for (const o of others) allowed.add(otherTrackLabel(o.track.timeClass)).add(o.command);
+      allowed.add(OTHER_TRACKS_INTRO);
       for (const g of games.values()) if (g.opening?.name) allowed.add(g.opening.name);
-      const body = html.replace(/<head>[\s\S]*?<\/head>/, "").replace(/<script>[\s\S]*?<\/script>/, "");
-      const decode = (t: string) => t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
-      const nodes = [...body.matchAll(/>([^<]+)</g)].map((m) => decode(m[1]!).trim());
-      const labels = [...body.matchAll(/aria-label="([^"]*)"/g)].map((m) => decode(m[1]!).trim());
-      for (const t of [...nodes, ...labels]) {
-        if (!/[A-Za-z0-9]/.test(t)) continue;
-        expect(allowed.has(t), `"${t}" is not a view string`).toBe(true);
-      }
+      for (const t of shownText(html)) expect(allowed.has(t), `"${t}" is not a view string`).toBe(true);
     }
+  });
+
+  it("the page before any report says only the view's words", () => {
+    const track = { platform: "lichess" as const, username: PLAYER, timeClass: "rapid" as const };
+    const command = `pnpm cli report lichess ${PLAYER}`;
+    const html = renderPage(undefined, CTX, { track, reportCommand: command, otherTracks: others });
+    const allowed = strings(noReportText(track), base()).add(command).add(OTHER_TRACKS_INTRO);
+    for (const o of others) allowed.add(otherTrackLabel(o.track.timeClass)).add(o.command);
+    for (const t of shownText(html)) expect(allowed.has(t), `"${t}" is not a view string`).toBe(true);
+  });
+
+  it("would catch a sentence added in an attribute", async () => {
+    const { report, games } = await fullReport();
+    const html = renderPage(report, CTX, { games }).replace('<main id="top">', '<main id="top" title="A sentence the view never wrote.">');
+    expect(shownText(html)).toContain("A sentence the view never wrote.");
   });
 });
 

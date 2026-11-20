@@ -5,7 +5,6 @@ import {
   type MoveDetail,
   type PatternStat,
   type ProgressVerdict,
-  REPORT_WEEKS,
   type Track,
   type WeeklyReport,
   blindSpotFamilyOf,
@@ -195,6 +194,22 @@ export const PAGE_HINT = "Press a button, or tap a sentence below, to go through
 export const PAGE_FOOTER = "Blunderstruck is open source. This page was made on your own machine from your own games.";
 export const OTHER_TRACKS_INTRO = "This page shows one time class. To see another, stop this server and run:";
 
+/** "rapid:", before the command that serves another time class. */
+export const otherTrackLabel = (timeClass: string): string => `${timeClass}:`;
+
+/** "mossy_gambit · Lichess · rapid". */
+export const mastheadText = (t: Track): string => `${t.username} · ${SITE[t.platform]} · ${t.timeClass}`;
+
+/** The page shown before a track has any report. */
+export function noReportText(t: Track | undefined): { title: string; headline: string; lede: string; masthead: string } {
+  return {
+    title: "No report yet",
+    headline: t ? `No report yet for ${t.username}.` : "No report yet.",
+    lede: "Run the report command first, then reload this page:",
+    masthead: t ? mastheadText(t) : "",
+  };
+}
+
 /** Where the report stands (see `PageStage`). A deeper check runs only when one is set and games wait for it. */
 export function pageStage(r: WeeklyReport, pending: number): PageStage {
   const c = r.coverage;
@@ -211,8 +226,9 @@ function daySpan(startIso: string, endIso: string, year = true): string {
   const b = new Date(Date.parse(endIso));
   if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return `${startIso.slice(0, 10)} to ${endIso.slice(0, 10)}`;
   const m = (d: Date): string => d.toLocaleString("en-GB", { month: "short", timeZone: "UTC" }).slice(0, 3);
+  // Across a year's end both years are given, whatever `year` asks.
+  if (a.getUTCFullYear() !== b.getUTCFullYear()) return `${a.getUTCDate()} ${m(a)} ${a.getUTCFullYear()} to ${b.getUTCDate()} ${m(b)} ${b.getUTCFullYear()}`;
   const end = `${b.getUTCDate()} ${m(b)}${year ? ` ${b.getUTCFullYear()}` : ""}`;
-  if (a.getUTCFullYear() !== b.getUTCFullYear()) return `${a.getUTCDate()} ${m(a)} ${a.getUTCFullYear()} to ${end}`;
   if (a.getUTCMonth() === b.getUTCMonth()) return `${a.getUTCDate()} to ${end}`;
   return `${a.getUTCDate()} ${m(a)} to ${end}`;
 }
@@ -389,7 +405,7 @@ function itemText(r: WeeklyReport, v: Omit<ReportView, "page">, item: FocusView,
             games: stat.games,
             affected: stat.gamesAffected,
             over,
-            label: `One dot per game. ${count(stat.gamesAffected)} of ${count(stat.games)} are filled in${over ? `; ${count(over)} of those are ringed.` : "."}`,
+            label: `One dot per game. ${count(stat.gamesAffected)} of ${count(stat.games)} ${stat.gamesAffected === 1 ? "is" : "are"} filled in${over ? `; ${count(over)} of ${stat.gamesAffected === 1 ? "it" : "those"} ${over === 1 ? "is" : "are"} ringed.` : "."}`,
           },
         }
       : {}),
@@ -406,7 +422,7 @@ function itemText(r: WeeklyReport, v: Omit<ReportView, "page">, item: FocusView,
       : {}),
     steps,
     ...(k > 0 ? { drillLabel: `Then, the drill behind ${k === 1 ? "it" : k === 2 ? "both" : `all ${word(k)}`}` } : {}),
-    ...(exCount > 0 ? { examplesHeading: `${Word(exCount)} from ${r.kind === "weekly" ? "this week's games" : "your own games"}` } : {}),
+    ...(exCount > 0 ? { examplesHeading: `${Word(exCount)} from ${r.kind === "weekly" ? "your games since your last report" : "your own games"}` } : {}),
     examples: raw.examples.map((e, j) => exampleText(e, item.examples[j]!, item)),
     ...(chartText(r, item, raw.reason.weeks) ? { chart: chartText(r, item, raw.reason.weeks)! } : {}),
   };
@@ -414,6 +430,7 @@ function itemText(r: WeeklyReport, v: Omit<ReportView, "page">, item: FocusView,
 
 function headline(r: WeeklyReport, stage: PageStage, k: number): string {
   const p = r.player;
+  if (stage === "analysing" && r.coverage.analysed <= 0 && k > 0) return `${p}, your games are waiting to be analysed.`;
   if (stage !== "complete" && stage !== "sample" && k > 0) return `${p}, ${k === 1 ? "one habit stands out" : `${word(k)} habits stand out`} so far.`;
   if (k === 0 && r.notes.includes("few-games")) {
     const g = r.gamesFound;
@@ -431,7 +448,15 @@ function headline(r: WeeklyReport, stage: PageStage, k: number): string {
     if (c === pn && pn === 2) return `${p}, both of your two are getting ${what}.`;
     return `${p}, ${word(c)} of your ${word(pn)} ${c === 1 ? "is" : "are"} getting ${what}.`;
   };
-  return said("improved", "rarer") ?? said("worse", "more common") ?? `${p}, ${k === 1 ? "same habit" : `same ${word(k)} habits`}, one week on.`;
+  const kept = r.focus.filter((f) => f.reason.kind === "kept").length;
+  const joined = k - kept;
+  return (
+    said("improved", "rarer") ??
+    said("worse", "more common") ??
+    (joined === 0
+      ? `${p}, ${k === 1 ? "the same habit" : `the same ${word(k)} habits`} as your last report.`
+      : `${p}, ${joined === 1 ? "one new habit" : `${word(joined)} new habits`} to work on.`)
+  );
 }
 
 function lede(r: WeeklyReport, v: Omit<ReportView, "page">, stage: PageStage, k: number): { lede: TextRun[]; wide?: string } {
@@ -441,17 +466,30 @@ function lede(r: WeeklyReport, v: Omit<ReportView, "page">, stage: PageStage, k:
     if (r.notes.includes("few-games")) return { lede: [{ text: "Play a few more and run the report again. Until then, here are the numbers." }] };
     return { lede: v.body.kind === "numbers" ? [{ text: v.body.intro }] : [] };
   }
-  if (stage === "checking") return { lede: [{ text: "A first look at all " }, { text: count(c.total), strong: true }, { text: ` of your ${tc} games. The deeper check is running.` }] };
+  if (stage === "checking") {
+    if (c.total === 1) return { lede: [{ text: `A first look at your one ${tc} game. The deeper check is running.` }] };
+    return { lede: [{ text: "A first look at all " }, { text: count(c.total), strong: true }, { text: ` of your ${tc} games. The deeper check is running.` }] };
+  }
   if (stage === "analysing") {
-    if (c.analysed <= 0) return { lede: [{ text: "None of your " }, { text: count(c.total), strong: true }, { text: ` ${tc} games has been analysed yet.` }] };
+    if (c.analysed <= 0) {
+      if (c.total === 1) return { lede: [{ text: `Your one ${tc} game has not been analysed yet.` }] };
+      return { lede: [{ text: "None of your " }, { text: count(c.total), strong: true }, { text: ` ${tc} games has been analysed yet.` }] };
+    }
+    if (c.analysed === 1) return { lede: [{ text: `From the first of your ${count(c.total)} ${tc} games. The rest are in the queue.` }] };
     return { lede: [{ text: "From the first " }, { text: count(c.analysed), strong: true }, { text: ` of your ${count(c.total)} ${tc} games. The rest are in the queue.` }] };
   }
-  if (stage === "sample") return { lede: [{ text: "From the first " }, { text: count(c.analysed), strong: true }, { text: ` of your ${count(c.total)} ${tc} games.` }] };
+  if (stage === "sample") {
+    if (c.analysed === 1) return { lede: [{ text: `From the first of your ${count(c.total)} ${tc} games.` }] };
+    return { lede: [{ text: "From the first " }, { text: count(c.analysed), strong: true }, { text: ` of your ${count(c.total)} ${tc} games.` }] };
+  }
   const twice = stage === "complete" && c.checked !== undefined && c.checked === c.total && (r.settings.checkDepth ?? 0) > 0 ? ", every mistake checked twice" : "";
   if (r.kind === "first") {
     const days = Math.round((Date.parse(r.periodEnd) - Date.parse(r.periodStart)) / 86_400_000);
     return {
-      lede: [{ text: "All " }, { text: count(r.gamesFound), strong: true }, { text: ` of your ${tc} games from the last ${count(days)} days${twice}.` }],
+      lede:
+        r.gamesFound === 1
+          ? [{ text: `Your one ${tc} game from the last ${days === 1 ? "day" : `${count(days)} days`}${twice}.` }]
+          : [{ text: "All " }, { text: count(r.gamesFound), strong: true }, { text: ` of your ${tc} games from the last ${days === 1 ? "day" : `${count(days)} days`}${twice}.` }],
       wide: k === 1 ? "Work on this one." : `Work on these ${word(k)}. Everything else can wait.`,
     };
   }
@@ -523,7 +561,7 @@ function patternsText(r: WeeklyReport, items: readonly FocusView[]): PageText["p
       return { name: patternName(s.patternId), count: games(s.gamesAffected), share: total > 0 ? s.gamesAffected / total : 0, ...(it ? { mark: `focus ${it.number}` } : {}) };
     });
   if (fold) rows.push({ name: `${Word(zeros.length)} other patterns`, count: games(0), share: 0 });
-  const note = `Games out of ${count(total)} where each thing happened at least once. One game can appear in more than one row.${
+  const note = `${total === 1 ? "Whether each thing happened in your one game." : `Games out of ${count(total)} where each thing happened at least once. One game can appear in more than one row.`}${
     topTwoTrue(r) ? " The top two cost you the most and kept coming back, which is why they are your two." : ""
   }`;
   return { note, rows };
@@ -544,10 +582,10 @@ function aboutText(r: WeeklyReport, v: Omit<ReportView, "page">): PageText["abou
   });
   const win = r.focus.find((f) => f.blindSpots.length > 0 && f.blindSpotWindow)?.blindSpotWindow;
   if (win) {
-    const where = r.kind === "weekly" ? `in your last ${word(REPORT_WEEKS)} weeks, ${games(win.games)}` : `in these ${games(win.games)}`;
+    const where = `in your ${games(win.games)} from ${daySpan(win.start, win.end)}`;
     rows.push({
       key: "Blind spots",
-      value: `Looked for across all ${count(win.mistakes)} of your mistakes ${where}. "Looked like" marks one read by a rule of thumb; the rest are read from the engine's own line.`,
+      value: `Looked for across ${win.mistakes === 1 ? "your one mistake" : `all ${count(win.mistakes)} of your mistakes`} ${where}. "Looked like" marks one read by a rule of thumb; the rest are read from the engine's own line.`,
     });
   }
   const who =
@@ -578,7 +616,7 @@ function tablesText(r: WeeklyReport, items: readonly FocusView[]): PageText["tab
   });
   if (rows.length > 0) {
     out.push({
-      caption: win ? `Blind spots (${games(win.games)}, ${count(win.mistakes)} mistakes)` : "Blind spots",
+      caption: win ? `Blind spots (${games(win.games)}, ${win.mistakes === 1 ? "1 mistake" : `${count(win.mistakes)} mistakes`})` : "Blind spots",
       table: { head: ["Focus and blind spot", "Times", "Games", "Out of", "All mistakes", "Read from"], rows },
     });
   }
@@ -615,7 +653,7 @@ export function pageText(r: WeeklyReport, v: Omit<ReportView, "page">): PageText
   return {
     stage,
     autoplay: stage === "complete" || stage === "sample",
-    masthead: `${r.track.username} · ${SITE[r.track.platform]} · ${r.track.timeClass}`,
+    masthead: mastheadText(r.track),
     eyebrow: `${kind} · ${daySpan(r.periodStart, r.periodEnd)}${suffix}`,
     headline: headline(r, stage, k),
     lede: l.lede,

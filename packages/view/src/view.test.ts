@@ -175,8 +175,8 @@ describe("reportView", () => {
       for (const v of [picked, few, fewNote]) {
         const all = JSON.stringify(v);
         expect(all, kind).not.toMatch(/focus items?\b/i);
-        // A weekly report's examples are "from this week's games", which they are; nothing else says "this week".
-        expect(JSON.stringify(kind === "weekly" ? { ...v, page: undefined } : v), kind).not.toContain("this week");
+        expect(all, kind).not.toContain("this week");
+        expect(all, kind).not.toContain("one week");
       }
       expect(fewNote.notes.lines).toContain("Too few games in this period, so no habits were picked to work on.");
     }

@@ -12,7 +12,7 @@ export function exampleTitle(ex: Pick<FocusExample, "patternId" | "story">): str
   switch (ex.patternId) {
     case "hung-piece":
       if (story?.lost) return paid ? `One ${story.lost.piece}, and they took it` : `One ${story.lost.piece}, left where it could be taken`;
-      return "A piece left unguarded";
+      return "A piece left to be taken";
     case "allowed-tactic":
       return paid ? "A shot, and they took it" : "A shot left open";
     case "allowed-mate":

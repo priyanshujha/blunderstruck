@@ -3,6 +3,8 @@ import { templateWording } from "@blunderstruck/coach/templates";
 import type { GameRecord, PeriodStats, ProgressVerdict, Track, WeeklyReport } from "@blunderstruck/contracts";
 import {
   OTHER_TRACKS_INTRO,
+  noReportText,
+  otherTrackLabel,
   type PageExample,
   type PageItem,
   type PageTrack,
@@ -175,27 +177,27 @@ export function renderMessage(title: string, message: string, command?: string, 
 
 function otherTracksHtml(others: PageOptions["otherTracks"]): string | undefined {
   if (!others || others.length === 0) return undefined;
-  const items = others.map((o) => `<li><span>${esc(o.track.timeClass)}:</span> <code class="cmd">${esc(o.command)}</code></li>`);
+  const items = others.map((o) => `<li><span>${esc(otherTrackLabel(o.track.timeClass))}</span> <code class="cmd">${esc(o.command)}</code></li>`);
   return `<h3>Your other time classes</h3>\n<p class="note">${esc(OTHER_TRACKS_INTRO)}</p>\n<ul class="rlist">${items.join("\n")}</ul>`;
 }
 
 function emptyPage(opts: PageOptions): string {
   const t = opts.track;
+  const text = noReportText(t);
   const command = opts.reportCommand ?? (t ? `pnpm cli report ${t.platform} ${t.username}` : "pnpm cli report <platform> <user>");
-  const who = t ? ` for ${t.username}` : "";
   const body = join([
     pieceSprite(),
     '<div class="wrap">',
-    masthead(t ? `${t.username} · ${t.platform} · ${t.timeClass}` : ""),
+    masthead(text.masthead),
     '<main id="top"><section class="hero">',
-    `<h1>${esc(`No report yet${who}.`)}</h1>`,
-    '<p class="lede">Run the report command first, then reload this page:</p>',
+    `<h1>${esc(text.headline)}</h1>`,
+    `<p class="lede">${esc(text.lede)}</p>`,
     `<code class="cmd">${esc(command)}</code>`,
     otherTracksHtml(opts.otherTracks),
     "</section></main>",
     "</div>",
   ]);
-  return page("No report yet", body, { opts });
+  return page(text.title, body, { opts });
 }
 
 /* ---------- small parts ---------- */
@@ -481,7 +483,7 @@ function sinceHtml(v: ReportView): string | undefined {
     ret.length > 0 ? "<h3>Off your list</h3>" : undefined,
     ...ret.map(
       (x) =>
-        `<div class="done">${x.why === "graduated" ? '<span class="stamp">Fixed</span>' : ""}<p><b>${esc(x.patternName)}</b>: <span>${esc(x.verdictText)}</span>. <span>${esc(x.counts)}</span></p></div>`,
+        `<div class="done${x.why === "graduated" ? "" : " other"}">${x.why === "graduated" ? '<span class="stamp">Fixed</span>' : ""}<p><b>${esc(x.patternName)}</b>: <span>${esc(x.verdictText)}</span>. <span>${esc(x.counts)}</span></p></div>`,
     ),
     "</section>",
   ]);

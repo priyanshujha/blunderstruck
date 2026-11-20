@@ -107,6 +107,7 @@ h2{font:700 23px/1.2 var(--serif);margin-top:3px;overflow-wrap:anywhere}
 .vd.flat{color:var(--muted);border-radius:4px}
 .vd.wait{color:var(--muted);border-style:dashed}
 .done{display:flex;gap:16px;align-items:center;background:var(--green-soft);border:1px solid var(--green);border-radius:14px;padding:16px 18px;margin-top:6px}
+.done.other{background:var(--card);border-color:var(--line)}
 .stamp{flex:none;font:italic 700 17px var(--serif);color:var(--green);border:2px solid var(--green);border-radius:8px;padding:4px 10px;transform:rotate(-4deg)}
 .focus{padding:44px 0 8px;border-top:3px double var(--ink);margin-top:36px}
 .focus>.top .num{font-size:54px}
