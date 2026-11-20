@@ -1,8 +1,147 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Track } from "@blunderstruck/contracts";
+import { type Track, type WeeklyReport, settingsKey, trackKey } from "@blunderstruck/contracts";
 import type { Store } from "@blunderstruck/store";
+import { STYLE_HASH, renderPage } from "./render";
+
+export interface HandlerOptions {
+  /** Whether the time class was given on the command line, so commands shown repeat it. Default true. */
+  timeClassGiven?: boolean;
+  /** The `--db` value given on the command line, repeated in the commands shown. */
+  dbArg?: string;
+}
+
+const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "Content-Security-Policy": `default-src 'none'; style-src ${STYLE_HASH}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+  "Referrer-Policy": "no-referrer",
+  "Cache-Control": "no-store",
+} as const;
+
+function send(req: IncomingMessage, res: ServerResponse, status: number, type: string, body: string, extra: Record<string, string> = {}): void {
+  const buf = Buffer.from(body, "utf8");
+  res.writeHead(status, {
+    ...SECURITY_HEADERS,
+    "Content-Type": `${type}; charset=utf-8`,
+    "Content-Length": String(buf.length),
+    ...extra,
+  });
+  res.end(req.method === "HEAD" ? undefined : buf);
+}
+
+const quote = (s: string): string => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+
+function command(app: "cli report" | "web", t: Track, opts: HandlerOptions, withTimeClass: boolean): string {
+  const parts = [`pnpm ${app}`, t.platform, quote(t.username)];
+  if (withTimeClass) parts.push("--time-class", t.timeClass);
+  if (opts.dbArg !== undefined) parts.push("--db", quote(opts.dbArg));
+  return parts.join(" ");
+}
+
+/** The report named by the path segment: its `periodEnd` as an instant, or the newest one on a `YYYY-MM-DD` day. */
+function findReport(reports: readonly WeeklyReport[], segment: string): WeeklyReport | undefined {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(segment)) return [...reports].reverse().find((r) => r.periodEnd.slice(0, 10) === segment);
+  const t = Date.parse(segment);
+  return Number.isNaN(t) ? undefined : reports.find((r) => Date.parse(r.periodEnd) === t);
+}
+
+/** Games of the report still waiting for analysis at the report's own settings. */
+async function pendingGames(store: Store, r: WeeklyReport): Promise<number> {
+  if (r.coverage.complete) return 0;
+  const done = await store.analysedIds(r.gameIds, {
+    analysisVersion: r.settings.analysisVersion,
+    depth: r.settings.engine.depth,
+    engineName: r.settings.engine.name,
+  });
+  return r.gameIds.filter((id) => !done.has(id)).length;
+}
+
+/** Same as `handler`, with the command-line details the pages repeat back. */
+export function createHandler(
+  store: Store,
+  track: Track,
+  opts: HandlerOptions = {},
+): (req: IncomingMessage, res: ServerResponse) => void {
+  const timeClassGiven = opts.timeClassGiven ?? true;
+
+  async function otherTracks(current: Track): Promise<{ track: Track; command: string }[]> {
+    const key = trackKey(current);
+    const prefix = `${current.platform}:${current.username.toLowerCase()}:`;
+    return (await store.tracks())
+      .filter((t) => trackKey(t).startsWith(prefix) && trackKey(t) !== key)
+      .sort((a, b) => a.timeClass.localeCompare(b.timeClass))
+      .map((t) => ({ track: t, command: command("web", t, opts, true) }));
+  }
+
+  async function htmlFor(req: IncomingMessage, res: ServerResponse, segment: string | undefined): Promise<void> {
+    const reports = await store.reports(track);
+    const latest = reports.at(-1);
+    const others = await otherTracks(track);
+    if (!latest) {
+      const body = renderPage(undefined, { pending: 0, history: [] }, {
+        track,
+        reportCommand: command("cli report", track, opts, timeClassGiven || others.length > 0),
+        otherTracks: others,
+      });
+      send(req, res, 200, "text/html", body);
+      return;
+    }
+    const report = segment === undefined ? latest : findReport(reports, segment);
+    if (!report) {
+      send(req, res, 404, "text/plain", "No report for that week.\n");
+      return;
+    }
+    const [pending, history, games] = await Promise.all([
+      pendingGames(store, report),
+      store.listPeriodStats(trackKey(track), settingsKey(report.settings)),
+      store.gamesById([...new Set(report.focus.flatMap((f) => f.examples.map((e) => e.gameId)))]),
+    ]);
+    const body = renderPage(report, { pending, history }, {
+      track,
+      reports,
+      latest: report === latest,
+      otherTracks: others,
+      games,
+    });
+    send(req, res, 200, "text/html", body);
+  }
+
+  async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      send(req, res, 405, "text/plain", "Only GET and HEAD are allowed.\n", { Allow: "GET, HEAD" });
+      return;
+    }
+    const path = (req.url ?? "/").split(/[?#]/, 1)[0]!;
+    if (path === "/") return htmlFor(req, res, undefined);
+    if (path === "/report.json") {
+      const latest = await store.latestReport(track);
+      if (!latest) send(req, res, 404, "application/json", `${JSON.stringify({ error: "no report yet" })}\n`);
+      else send(req, res, 200, "application/json", `${JSON.stringify(latest, null, 2)}\n`);
+      return;
+    }
+    const m = /^\/report\/([^/]+)$/.exec(path);
+    if (m) {
+      let segment: string;
+      try {
+        segment = decodeURIComponent(m[1]!);
+      } catch {
+        send(req, res, 404, "text/plain", "Not found.\n");
+        return;
+      }
+      return htmlFor(req, res, segment);
+    }
+    send(req, res, 404, "text/plain", "Not found.\n");
+  }
+
+  return (req, res) => {
+    route(req, res).catch((err: unknown) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      if (!res.headersSent) send(req, res, 500, "text/plain", "Something went wrong reading the database.\n");
+      else res.end();
+    });
+  };
+}
 
 /** The request handler for one track: the latest report, an earlier one, or its JSON. */
 export function handler(store: Store, track: Track): (req: IncomingMessage, res: ServerResponse) => void {
-  throw new Error("not implemented");
+  return createHandler(store, track);
 }
