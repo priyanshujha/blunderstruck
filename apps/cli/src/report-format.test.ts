@@ -421,7 +421,7 @@ describe("formatReport", () => {
           "   - Move 12, you had White",
           "     You: Your queen went to d2.",
           "     They: They found it: the knight jumped to e4 with check, hitting your king and queen at once.",
-          "     Then: Your king had to step aside, the knight took your queen, and your king took the knight.",
+          "     Then: Your king stepped aside, the knight took your queen, and your king took the knight.",
           "     Better: Rook to e1. After it, e4 is guarded, so the knight cannot land there safely.",
           "     It cost your queen.",
         ].join("\n"),
@@ -444,17 +444,11 @@ describe("formatReport", () => {
     });
   });
 
-  describe("stories from the story builder, read the way the board has them", () => {
-    // Engine lines as the patterns package's own story fixtures script them (Stockfish 19, depth 18).
+  describe("stories from the story builder, told from the game's own moves", () => {
+    // Engine lines scripted as in the patterns package's story fixtures; the games are invented.
     const fenPgn = (fen: string, moves: string): string => `[Event "fixture"]\n[SetUp "1"]\n[FEN "${fen}"]\n\n${moves} *`;
-    const F1_POS = "r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2Q3R w - - 0 1";
-    const F1_EVALS = {
-      1: { cp: 778, pv: ["h1e1", "c7c5", "d1f3", "b7b6", "f2g1", "h7h6", "f3b7", "a8b8", "b7a6", "f6d5"] },
-      2: { cp: -283, pv: ["f6e4", "f2e1", "e4d2", "e1d2", "f8e8", "a1d1", "a8d8", "d2c3", "f7f5", "h1e1"] },
-    };
-    const QH4 = "1. e4 e5 2. Nf3 Qh4";
-    const AFTER_NF3 = { cp: 30, pv: ["b8c6", "f1b5", "g8f6", "e1g1", "f6e4", "f1e1", "e4d6", "f3e5", "f8e7", "b5f1"] };
-    const AFTER_QH4 = { cp: 920, pv: ["f3h4", "d7d5", "h4f5", "d5e4", "f5g7", "f8g7", "d2d3", "g7f8", "d3e4", "g8f6"] };
+    /** Quiet moves so the game goes on past the story's window. */
+    const LATER = "a3 a6 4. h3 h6 5. b3 b6 6. g3 g6";
 
     /** The story's lines and cost, as the terminal prints them. */
     async function told(o: FixtureOptions & { as: "white" | "black" }, ply: number, patternId: string): Promise<string[]> {
@@ -464,13 +458,128 @@ describe("formatReport", () => {
       return [...storyLines(s!, patternId).map((l) => `${l.tag}: ${l.text}`), `cost: ${storyCost(s!, patternId).text}`];
     }
 
+    const F1_POS = "r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2Q3R w - - 0 1";
+    const F1_EVALS = {
+      1: { cp: 778, pv: ["h1e1", "c7c5", "d1f3", "b7b6", "f2g1", "h7h6", "f3b7", "a8b8", "b7a6", "f6d5"] },
+      2: { cp: -283, pv: ["f6e4", "f2e1", "e4d2", "e1d2", "f8e8", "a1d1", "a8d8", "d2c3", "f7f5", "h1e1"] },
+    };
     const f1 = (moves: string) => told({ pgn: fenPgn(F1_POS, moves), as: "white", evals: F1_EVALS }, 1, "allowed-tactic");
+    const F1_THEY = "they: That let the knight jump to e4 with check, hitting your king and queen at once.";
+    const F1_FOUND = "they: They found it: the knight jumped to e4 with check, hitting your king and queen at once.";
     const F1_BETTER = "better: Rook to e1. After it, e4 is guarded, so the knight cannot land there safely.";
 
-    it("F1, the game leaves the line at once: what it allowed, then what the game played", async () => {
-      expect(await f1("1. Qd2 h6")).toEqual([
+    it("case A, 1.Qd5? Nxd5 2.Nxd5 exd5: the queen taken another way is a fact", async () => {
+      expect(
+        await told(
+          {
+            pgn: fenPgn("r4rk1/ppp2ppp/4pn2/8/8/2N5/PPPQ1PPP/R4RK1 w - - 0 1", "1. Qd5 Nxd5 2. Nxd5 exd5"),
+            as: "white",
+            evals: { 1: { cp: 50, pv: ["f1e1", "a8d8"] }, 2: { cp: -850, pv: ["e6d5", "c3d5", "f6d5"] } },
+          },
+          1,
+          "hung-piece",
+        ),
+      ).toEqual([
+        "you: Your queen went to d5.",
+        "they: That let the pawn take your queen on d5.",
+        "then: In the game they took it with the knight, your knight took their knight, and the pawn took your knight. The game ended there.",
+        "better: Rook to e1. It keeps the position together.",
+        "cost: It cost your queen.",
+      ]);
+    });
+
+    const QC1 = "r4rk1/ppp2ppp/8/8/3n4/8/PPPQ1PP1/5RK1 w - - 0 1";
+    const QC1_EVALS = { 1: { cp: 300, pv: ["d2d4", "a8d8"] }, 2: { cp: -600, pv: ["d4e2", "g1h2", "e2c1", "f1c1", "a8d8"] } };
+
+    it("case B, 1.Qc1? Ne2+ 2.Kh1 Nxc1 3.Rxc1 (the engine had Kh2): all of it happened", async () => {
+      expect(await told({ pgn: fenPgn(QC1, "1. Qc1 Ne2+ 2. Kh1 Nxc1 3. Rxc1"), as: "white", evals: QC1_EVALS }, 1, "allowed-tactic")).toEqual([
+        "you: Your queen went to c1.",
+        "they: They found it: the knight jumped to e2 with check, hitting your king and queen at once.",
+        "then: Your king stepped aside, the knight took your queen, and your rook took the knight. The game ended there.",
+        "better: Queen takes the knight on d4. It wins their knight.",
+        "cost: It cost your queen for a knight.",
+      ]);
+    });
+
+    it("1.Qc1? Ne2+ 2.Kh1 Rad8: the queen was not taken, so the rest is what would follow", async () => {
+      const qc1 = "r4rk1/ppp2ppp/8/8/3n4/8/PPPQ1PPP/5RK1 w - - 0 1";
+      const evals = { 1: QC1_EVALS[1], 2: { cp: -600, pv: ["d4e2", "g1h1", "e2c1", "f1c1", "a8d8"] } };
+      expect((await told({ pgn: fenPgn(qc1, `1. Qc1 Ne2+ 2. Kh1 Rad8 3. ${LATER}`), as: "white", evals }, 1, "allowed-tactic")).slice(1)).toEqual([
+        "they: They found it: the knight jumped to e2 with check, hitting your king and queen at once.",
+        "then: From there your king would have to step aside, the knight would take your queen, and your rook would take the knight.",
+        "better: Queen takes the knight on d4. It wins their knight.",
+        "cost: It could have cost your queen for a knight.",
+      ]);
+      // The same game ending after Rad8: what happened, and that it ended; nothing would follow.
+      expect((await told({ pgn: fenPgn(qc1, "1. Qc1 Ne2+ 2. Kh1 Rad8"), as: "white", evals }, 1, "allowed-tactic"))[2]).toBe(
+        "then: Your king stepped aside, and the rook went to d8. The game ended there.",
+      );
+    });
+
+    it("1...Rc1? 2.b8=Q Rc2+: a promotion that was played is a cost, not a possibility", async () => {
+      expect(
+        await told(
+          {
+            pgn: fenPgn("8/1P4k1/8/8/8/8/4K3/1r6 b - - 0 1", "1... Rc1 2. b8=Q Rc2+"),
+            as: "black",
+            evals: { 2: { cp: 0, pv: ["b1b7", "e2d3"] }, 3: { cp: 900, pv: ["b7b8q", "c1c2", "e2d3"] } },
+          },
+          2,
+          "allowed-tactic",
+        ),
+      ).toEqual([
+        "you: Your rook went to c1.",
+        "they: They found it: the pawn went to b8 and became a queen.",
+        "then: Your rook went to c2 with check. The game ended there.",
+        "better: Rook takes the pawn on b7. After it, the pawn can no longer go to b8.",
+        "cost: It cost about 8 pawns of material.",
+      ]);
+    });
+
+    it("1...Ne5 2.Qxe5?? dxe5: the player came out ahead, so no cost is a fact", async () => {
+      expect(
+        await told(
+          {
+            pgn: fenPgn("6k1/ppp2ppp/2np4/8/8/5N2/PPP1QPPP/6K1 b - - 0 1", "1... Ne5 2. Qxe5 dxe5"),
+            as: "black",
+            evals: { 2: { cp: 0, pv: ["g8f8", "e2e3"] }, 3: { cp: 150, pv: ["f3e5", "d6e5", "e2e5"] } },
+          },
+          2,
+          "allowed-tactic",
+        ),
+      ).toEqual([
+        "you: Your knight went to e5.",
+        "they: That let their knight take your knight on e5.",
+        "then: In the game they took it with the queen, and your pawn took the queen. The game ended there.",
+        "better: King to f8. It keeps the position together.",
+        "cost: It could have cost a pawn.",
+      ]);
+    });
+
+    it("1.a3?? Rc1#: a mate allowed and given by another mating move", async () => {
+      expect(
+        await told(
+          {
+            pgn: fenPgn("1rr3k1/5ppp/8/8/8/8/P4PPP/6K1 w - - 0 1", "1. a3 Rc1#"),
+            as: "white",
+            evals: { 1: { cp: 0, pv: ["h2h3", "g8f8"] }, 2: { mate: -1, pv: ["b8b1"] } },
+          },
+          1,
+          "allowed-mate",
+        ),
+      ).toEqual([
+        "you: Your pawn went to a3.",
+        "they: That let the rook come to b1: checkmate.",
+        "then: In the game they played rook to c1, checkmate, instead.",
+        "better: Pawn to h3. It keeps the position together.",
+        "cost: It allowed checkmate.",
+      ]);
+    });
+
+    it("F1, the game leaves the line at once and goes on", async () => {
+      expect(await f1("1. Qd2 h6 2. a3 a6 3. h3 b6 4. b3 a5 5. g3 g6")).toEqual([
         "you: Your queen went to d2.",
-        "they: That let the knight jump to e4 with check, hitting your king and queen at once.",
+        F1_THEY,
         "then: In the game they played pawn to h6 instead.",
         F1_BETTER,
         "cost: It could have cost your queen for a knight.",
@@ -478,111 +587,41 @@ describe("formatReport", () => {
     });
 
     it("F1, the game ends on the move", async () => {
-      const lines = await f1("1. Qd2");
-      expect(lines.slice(1, 3)).toEqual([
-        "they: That let the knight jump to e4 with check, hitting your king and queen at once.",
-        "then: The game ended there.",
-      ]);
-      expect(lines.at(-1)).toBe("cost: It could have cost your queen for a knight.");
+      expect((await f1("1. Qd2")).slice(1, 3)).toEqual([F1_THEY, "then: The game ended there."]);
     });
 
-    it("F1, the game ends after the fork: the fork is a fact, the rest is what would follow", async () => {
+    it("F1, the game ends mid-line after the fork: no move after the end is told", async () => {
       expect((await f1("1. Qd2 Ne4+")).slice(1)).toEqual([
-        "they: They found it: the knight jumped to e4 with check, hitting your king and queen at once.",
-        "then: From there your king would have to step aside, the knight would take your queen, and your king would take the knight.",
+        F1_FOUND,
+        "then: The game ended there.",
         F1_BETTER,
         "cost: It could have cost your queen for a knight.",
       ]);
     });
 
-    it("F1, the game follows the whole line: all of it in the past", async () => {
+    it("F1, the game follows the whole line", async () => {
       expect((await f1("1. Qd2 Ne4+ 2. Ke1 Nxd2 3. Kxd2")).slice(1)).toEqual([
-        "they: They found it: the knight jumped to e4 with check, hitting your king and queen at once.",
-        "then: Your king had to step aside, the knight took your queen, and your king took the knight.",
+        F1_FOUND,
+        "then: Your king stepped aside, the knight took your queen, and your king took the knight. The game ended there.",
         F1_BETTER,
         "cost: It cost your queen for a knight.",
       ]);
     });
 
-    it("1.Qc1? Ne2+ 2.Kh1 Rad8: the game follows one move each, then leaves the line", async () => {
-      const lines = await told(
-        {
-          pgn: fenPgn("r4rk1/ppp2ppp/8/8/3n4/8/PPPQ1PPP/5RK1 w - - 0 1", "1. Qc1 Ne2+ 2. Kh1 Rad8"),
-          as: "white",
-          evals: { 1: { cp: 300, pv: ["d2d4", "a8d8"] }, 2: { cp: -600, pv: ["d4e2", "g1h1", "e2c1", "f1c1", "a8d8"] } },
-        },
-        1,
-        "allowed-tactic",
-      );
-      expect(lines).toEqual([
-        "you: Your queen went to c1.",
-        "they: They found it: the knight jumped to e2 with check, hitting your king and queen at once.",
-        "then: Your king had to step aside. From there the knight would take your queen, and your rook would take the knight.",
-        "better: Queen takes the knight on d4. It wins their knight.",
-        "cost: It could have cost your queen for a knight.",
+    it("F1, the fork is played and the game goes on elsewhere: the rest is what would follow", async () => {
+      expect((await f1("1. Qd2 Ne4+ 2. Ke1 a6 3. a3 a5 4. h3 b6 5. b3 h6 6. g3 g6")).slice(1, 3)).toEqual([
+        F1_FOUND,
+        "then: From there your king would have to step aside, the knight would take your queen, and your king would take the knight.",
       ]);
     });
 
-    it("2...Qh4?? 3.Nxh4 and the game ends: the capture is a fact, nothing after it is", async () => {
-      expect(await told({ pgn: `${QH4} 3. Nxh4`, as: "black", evals: { 4: AFTER_NF3, 5: AFTER_QH4 } }, 4, "hung-piece")).toEqual([
-        "you: Your queen went to h4. That left your queen on h4 where it could be taken.",
-        "they: They found it: the knight took your queen on h4.",
-        "then: From there your pawn would go to d5, the knight would go to f5, your pawn would take their pawn, the knight would take your pawn with check, and your bishop would take the knight.",
-        "better: Knight to c6. It keeps the position together.",
-        // The knight won back is in the part not played, so no trade is claimed.
-        "cost: It cost your queen.",
-      ]);
-    });
-
-    it("3.d3? after 2...Qh4: the missed queen, named because it outweighs the knight given", async () => {
-      const evals = { 5: AFTER_QH4, 6: { cp: -109, pv: ["h4e7", "d3d4", "d7d6", "b1c3", "c7c6", "f1c4", "g8f6", "c1e3", "h7h6", "e1g1"] } };
-      const lines = await told({ pgn: `${QH4} 3. d3`, as: "white", evals }, 5, "missed-capture");
+    it("3.d3? after 2...Qh4: a missed chance says nothing about a punishment", async () => {
+      const QH4_AFTER = { cp: 920, pv: ["f3h4", "d7d5", "h4f5", "d5e4", "f5g7", "f8g7", "d2d3", "g7f8", "d3e4", "g8f6"] };
+      const evals = { 5: QH4_AFTER, 6: { cp: -109, pv: ["h4e7", "d3d4", "d7d6", "b1c3", "c7c6", "f1c4", "g8f6", "c1e3", "h7h6", "e1g1"] } };
+      const lines = await told({ pgn: "1. e4 e5 2. Nf3 Qh4 3. d3", as: "white", evals }, 5, "missed-capture");
+      expect(lines.map((l) => l.split(":")[0])).toEqual(["you", "better", "cost"]);
       expect(lines).toContain("better: Knight takes the queen on h4. It wins their queen for your knight.");
       expect(lines.at(-1)).toBe("cost: It cost the chance to win their queen for your knight.");
-    });
-
-    it("Légal's trap, 4...g6? 5.Nxe5 and the game ends: no piece lost, and the rest is what would follow", async () => {
-      const evals = {
-        8: { cp: 60, pv: ["g8f6", "h2h3", "g4f3", "d1f3", "b8c6", "c3e2", "c6a5", "c4b5", "c7c6", "b5d3"] },
-        9: { cp: 254, pv: ["f3e5", "d6e5", "d1g4", "b8c6", "d2d3", "g8f6", "g4f3", "c6d4", "f3d1", "d8d7"] },
-      };
-      expect(await told({ pgn: "1. e4 e5 2. Nf3 d6 3. Bc4 Bg4 4. Nc3 g6 5. Nxe5", as: "black", evals }, 8, "allowed-tactic")).toEqual([
-        "you: Your pawn went to g6.",
-        "they: They found it: the knight took your pawn on e5. Moving it opened the line behind it: their queen on d1 was now aimed at your bishop.",
-        "then: From there your pawn would take the knight, and the queen would take your bishop.",
-        "better: Knight to f6. It keeps the position together.",
-        "cost: It could have cost a pawn.",
-      ]);
-    });
-
-    // 1...Qe4?? leaves the queen to the bishop on d3 (or the knight on c3).
-    const HUNG = "2b2rk1/ppp1qppp/8/8/8/2NB4/PPP2PPP/5RK1 b - - 0 1";
-    const HUNG_EVALS = { 2: { cp: 0, pv: ["c8e6", "f1e1"] }, 3: { cp: 900, pv: ["d3e4", "c8e6"] } };
-    const hung = (moves: string) => told({ pgn: fenPgn(HUNG, moves), as: "black", evals: HUNG_EVALS }, 2, "hung-piece");
-
-    it("1...Qe4?? 2.a3, or the game ends: the capture is only what the move allowed", async () => {
-      expect(await hung("1... Qe4 2. a3")).toEqual([
-        "you: Your queen went to e4. That left your queen on e4 where it could be taken.",
-        "they: That let the bishop take your queen on e4.",
-        "then: In the game they played pawn to a3 instead.",
-        "better: Bishop to e6. It keeps the position together.",
-        "cost: It could have cost your queen.",
-      ]);
-      const ended = await hung("1... Qe4");
-      expect(ended.slice(1, 3)).toEqual(["they: That let the bishop take your queen on e4.", "then: The game ended there."]);
-      expect(ended.at(-1)).toBe("cost: It could have cost your queen.");
-    });
-
-    it("1...Qe4?? 2.Bxe4 follows the line; 2.Nxe4 leaves it and is told as the game's move", async () => {
-      expect((await hung("1... Qe4 2. Bxe4")).slice(1)).toEqual([
-        "they: They found it: the bishop took your queen on e4.",
-        "better: Bishop to e6. It keeps the position together.",
-        "cost: It cost your queen.",
-      ]);
-      expect((await hung("1... Qe4 2. Nxe4")).slice(1, 3)).toEqual([
-        "they: That let the bishop take your queen on e4.",
-        "then: In the game they played knight takes your queen on e4 instead.",
-      ]);
     });
 
     it("Rxd1 where Nxf6+ gxf6 Rxd1 was better: the miss is the knight, not the queen taken back", async () => {
@@ -595,12 +634,14 @@ describe("formatReport", () => {
         1,
         "missed-capture",
       );
-      expect(lines[0]).toBe("you: Your rook took the queen on d1.");
-      expect(lines).toContain("better: Knight takes their knight on f6, with check. It wins a knight more than your move did.");
-      expect(lines.at(-1)).toBe("cost: It cost the chance to win a knight.");
+      expect(lines).toEqual([
+        "you: Your rook took the queen on d1.",
+        "better: Knight takes their knight on f6, with check. It wins a knight more than your move did.",
+        "cost: It cost the chance to win a knight.",
+      ]);
     });
 
-    it("1...Rd4? 2.Nxd4 exd4: a rook for a knight is the exchange", async () => {
+    it("1...Rd4? 2.Nxd4 exd4: a rook for a knight in the game is the exchange", async () => {
       const lines = await told(
         {
           pgn: fenPgn("3r2k1/5ppp/8/4p3/8/5N2/5PPP/6K1 b - - 0 1", "1... Rd4 2. Nxd4 exd4"),

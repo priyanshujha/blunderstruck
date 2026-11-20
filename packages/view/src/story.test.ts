@@ -23,7 +23,6 @@ const F1: ExampleStory = {
   // The game played the whole line.
   replyFound: true,
   followed: 4,
-  lostInGame: true,
   better: [mv({ san: "Re1", from: "h1", to: "e1", piece: "rook", color: "white" })],
   targets: [
     { square: "d2", piece: "queen", color: "white" },
@@ -68,7 +67,6 @@ const F2: ExampleStory = {
   punish: [mv({ san: "Nxe5", from: "c6", to: "e5", piece: "knight", color: "black", captured: "knight" })],
   replyFound: true,
   followed: 1,
-  lostInGame: true,
   better: [mv({ san: "Bb5", from: "f1", to: "b5", piece: "bishop", color: "white" })],
   targets: [],
   lost: { square: "e5", piece: "knight", color: "white" },
@@ -87,7 +85,6 @@ describe("storyLines", () => {
     ...F1,
     followed,
     replyFound: followed >= 1,
-    lostInGame: followed >= 3,
     ...over,
   });
 
@@ -95,7 +92,7 @@ describe("storyLines", () => {
     expect(texts(F1, "allowed-tactic")).toEqual([
       ["you", "Your queen went to d2."],
       ["they", "They found it: the knight jumped to e4 with check, hitting your king and queen at once."],
-      ["then", "Your king had to step aside, the knight took your queen, and your king took the knight."],
+      ["then", "Your king stepped aside, the knight took your queen, and your king took the knight."],
       ["better", "Rook to e1. After it, e4 is guarded, so the knight cannot land there safely."],
     ]);
     expect(storyCost(F1).text).toBe("It cost your queen.");
@@ -104,7 +101,7 @@ describe("storyLines", () => {
   it("tells what was played in the past and the rest of the line as what would follow", () => {
     expect(texts(f1(2)).slice(1, 3)).toEqual([
       ["they", "They found it: the knight jumped to e4 with check, hitting your king and queen at once."],
-      ["then", "Your king had to step aside. From there the knight would take your queen, and your king would take the knight."],
+      ["then", "Your king stepped aside. From there the knight would take your queen, and your king would take the knight."],
     ]);
     expect(texts(f1(1))[2]).toEqual([
       "then",
@@ -135,10 +132,24 @@ describe("storyLines", () => {
   });
 
   it("reads a story stored before plies were counted as only its first reply played", () => {
-    const { followed: _f, lostInGame: _l, ...old } = F1;
+    const { followed: _f, ...stored } = F1;
+    const old = { ...stored, actualReply: F1.punish[0]! };
+    expect(texts(old)[1]![1]).toBe("They found it: the knight jumped to e4 with check, hitting your king and queen at once.");
     expect(texts(old)[2]).toEqual([
       "then",
       "From there your king would have to step aside, the knight would take your queen, and your king would take the knight.",
+    ]);
+    expect(storyCost(old).text).toBe("It could have cost your queen.");
+  });
+
+  it("does not say they found it for an older story whose reply took the piece another way", () => {
+    // Older reports set `replyFound` when any move took the piece; here a bishop took the queen, not the engine's knight.
+    const { followed: _f, ...stored } = F1;
+    const bxd2 = mv({ san: "Bxd2", from: "g5", to: "d2", piece: "bishop", color: "black", captured: "queen" });
+    const old = { ...stored, replyFound: true, actualReply: bxd2 };
+    expect(texts(old).slice(1, 3)).toEqual([
+      ["they", "That let the knight jump to e4 with check, hitting your king and queen at once."],
+      ["then", "In the game they played bishop takes your queen on d2 instead."],
     ]);
     expect(storyCost(old).text).toBe("It could have cost your queen.");
   });
@@ -171,7 +182,7 @@ describe("storyLines", () => {
       ["better", "Bishop to b5. It keeps the position together."],
     ]);
     const a3 = mv({ san: "a3", from: "a2", to: "a3", piece: "pawn", color: "white" });
-    const missed = { ...F2, followed: 0, replyFound: false, lostInGame: false, actualReply: a3 };
+    const missed = { ...F2, followed: 0, replyFound: false, actualReply: a3 };
     expect(texts(missed, "hung-piece").slice(1, 3)).toEqual([
       ["they", "That let their knight take your knight on e5."],
       ["then", "In the game they played pawn to a3 instead."],
@@ -416,11 +427,10 @@ describe("storyCost", () => {
   it("says what the piece went for, and the exchange, as played or as possible", () => {
     expect(storyCost({ ...F1, lostFor: "rook" }).text).toBe("It cost your queen for a rook.");
     // The queen was taken in the game but the line stopped before anything came back: no trade claimed.
-    expect(storyCost({ ...F1, lostFor: "rook", followed: 3 }).text).toBe("It cost your queen.");
-    expect(storyCost({ ...F1, lostFor: "rook", lostInGame: false }).text).toBe("It could have cost your queen for a rook.");
-    const rook = { ...F1, lost: { square: "d4", piece: "rook" as const, color: "white" as const } };
+    expect(storyCost({ ...F1, lostFor: "rook", followed: 3 }).text).toBe("It could have cost your queen for a rook.");
+    const rook = { ...F1, gain: -2, lost: { square: "d4", piece: "rook" as const, color: "white" as const } };
     expect(storyCost({ ...rook, lostFor: "bishop" }).text).toBe("It cost the exchange (a rook for a bishop).");
-    expect(storyCost({ ...rook, lostFor: "knight", lostInGame: false }).text).toBe("It could have cost the exchange (a rook for a knight).");
+    expect(storyCost({ ...rook, lostFor: "knight", followed: 2 }).text).toBe("It could have cost the exchange (a rook for a knight).");
   });
 
   it("says checkmate, a missed win, material, or winning chances", () => {
@@ -442,5 +452,46 @@ describe("storyCost", () => {
     expect(storyCost({ ...F3, betterGain: 2, betterReason: { kind: "wins", piece: "bishop", gave: "bishop", gain: 2 } }, "missed-tactic").text).toBe(
       "It cost the chance to win material worth about 2 pawns.",
     );
+  });
+});
+
+describe("from the game's own moves (inGame)", () => {
+  const fork = F1.punish[0]!;
+  const g = (over: Partial<NonNullable<ExampleStory["inGame"]>>): ExampleStory => ({
+    ...F1,
+    inGame: { moves: [], net: 0, ended: false, ...over },
+  });
+
+  it("states the exchange as played, with a pawn more when the net says so", () => {
+    const rook = { square: "d4", piece: "rook" as const, color: "white" as const };
+    expect(storyCost(g({ moves: [fork], net: 2, lost: rook, lostFor: "knight", exchange: true })).text).toBe(
+      "It cost the exchange (a rook for a knight).",
+    );
+    expect(storyCost(g({ moves: [fork], net: 3, lost: rook, lostFor: "bishop", exchange: true })).text).toBe(
+      "It cost the exchange (a rook for a bishop) and a pawn.",
+    );
+  });
+
+  it("states material as lost only when the game lost at least what the line would have", () => {
+    const pawnLine = { ...F1, lost: undefined, lostFor: undefined, gain: -2 };
+    expect(storyCost({ ...pawnLine, inGame: { moves: [fork], net: 2, ended: false } }).text).toBe("It cost about 2 pawns of material.");
+    expect(storyCost({ ...pawnLine, inGame: { moves: [fork], net: 1, ended: false } }).text).toBe("It could have cost about 2 pawns of material.");
+    // Never both: a fact replaces the possibility.
+    expect(storyCost(g({ moves: F1.punish, net: 6, lost: F1.lost })).text).toBe("It cost your queen.");
+  });
+
+  it("says the game ended, and nothing would follow it", () => {
+    expect(storyLines(g({ ended: true })).find((l) => l.tag === "then")?.text).toBe("The game ended there.");
+    expect(storyLines(g({ moves: [fork], ended: true })).find((l) => l.tag === "then")?.text).toBe("The game ended there.");
+  });
+
+  it("tells a missed chance without any punishment", () => {
+    const s = { ...F3, inGame: { moves: F3.punish, net: 0, ended: false } };
+    expect(storyLines(s, "missed-tactic").map((l) => l.tag)).toEqual(["you", "better"]);
+  });
+
+  it("falls back to the engine line, as a possibility, for a story stored without inGame", () => {
+    const { inGame: _i, ...stored } = g({});
+    expect(storyCost({ ...stored, followed: 1 }).text).toBe("It could have cost your queen.");
   });
 });
