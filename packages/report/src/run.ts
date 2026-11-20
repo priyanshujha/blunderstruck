@@ -15,8 +15,8 @@ import { writeReport } from "@blunderstruck/coach";
 import { FETCH_MAX, MIN_REPORT_GAMES, SAMPLE_GAMES, selectGames } from "@blunderstruck/progress";
 import type { Store } from "@blunderstruck/store";
 import { analyseGames, currentSettings, engineNameWithoutStarting, lazyEngine } from "./analyse";
-import { buildDraft, pendingFor, reportGames, storeWeekRows } from "./assemble";
-import { completeReport } from "./complete";
+import { buildDraft, carryWording, pendingFor, reportGames, storeWeekRows } from "./assemble";
+import { completeReport, completeUnfinished, LOST_RACE_WARNING } from "./complete";
 import {
   byPlayedAtThenId,
   checkAsOf,
@@ -98,7 +98,8 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
     let reports: WeeklyReport[] = [];
     if (chosen && !chosen.isNew) {
       checkAsOf(await store.reports(chosen.track), asOf);
-      if (!opts.sampleOnly) resumed = await completeReport(shared, chosen.track, { depth: opts.depth });
+      // Every unfinished report first, oldest first; --sample-only only spares sample-only ones.
+      resumed = await completeUnfinished(shared, chosen.track, { depth: opts.depth, includeSampleOnly: !opts.sampleOnly });
       reports = await store.reports(chosen.track);
     }
 
@@ -120,7 +121,7 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
     const isNew = !chosen || chosen.isNew;
     if (plan.status !== "report") {
       if (!isNew) await store.putGames(mine);
-      const latest = resumed ?? plan.latest;
+      const latest = plan.latest ?? resumed;
       return {
         status: resumed ? "resumed" : plan.status,
         ...(latest ? { report: latest } : {}),
@@ -195,7 +196,19 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
     }
 
     const settings = currentSettings(opts.depth, engineName);
-    const { draft, pending } = await buildDraft({
+    const lostRace = async (): Promise<ReportOutcome> => {
+      // completeReport warns on its own; the first pass's store is checked here.
+      const latest = await store.latestReport(track!);
+      return {
+        status: "unchanged",
+        ...(latest ? { report: latest } : {}),
+        newGames: plan.games.length,
+        needed: 0,
+        pending: await pendingCount(store, latest),
+        ...others,
+      };
+    };
+    const built = await buildDraft({
       ...base,
       revision: 0,
       settings,
@@ -204,13 +217,22 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
       sampleOnly: opts.sampleOnly,
       notes: pass.settingsChanged ? ["settings-changed"] : [],
     });
-    const report = await writeReport(draft, deps.provider, undefined, { onModelError: deps.onWarning });
-    await store.putReport(report);
+    const { draft, pending, carriedFrom } = built;
+    const written = await writeReport(draft, deps.provider, undefined, { onModelError: deps.onWarning });
+    const report = carriedFrom ? carryWording(written, carriedFrom) : written;
+    if ((await store.putReport(report)) !== "stored") {
+      deps.onWarning?.(LOST_RACE_WARNING);
+      return lostRace();
+    }
     await storeWeekRows(store, report);
     deps.onReport?.(report, { pending: pending.length });
 
     let final = report;
-    if (!opts.sampleOnly && pending.length > 0) final = (await completeReport(shared, track, { depth: opts.depth })) ?? report;
+    if (!opts.sampleOnly && pending.length > 0) {
+      const done = await completeReport(shared, track, { depth: opts.depth, periodEnd: report.periodEnd });
+      if (!done) return lostRace();
+      final = done;
+    }
     return {
       status: "new",
       report: final,

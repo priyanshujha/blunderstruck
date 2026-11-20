@@ -10,22 +10,52 @@ import {
 import { writeReport } from "@blunderstruck/coach";
 import { AnalysisAborted, analyseGames, analysisKey, currentSettings, type EngineHandle } from "./analyse";
 import { buildDraft, reportGames, storeWeekRows } from "./assemble";
+import { iso, latestRevisions } from "./periods";
 import type { ReportDeps } from "./run";
 
 export interface CompleteOptions {
   /** The depth this run analyses at; defaults to the stored report's. */
   depth?: number;
+  /** Which period to complete; defaults to the track's latest. */
+  periodEnd?: string;
+}
+
+/** Told to `onWarning` when another run stored this period's report (or an overlapping one) first. */
+export const LOST_RACE_WARNING = "another run stored a report for this period first";
+
+/**
+ * Complete every unfinished report of the track, oldest period first. Provisional reports are
+ * always completed; sample-only ones only with `includeSampleOnly` (a run without
+ * `--sample-only`). Returns the last report completed, or undefined when there was none.
+ */
+export async function completeUnfinished(
+  deps: ReportDeps,
+  track: Track,
+  opts: { depth?: number; includeSampleOnly: boolean },
+): Promise<WeeklyReport | undefined> {
+  const unfinished = latestRevisions(await deps.store.reports(track)).filter(
+    (r) => !r.coverage.complete && (opts.includeSampleOnly || !r.coverage.sampleOnly),
+  );
+  let last: WeeklyReport | undefined;
+  for (const r of unfinished) {
+    const done = await completeReport(deps, track, {
+      ...(opts.depth !== undefined ? { depth: opts.depth } : {}),
+      periodEnd: r.periodEnd,
+    });
+    if (done) last = done;
+  }
+  return last;
 }
 
 /**
- * Finish the track's latest report when it is not complete (provisional, or stopped after the
- * sample on request): analyse every game it still needs, one at a time in `(playedAt, id)`
- * order, then store the next revision with `coverage.complete = true`, its weekly rows, and
- * call `onReport`. Returns undefined when the latest report is complete or there is none.
+ * Finish one report of the track (`opts.periodEnd`, else the latest) when it is not complete
+ * (provisional, or stopped after the sample on request): analyse every game it still needs,
+ * one at a time in `(playedAt, id)` order, then store the next revision with
+ * `coverage.complete = true`, its weekly rows, and call `onReport`. Returns undefined when that
+ * report is complete or missing, or when another run stored the period first (then
+ * `onWarning` gets `LOST_RACE_WARNING` and nothing else is written).
  *
  * Rules:
- * - Only the latest period is completed. An earlier sample-only report under a later one stays
- *   final as it is, since later reports were built on it.
  * - A sample-only report keeps `sampleOnly: true` in the store until the completed revision
  *   replaces it; stopping part way leaves it as it was (the analyses made are kept).
  * - When this run's settings (analysis or patterns version, depth, engine) differ from the
@@ -46,7 +76,9 @@ export async function completeReport(
   opts: CompleteOptions = {},
 ): Promise<WeeklyReport | undefined> {
   const { store } = deps;
-  const report = await store.latestReport(track);
+  const stored = latestRevisions(await store.reports(track));
+  const report =
+    opts.periodEnd === undefined ? stored.at(-1) : stored.find((r) => r.periodEnd === iso(opts.periodEnd!));
   if (!report || report.coverage.complete) return undefined;
 
   const depth = opts.depth ?? report.settings.engine.depth;
@@ -122,7 +154,10 @@ export async function completeReport(
       ? { ...written, notes: [...written.notes, "model-failed" as const] }
       : written;
 
-  if ((await store.putReport(next)) === "stale") return (await store.latestReport(report.track)) ?? next;
+  if ((await store.putReport(next)) !== "stored") {
+    deps.onWarning?.(LOST_RACE_WARNING);
+    return undefined;
+  }
   await storeWeekRows(store, next);
   deps.onReport?.(next, { pending: pending.length });
   return next;

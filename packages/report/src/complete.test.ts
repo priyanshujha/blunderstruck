@@ -2,9 +2,11 @@ import { settingsKey, trackKey, WeeklyReport, type GameRecord, type Track } from
 import { templateWording, type CoachProvider } from "@blunderstruck/coach";
 import { analyzeGame } from "@blunderstruck/engine";
 import { selectGames } from "@blunderstruck/progress";
+import type { Store } from "@blunderstruck/store";
 import { describe, expect, it } from "vitest";
 import { AnalysisAborted } from "./analyse";
-import { completeReport } from "./complete";
+import { buildDraft } from "./assemble";
+import { completeReport, LOST_RACE_WARNING } from "./complete";
 import { runReport, type ReportDeps } from "./run";
 import {
   AS_OF,
@@ -339,9 +341,24 @@ describe("completeReport: resume rules", () => {
         retired: a.focus.map((f) => ({ patternId: f.patternId, why: "graduated" as const, since: f.since, baseline: f.baseline, current: f.baseline })),
         coverage: { ...a.coverage, complete: pFinal, sampleOnly: false },
       };
-      expect(await h.store.putReport(WeeklyReport.parse(p))).toBe("stored");
-      const b = (await completeReport(h.deps(), TRACK))!;
-      expect(b).toMatchObject({ periodEnd: WEEK_LATER, revision: 1, coverage: { complete: true } });
+      // P overlaps B, so the store would refuse it; it goes straight into B's history instead.
+      const r0 = (await h.store.latestReport(TRACK))!;
+      await completeReport(h.deps(), TRACK); // analyse B's games
+      const { draft: b } = await buildDraft({
+        store: h.store,
+        track: TRACK,
+        kind: r0.kind,
+        revision: 1,
+        periodStart: r0.periodStart,
+        periodEnd: r0.periodEnd,
+        periodIds: r0.gameIds,
+        total: r0.coverage.total,
+        settings: r0.settings,
+        history: [a, WeeklyReport.parse(p)],
+        sampleOnly: false,
+        notes: [],
+      });
+      expect(b).toMatchObject({ periodEnd: WEEK_LATER, coverage: { complete: true } });
       return { a, b };
     }
 
@@ -367,5 +384,141 @@ describe("runReport: other tracks", () => {
     const rapid = await runReport(h.deps(), opts({ timeClass: "rapid" }));
     expect(rapid.report!.track.timeClass).toBe("rapid");
     expect(rapid.otherTracks).toEqual([TRACK]);
+  });
+});
+
+const TWO_WEEKS_LATER = "2026-12-03T12:00:00.000Z";
+
+describe("few-games weeks", () => {
+  it("carry the focus items forward unchanged, so the next full week keeps them", async () => {
+    const h = harness(games(20, 0.5, 29));
+    const provider = wordingProvider();
+    const a = (await runReport(h.deps({ provider }), opts())).report!;
+    expect(a.focus.length).toBeGreaterThan(0);
+    expect(a.wording.source).toBe("model");
+
+    h.available.push(...games(3, 0.5, 6.5, { asOf: WEEK_LATER }));
+    const b = (await runReport(h.deps({ provider }), opts({ asOf: WEEK_LATER, force: true }))).report!;
+    expect(b.notes).toContain("few-games");
+    expect(provider.calls).toBe(1);
+    expect(b.retired).toEqual([]);
+    expect(b.focus.map((f) => [f.patternId, f.reason.kind, f.since, f.target])).toEqual(
+      a.focus.map((f) => [f.patternId, "kept", f.since, f.target]),
+    );
+    expect(b.focus.map((f) => f.baseline)).toEqual(a.focus.map((f) => f.baseline));
+    expect(b.focus.map((f) => [f.title, f.why, f.drill])).toEqual(a.focus.map((f) => [f.title, f.why, f.drill]));
+    expect(b.wording).toMatchObject({ source: "model", calls: 0, wordedFor: a.wording.wordedFor });
+    expect(b.progress.map((p) => [p.patternId, p.verdict])).toEqual(a.focus.map((f) => [f.patternId, "insufficient-data"]));
+    expect(() => WeeklyReport.parse(b)).not.toThrow();
+
+    h.available.push(...games(12, 0.5, 6.5, { asOf: TWO_WEEKS_LATER }));
+    const c = (await runReport(h.deps({ provider }), opts({ asOf: TWO_WEEKS_LATER }))).report!;
+    expect(c.notes).not.toContain("few-games");
+    for (const item of a.focus) {
+      const kept = c.focus.find((f) => f.patternId === item.patternId)!;
+      expect(kept).toMatchObject({ since: item.since, baseline: item.baseline, target: item.target, reason: { kind: "kept" } });
+    }
+  });
+
+  it("a first report under 10 games still has no focus", async () => {
+    const h = harness(games(7, 1, 20));
+    expect((await runReport(h.deps(), opts())).report!.focus).toEqual([]);
+  });
+});
+
+describe("unfinished reports of earlier periods", () => {
+  it("a --sample-only run first completes an aborted report, then builds its own period", async () => {
+    const { h, r0 } = await provisional(400);
+    h.available.push(...games(200, 0.5, 6.5, { asOf: WEEK_LATER }));
+    const out = await runReport(h.deps(), opts({ asOf: WEEK_LATER, sampleOnly: true }));
+    const reports = await h.store.reports(TRACK);
+    expect(reports.map((r) => [r.periodEnd, r.revision, r.coverage.complete, r.coverage.sampleOnly])).toEqual([
+      [r0.periodEnd, 1, true, false],
+      [WEEK_LATER, 0, false, true],
+    ]);
+    expect(out.report).toMatchObject({ periodEnd: WEEK_LATER, coverage: { sampleOnly: true } });
+  });
+
+  it("completes a provisional report that is not the latest, oldest first", async () => {
+    const { h, r0 } = await provisional(400);
+    // A later, finished period stored over it (as an older version of this code could leave it).
+    const later: WeeklyReport = {
+      ...r0,
+      kind: "weekly",
+      periodStart: r0.periodEnd,
+      periodEnd: WEEK_LATER,
+      gameIds: [],
+      coverage: { sampled: 0, analysed: 0, total: 0, complete: true, sampleOnly: false },
+    };
+    expect(await h.store.putReport(later)).toBe("stored");
+    expect(await completeReport(h.deps(), TRACK)).toBeUndefined(); // the latest is complete
+    const done = (await completeReport(h.deps(), TRACK, { periodEnd: r0.periodEnd }))!;
+    expect(done).toMatchObject({ periodEnd: r0.periodEnd, revision: 1, coverage: { complete: true } });
+
+    // A run does the same on its own.
+    const again = await provisional(400);
+    await again.h.store.putReport({ ...later, track: TRACK });
+    const out = await runReport(again.h.deps(), opts({ asOf: TWO_WEEKS_LATER }));
+    expect(out.status).toBe("resumed");
+    expect(out.report!.periodEnd).toBe(WEEK_LATER);
+    const first = (await again.h.store.reports(TRACK))[0]!;
+    expect(first).toMatchObject({ revision: 1, coverage: { complete: true } });
+  });
+});
+
+describe("another run storing first", () => {
+  /** Wraps the harness store so storing a report of `fromRevision` or later returns `result`. */
+  function racing(h: Harness, result: "stale" | "conflict", fromRevision: number, winner = true) {
+    const base = h.store;
+    const store: Store = {
+      ...base,
+      async putReport(r) {
+        if (r.revision < fromRevision) return base.putReport(r);
+        if (winner && r.revision === 0) await base.putReport({ ...r, summary: "Stored by the other run." });
+        return result;
+      },
+    };
+    h.store = store;
+  }
+
+  for (const result of ["stale", "conflict"] as const) {
+    it(`on "${result}" in the first pass: no rows, no onReport, a warning, and the stored report`, async () => {
+      const h = harness(games(20, 0.5, 29));
+      racing(h, result, 0);
+      const warnings: string[] = [];
+      const out = await runReport(h.deps({ onWarning: (m) => warnings.push(m) }), opts());
+      expect(out.status).toBe("unchanged");
+      expect(out.report!.summary).toBe("Stored by the other run.");
+      expect(warnings).toEqual([LOST_RACE_WARNING]);
+      expect(h.reported).toEqual([]);
+      expect(await h.store.listPeriodStats(trackKey(TRACK), settingsKey(out.report!.settings))).toEqual([]);
+    });
+
+    it(`on "${result}" when completing: no rows, no onReport for it, a warning`, async () => {
+      const h = harness(games(400, 0.5, 29));
+      racing(h, result, 1, false);
+      const warnings: string[] = [];
+      const out = await runReport(h.deps({ onWarning: (m) => warnings.push(m) }), opts());
+      expect(out.status).toBe("unchanged");
+      expect(out.report).toMatchObject({ revision: 0 });
+      expect(warnings).toEqual([LOST_RACE_WARNING]);
+      expect(h.reported.map((x) => x.report.revision)).toEqual([0]);
+      expect(await h.store.listPeriodStats(trackKey(TRACK), settingsKey(out.report!.settings))).toEqual([]);
+    });
+  }
+});
+
+describe("games cut by --max-games", () => {
+  it("are never analysed later: a 20-game week after a capped 400 analyses only the 20", async () => {
+    const h = harness(games(400, 0.5, 29));
+    const first = (await runReport(h.deps(), opts({ maxGames: 200 }))).report!;
+    expect(first.coverage).toMatchObject({ total: 200, complete: true });
+    h.evaluator.positions = 0;
+    h.available.push(...games(20, 0.5, 6.5, { asOf: WEEK_LATER }));
+    const next = (await runReport(h.deps(), opts({ asOf: WEEK_LATER }))).report!;
+    expect(h.evaluator.positions).toBe(20 * POSITIONS_PER_GAME);
+    expect(next.coverage).toMatchObject({ total: 20, complete: true });
+    expect(next.comparison!.games).toBe(200);
+    expect(next.weeks.reduce((n, w) => n + w.games, 0)).toBe(220);
   });
 });

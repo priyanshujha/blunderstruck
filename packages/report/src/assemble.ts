@@ -7,6 +7,7 @@ import {
   trackKey,
   type AnalysisSettings,
   type AnalyzedGame,
+  type FocusChoice,
   type GameRecord,
   type PatternProgress,
   type PatternStat,
@@ -33,7 +34,7 @@ import {
 } from "@blunderstruck/progress";
 import type { AnalysisKey, Store } from "@blunderstruck/store";
 import { analysisKey } from "./analyse";
-import { byPlayedAtThenId, iso } from "./periods";
+import { byPlayedAtThenId, iso, latestRevisions } from "./periods";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ms = (s: string): number => Date.parse(s);
@@ -59,11 +60,40 @@ export function comparisonWindow(periodStart: string): { start: string; end: str
   return { start: iso(ms(periodStart) - COMPARISON_DAYS * DAY_MS), end: iso(periodStart) };
 }
 
+/** The games a period's numbers use: all of them, or the `selectGames` cut to `total`. */
+function cappedOf(period: GameRecord[], total: number, periodEnd: string): GameRecord[] {
+  return total < period.length ? selectGames(period, total, periodEnd) : period;
+}
+
+/** A period's games found in the store, `(playedAt, id)` order. */
+async function periodGames(store: Store, ids: readonly string[]): Promise<GameRecord[]> {
+  const byId = await store.gamesById(ids);
+  const period = ids.map((id) => byId.get(id)).filter((g): g is GameRecord => g !== undefined);
+  return period.sort(byPlayedAtThenId);
+}
+
+/**
+ * Games another stored report of the track left out with `--max-games`: those in its
+ * `gameIds` that are not in its cut, `cappedOf(its games, coverage.total, periodEnd)`. This is
+ * the same rule that report's own numbers were built with, so it does not depend on what has
+ * been analysed since. Such games are never analysed or counted again.
+ */
+export async function cutGameIds(store: Store, track: Track, periodEnd: string): Promise<Set<string>> {
+  const cut = new Set<string>();
+  for (const r of latestRevisions(await store.reports(track))) {
+    if (ms(r.periodEnd) === ms(periodEnd) || r.coverage.total >= r.gameIds.length) continue;
+    const kept = new Set(cappedOf(await periodGames(store, r.gameIds), r.coverage.total, r.periodEnd).map((g) => g.id));
+    for (const id of r.gameIds) if (!kept.has(id)) cut.add(id);
+  }
+  return cut;
+}
+
 /**
  * Collect the games a report needs from the store: the period (`periodIds`, capped to `total`
  * with `selectGames`), the comparison window (weekly reports only) and the six weeks ending at
- * `periodEnd`. Games of the period never count in the comparison window too. `pending` lists
- * those with no analysis matching `key`; period games left out by the cap are never pending.
+ * `periodEnd`. Games of the period never count in the comparison window too, and games that
+ * any report (this one or another) left out with `--max-games` never count. `pending` lists
+ * those with no analysis matching `key`.
  */
 export async function reportGames(input: {
   store: Store;
@@ -77,15 +107,14 @@ export async function reportGames(input: {
   key: AnalysisKey;
 }): Promise<ReportGames> {
   const { store, track, periodStart, periodEnd } = input;
-  const byId = await store.gamesById(input.periodIds);
-  const period = input.periodIds.map((id) => byId.get(id)).filter((g): g is GameRecord => g !== undefined);
-  period.sort(byPlayedAtThenId);
-  const capped = input.total < period.length ? selectGames(period, input.total, periodEnd) : period;
+  const period = await periodGames(store, input.periodIds);
+  const capped = cappedOf(period, input.total, periodEnd);
   const sample = selectGames(capped, SAMPLE_GAMES, periodEnd);
   const inPeriod = new Set(input.periodIds);
+  const cut = await cutGameIds(store, track, periodEnd);
 
   const q = { platform: track.platform, username: track.username, timeClass: track.timeClass };
-  const rated = (gs: GameRecord[]) => gs.filter((g) => g.rated && !inPeriod.has(g.id));
+  const rated = (gs: GameRecord[]) => gs.filter((g) => g.rated && !inPeriod.has(g.id) && !cut.has(g.id));
   let comparison: GameRecord[] = [];
   if (input.kind === "weekly") {
     const w = comparisonWindow(periodStart);
@@ -205,13 +234,19 @@ export interface Draft {
   pending: GameRecord[];
   /** The six weekly rows, newest first. */
   weeks: PeriodStats[];
+  /** A weekly report under `MIN_REPORT_GAMES` games: the final report its focus items were carried from. */
+  carriedFrom?: WeeklyReport;
 }
 
 /**
  * Build a report draft from whatever is analysed at `input.settings` now: the period's
  * numbers, the comparison window, the six weeks, trends, priorities, focus, progress and
  * retirements. `coverage.complete` is true when nothing the report needs is pending. Under
- * `MIN_REPORT_GAMES` games the draft has no focus items and notes "few-games".
+ * `MIN_REPORT_GAMES` games the draft notes "few-games", retires nothing and adds nothing: a
+ * first report has no focus items, and a weekly one carries the previous final report's items
+ * forward as "kept" (same `since`, `baseline` and `target`, fresh reason numbers), with their
+ * progress entries. Their verdicts are "insufficient-data", so such a report counts neither
+ * toward graduation nor rotation.
  */
 export async function buildDraft(input: DraftInput): Promise<Draft> {
   const { store, track, settings, periodStart, periodEnd } = input;
@@ -263,10 +298,14 @@ export async function buildDraft(input: DraftInput): Promise<Draft> {
     analyses: periodAnalyses,
   });
 
+  const few = games.capped.length < MIN_REPORT_GAMES;
+  const prevFinal = latestRevisions(history).filter(isFinal).at(-1);
+  const carriedFrom = few && input.kind === "weekly" && prevFinal && prevFinal.focus.length > 0 ? prevFinal : undefined;
+  const focus = few ? (carriedFrom ? carryForward(carriedFrom, decided.focus) : []) : decided.focus;
+
   const sampleOnly = input.sampleOnly && games.pending.length > 0;
   const notes: ReportNote[] = input.notes.filter((n) => n !== "sample-only");
   if (sampleOnly) notes.push("sample-only");
-  const few = games.capped.length < MIN_REPORT_GAMES;
   if (few && !notes.includes("few-games")) notes.push("few-games");
   const analysed = games.capped.filter((g) => analyses.has(g.id)).length;
 
@@ -296,12 +335,47 @@ export async function buildDraft(input: DraftInput): Promise<Draft> {
     weeks: weekRows,
     trends: trendsOf(current, comparison),
     priorities: ranked,
-    focus: few ? [] : decided.focus,
+    focus,
     progress: decided.progress,
     retired: few ? [] : decided.retired,
     notes,
   };
-  return { draft, pending: games.pending, weeks: weekRows };
+  return { draft, pending: games.pending, weeks: weekRows, ...(carriedFrom ? { carriedFrom } : {}) };
+}
+
+/**
+ * The items of `from` as "kept" items: `chooseFocus`'s kept choice where it made one (fresh
+ * reason numbers and examples), else the stored item with its kind set to "kept".
+ */
+function carryForward(from: WeeklyReport, decided: readonly FocusChoice[]): FocusChoice[] {
+  return from.focus.map((item) => {
+    const kept = decided.find((f) => f.patternId === item.patternId && f.reason.kind === "kept");
+    if (kept) return kept;
+    const { title: _t, why: _w, drill: _d, ...choice } = item;
+    return { ...choice, reason: { ...item.reason, kind: "kept" as const } };
+  });
+}
+
+/**
+ * A few-games report's wording: each item carried from `from` keeps its text there. Which
+ * items count as model-worded follows `from`; the summary stays the report's own (template).
+ * No model call is made for it.
+ */
+export function carryWording(report: WeeklyReport, from: WeeklyReport): WeeklyReport {
+  const texts = new Map(from.focus.map((f) => [f.patternId, f]));
+  const focus = report.focus.map((f) => {
+    const t = texts.get(f.patternId);
+    return t ? { ...f, title: t.title, why: t.why, drill: t.drill } : f;
+  });
+  const modelIds = from.wording.source === "model" ? from.wording.wordedFor : [];
+  const wordedFor = focus.map((f) => f.patternId).filter((id) => modelIds.includes(id));
+  const meta = from.wording.provider
+    ? { provider: from.wording.provider, ...(from.wording.model ? { model: from.wording.model } : {}) }
+    : {};
+  const wording = wordedFor.length > 0
+    ? { source: "model" as const, ...meta, wordedFor, calls: report.wording.calls }
+    : { source: "template" as const, wordedFor: [], calls: report.wording.calls };
+  return { ...report, focus, wording };
 }
 
 /** A report is final once nothing is pending or the run stopped after the sample on request. */

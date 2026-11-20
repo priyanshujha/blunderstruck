@@ -1,16 +1,24 @@
 import { settingsKey, trackKey, WeeklyReport } from "@blunderstruck/contracts";
 import { analyzeGame } from "@blunderstruck/engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { completeReport } from "./complete";
+import { completeReport, completeUnfinished } from "./complete";
 import { ReportInputError } from "./periods";
 import { runReport } from "./run";
 import { AS_OF, failingProvider, game, games, harness, opts, PLAYER, stubEvaluator, WEEK_LATER } from "./test-helpers";
 
 // Pass 2 is tested on its own; here it only records that it was asked for.
-vi.mock("./complete", () => ({ completeReport: vi.fn(async () => undefined) }));
+vi.mock("./complete", () => ({
+  completeReport: vi.fn(async () => undefined),
+  completeUnfinished: vi.fn(async () => undefined),
+  LOST_RACE_WARNING: "another run stored a report for this period first",
+}));
 const complete = vi.mocked(completeReport);
+const unfinished = vi.mocked(completeUnfinished);
 
-beforeEach(() => complete.mockClear());
+beforeEach(() => {
+  complete.mockClear();
+  unfinished.mockClear();
+});
 
 describe("runReport: first report", () => {
   it("takes the 30 days before asOf, stores track, games, report and weekly rows, and makes one model call", async () => {
@@ -180,14 +188,14 @@ describe("runReport: later runs", () => {
     expect(h.fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("asks to resume an unfinished report first, but not with --sample-only", async () => {
+  it("asks to complete unfinished reports first, sparing sample-only ones only under --sample-only", async () => {
     const { h, first } = await firstRun();
     await runReport(h.deps(), opts({ asOf: WEEK_LATER }));
-    expect(complete).toHaveBeenCalledTimes(1);
-    expect(complete.mock.calls[0]![1]).toEqual(first.track);
-    complete.mockClear();
+    expect(unfinished).toHaveBeenCalledTimes(1);
+    expect(unfinished.mock.calls[0]!.slice(1)).toEqual([first.track, { depth: 12, includeSampleOnly: true }]);
+    unfinished.mockClear();
     await runReport(h.deps(), opts({ asOf: WEEK_LATER, sampleOnly: true }));
-    expect(complete).not.toHaveBeenCalled();
+    expect(unfinished.mock.calls[0]!.slice(1)).toEqual([first.track, { depth: 12, includeSampleOnly: false }]);
   });
 });
 
