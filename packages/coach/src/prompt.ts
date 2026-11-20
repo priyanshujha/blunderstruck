@@ -1,14 +1,23 @@
 import {
   BAND_RUBRIC,
+  BLIND_SPOT_IDS,
+  type BlindSpot,
+  type BlindSpotId,
+  blindSpotTokenValues,
+  type BetterReason,
+  type ExampleStory,
+  type FocusExample,
   focusTokenValues,
+  type MoveDetail,
   PATTERN_IDS,
   type PatternId,
   RATING_BANDS,
   type ReportDraft,
+  type StoryPiece,
   SUMMARY_TOKENS,
   summaryTokenValues,
 } from "@blunderstruck/contracts";
-import { WORDING_FOCUS_TOKENS } from "./validate";
+import { STEP_TOKENS, WORDING_FOCUS_TOKENS } from "./validate";
 
 /** The shape of the model's answer. No `maxItems`, `minimum`, `maxLength` or `oneOf`: limits are checked after parsing. */
 export const WORDING_SCHEMA: object = {
@@ -24,8 +33,17 @@ export const WORDING_SCHEMA: object = {
           title: { type: "string" },
           why: { type: "string" },
           drill: { type: "string" },
+          steps: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { blindSpot: { type: "string" }, text: { type: "string" } },
+              required: ["blindSpot", "text"],
+              additionalProperties: false,
+            },
+          },
         },
-        required: ["patternId", "title", "why", "drill"],
+        required: ["patternId", "title", "why", "drill", "steps"],
         additionalProperties: false,
       },
     },
@@ -65,27 +83,85 @@ const SUMMARY_TOKEN_MEANING: Record<(typeof SUMMARY_TOKENS)[number], string> = {
   focusCount: "number of focus items",
 };
 
-/** A worked example of a good answer. It passes `parseWording` for focus ids hung-piece, missed-tactic. */
+const STEP_TOKEN_MEANING: Record<(typeof STEP_TOKENS)[number], string> = {
+  count: "this blind spot's occurrences",
+  of: "the pattern's occurrences in the same games",
+  games: "games those occurrences are in (in a step, {games} means these games, not the period's)",
+};
+
+/** What each blind spot means, in plain words, for the prompt. */
+export const BLIND_SPOT_MEANING: Record<BlindSpotId, string> = {
+  "answer-check": "the opponent's punishing move was a check",
+  "answer-knight-check": "the punishing move was a knight check",
+  "answer-fork": "the punishing move looked like a fork: one piece attacking two",
+  "answer-discovered": "the punishing move looked like a discovered attack: a piece stepped aside and uncovered an attack behind it",
+  "moved-piece-lost": "the piece the player had just moved was the one lost",
+  "moved-onto-attacked": "the player moved that piece onto a square the opponent already attacked",
+  "moved-after-capture": "the move came right after a capture",
+  "left-after-attack": "the opponent had just attacked the piece that was lost, and the player left it there",
+  undefended: "the piece lost had no defender",
+  "lost-knight": "the piece lost was a knight",
+  "lost-bishop": "the piece lost was a bishop",
+  "lost-rook": "the piece lost was a rook",
+  "lost-queen": "the piece lost was the queen",
+  "best-check": "the winning move the player missed was a check",
+  "best-knight": "the winning move missed was a knight check",
+  "best-capture": "the winning move missed was a capture",
+  "best-quiet": "the winning move missed was a quiet move: no check and no capture",
+  "takes-last-moved": "the winning move missed took the piece the opponent had just moved",
+  "best-fork": "the winning move missed looked like a fork",
+  "best-discovered": "the winning move missed looked like a discovered attack",
+  "moves-1-10": "it happened in moves 1 to 10",
+  "moves-11-20": "it happened in moves 11 to 20",
+  "moves-21-30": "it happened in moves 21 to 30",
+  "moves-31-plus": "it happened from move 31 on",
+};
+
+const meaningOf = (id: string) => (BLIND_SPOT_MEANING as Record<string, string>)[id] ?? id;
+
+/** A worked example of a good answer. It passes `parseWording` for the input `EXAMPLE_INPUT` describes. */
 const EXAMPLE = {
   summary:
-    "Over {games} games you made {mistakeRate} mistakes per hundred moves. The habits below did most of the damage, and they are very fixable.",
+    "Over {games} games you made {mistakesPerGame} mistakes a game. The habits below did most of the damage, and they are very fixable.",
   focus: [
     {
-      patternId: "hung-piece",
-      title: "Pieces left out in the open",
-      why: "In {gamesAffected} of your {games} games a piece was simply left to be taken, and this one keeps coming back. The knight on f6 in the first example had nobody looking after it.",
+      patternId: "allowed-tactic",
+      title: "Checks you did not see coming",
+      why: "In {gamesAffected} of your {games} games a move of yours let the other side in, and this one keeps coming back. In the first example Qd2 walked into Ne4+, a knight check that also hit the queen.",
       drill:
-        "Before you let go of a piece, ask one question: after this move, what can be taken? A short set of hanging-piece puzzles each day, until the check runs on its own.",
+        "Before you let go of a piece, play the opponent for a moment: what are their checks, captures and attacks now? A short set of defensive puzzles each day, where you spot the threat first.",
+      steps: [
+        {
+          blindSpot: "answer-check",
+          text: "Before every move, list each check your opponent will have after it, knight checks first, and make sure none of them also hits one of your pieces.",
+        },
+        {
+          blindSpot: "moved-piece-lost",
+          text: "Before you let go of a piece, look at the square it lands on and count who attacks it and who defends it once it is there.",
+        },
+      ],
     },
     {
       patternId: "missed-tactic",
       title: "Forks that went unplayed",
-      why: "You had a winning tactic and played something quieter in {gamesAffected} of your {games} games. In the second example Nd5 forked queen and rook; the move played let both escape.",
+      why: "You had a winning tactic and played something quieter in {gamesAffected} of your {games} games. In the second example Ne4+ was a knight check that won the queen; h6 let it go.",
       drill:
         "Look at every check, capture and threat before choosing a move, even when the position feels calm. Solve 10 fork puzzles a day, each one two moves deep.",
+      steps: [
+        {
+          blindSpot: "best-check",
+          text: "On every move, look at each check you can give before anything else, even the ones that look silly, and follow each one a move deeper.",
+        },
+      ],
     },
   ],
 };
+
+/** The input the worked example answers, shortened. */
+const EXAMPLE_INPUT = [
+  "- allowed-tactic, blind spots answer-check then moved-piece-lost. Example: played Qd2 (your queen d1-d2); punishing line Ne4+ (their knight f6-e4, check) Ke1 Nxd2 (takes your queen) Kxd2; hits your king f2 and your queen d2; better Re1, which covers e4.",
+  "- missed-tactic, blind spot best-check. Example: played h6 (your pawn h7-h6); better Ne4+ (your knight f6-e4, check) Ke1 Nxd2 (takes their queen) Kxd2, which wins their queen for your knight.",
+].join("\n");
 
 function bandLines(): string {
   return RATING_BANDS.map((b, i) => {
@@ -106,7 +182,8 @@ const SYSTEM = [
   "# What you decide and what you do not",
   "- The focus items, their order and their reasons are fixed. Do not add, drop, merge, reorder or rename them, and do not suggest that a different pattern matters more.",
   "- Each focus item comes with why code chose it: kind \"new\" (chosen for the first time), \"kept\" (still on the list from earlier reports), \"rose\" (it climbed into the top picks), \"returned\" (worked on before, now back). Score, recentCost and severity are win-percentage points; chronicity is how steadily it came back. Use these to choose what to stress, never to quote.",
-  "- Example positions are given as FEN with the move played, the engine's best move and a short fact. You may refer to squares, pieces and moves from them (\"the knight on f6\", \"Nd5 was a fork\"). Do not invent positions, moves or facts that are not given.",
+  "- Each focus item comes with up to two examples from the player's games, each with its story, computed by the engine: the move played, the punishing line (the opponent's best answer, move by move), the pieces it hit, the piece lost, the better line and why it was better, plus a short fact. An example without a story is given as a FEN position instead, with the move played and the engine's best move. Do not invent positions, moves or facts that are not given.",
+  "- The page shows each example's moves as sentences and boards of its own, so do not retell the lines; naming one move to make a point is plenty.",
   "- Earlier focus items may come with a verdict: \"improved\", \"flat\" (no clear change), \"worse\" or \"insufficient-data\" (not enough games yet). Mention an improvement warmly in the summary. Do not call \"flat\" or \"insufficient-data\" a failure.",
   "- Directly under your text, the program prints for each focus item a line with how many recent weeks it came back in (only when at least three weeks were counted), and a line with its current rate, its starting rate and its target. Do not restate them: the why says what happened and why it matters, and the drill says what to do.",
   "- Read gamesAffected in an item's token values before writing its why. When it is 1, write the singular (\"in a single game\"); when it equals games, say \"in each of your {games} games\".",
@@ -116,6 +193,24 @@ const SYSTEM = [
   "# Patterns",
   "Each focus item has one of these pattern ids:",
   ...PATTERN_IDS.map((id) => `- ${id}: ${GLOSSARY[id]}`),
+  "",
+  "# Moves and squares",
+  "In a focus item's title, why, drill and steps you may name the moves of that item's own examples: the move played, the moves of the punishing line, the moves of the better line, and moves named in an example's fact. You may name the squares of those moves and of the pieces in the stories (\"the queen on d2\"), and for an example given as a FEN, the squares of its pieces. Name no other move or square: no move of your own, no line you worked out, nothing from another item's examples. Write moves exactly as given (\"Ne4+\", \"Nxd2\").",
+  "The summary is about the whole period: it names no move and no square.",
+  "",
+  "# Blind spots and steps",
+  "Some focus items come with blind spots: something many of the pattern's occurrences had in common, much more often than among the player's mistakes overall. Each blind spot gives:",
+  "- id and meaning: what the occurrences had in common;",
+  "- tokens: its numbers, written only as step tokens;",
+  "- overall: how common it is among all the player's mistakes in the same games, this pattern's included, so you can judge how unusual it is; never quote it;",
+  "- refinement (sometimes): a narrower property that holds for many of them; mention it in words if it helps;",
+  "- heuristic (sometimes): true when it was read from the shape of the position; then say \"looked like a fork\", not \"was a fork\".",
+  "Examples list the blind spots they show as traits.",
+  "For each blind spot write exactly one step, in the order the blind spots are given:",
+  "- blindSpot: exactly its id;",
+  "- text: at most 200 characters, one thing to do at the board during a game that would have caught this blind spot. A good step is specific (what to look at, and when), checkable (the player can tell afterwards whether they did it) and tied to its blind spot, not to the pattern in general. Study routines and puzzle sets belong in the drill, not in a step.",
+  "Good step for \"the opponent's punishing move was a check\": \"Before every move, list each check your opponent will have after it, and make sure none of them also hits one of your pieces.\" Bad steps: \"Be more careful.\", \"Do more puzzles.\", \"Remember the example.\"",
+  "An item with no blind spots gets \"steps\": []. Never write a step for a blind spot that is not given.",
   "",
   "# Rating bands",
   "The player's band decides how simple the advice must be and which patterns may be focus items:",
@@ -128,6 +223,9 @@ const SYSTEM = [
   ...WORDING_FOCUS_TOKENS.map((t) => `- {${t}}: ${FOCUS_TOKEN_MEANING[t]}`),
   "Tokens allowed in the summary:",
   ...SUMMARY_TOKENS.map((t) => `- {${t}}: ${SUMMARY_TOKEN_MEANING[t]}`),
+  "Tokens allowed in a step, filled from its blind spot:",
+  ...STEP_TOKENS.map((t) => `- {${t}}: ${STEP_TOKEN_MEANING[t]}`),
+  "A step follows the same number rules as a drill, and most good steps need no number at all.",
   "Rules:",
   "- Use only the tokens listed for that field, spelled exactly, in single braces. No other braces anywhere.",
   "- Good: \"in {gamesAffected} of your {games} games\", \"you hung a piece {occurrences} times\".",
@@ -142,10 +240,13 @@ const SYSTEM = [
   "  - patternId: exactly the id given;",
   "  - title: a short headline, at most 60 characters;",
   "  - why: why this matters for this player, at most 400 characters;",
-  "  - drill: one concrete drill sized to the band, at most 400 characters.",
+  "  - drill: one concrete drill sized to the band, at most 400 characters;",
+  "  - steps: one step per blind spot of the item, in the order given (an empty array when it has none).",
   "Sometimes only some focus items are asked for, because the others already have their text; word only those, and still write the summary for the whole report.",
   "",
-  "Example of a good answer for a club player whose focus items are hung-piece then missed-tactic. Its squares, moves and examples are illustrative only: never reuse them; refer only to the positions you are given.",
+  "Example of a good answer for a club player whose focus items, shortened, were:",
+  EXAMPLE_INPUT,
+  "Its squares, moves and examples are illustrative only: never reuse them; refer only to the positions you are given.",
   "```json",
   JSON.stringify(EXAMPLE, null, 2),
   "```",
@@ -158,6 +259,92 @@ function wordingTokenValues(f: ReportDraft["focus"][number], draft: ReportDraft)
   const all = focusTokenValues(f, draft);
   return Object.fromEntries(WORDING_FOCUS_TOKENS.map((t) => [t, all[t]]));
 }
+
+/** "Ne4+ (their knight f6-e4, takes your queen, check)", from the player's side. */
+function moveWords(m: MoveDetail, player: MoveDetail["color"]): string {
+  const own = m.color === player ? "your" : "their";
+  const other = m.color === player ? "their" : "your";
+  const parts = [
+    m.castle ? `${own} king castles ${m.castle === "king" ? "short" : "long"}` : `${own} ${m.piece} ${m.from}-${m.to}`,
+  ];
+  if (m.captured) parts.push(`takes ${other} ${m.captured}${m.enPassant ? " en passant" : ""}`);
+  if (m.promotion) parts.push(`promotes to a ${m.promotion}`);
+  if (m.mate) parts.push("mate");
+  else if (m.check) parts.push("check");
+  return `${m.san} (${parts.join(", ")})`;
+}
+
+function pieceWords(p: StoryPiece, player: MoveDetail["color"]): string {
+  return `${p.color === player ? "your" : "their"} ${p.piece} ${p.square}`;
+}
+
+/** Why the better move was better, in words, with the rule's kind. */
+function reasonWords(r: BetterReason): { kind: BetterReason["kind"]; says: string } {
+  switch (r.kind) {
+    case "mates":
+      return { kind: r.kind, says: r.mateIn ? `it mates in ${r.mateIn}` : "it mates" };
+    case "wins":
+      return { kind: r.kind, says: `it wins their ${r.piece ?? "material"}${r.gave ? ` for your ${r.gave}` : ""}` };
+    case "covers-square":
+      return { kind: r.kind, says: `it covers ${r.square ?? "the key square"}, so the punishing move no longer works there` };
+    case "stops-key-move":
+      return { kind: r.kind, says: "it makes the punishing move impossible" };
+    case "holds":
+      return { kind: r.kind, says: "it keeps the position without losing anything" };
+  }
+}
+
+/** An example's story, compactly, in words and notation. */
+function storyWords(st: ExampleStory): Record<string, unknown> {
+  const me = st.played.color;
+  const line = (ms: readonly MoveDetail[]) => ms.map((m) => moveWords(m, me)).join(", ");
+  return {
+    played: moveWords(st.played, me),
+    ...(st.punish.length > 0 ? { punish: line(st.punish), opponentFoundIt: st.replyFound } : {}),
+    ...(st.targets.length > 0 ? { hits: st.targets.map((p) => pieceWords(p, me)).join(", ") } : {}),
+    ...(st.rear ? { behind: pieceWords(st.rear, me) } : {}),
+    ...(st.lost ? { lost: pieceWords(st.lost, me) } : {}),
+    ...(st.better.length > 0 ? { better: line(st.better) } : {}),
+    ...(st.betterReason ? { betterReason: reasonWords(st.betterReason) } : {}),
+  };
+}
+
+/** One example for the prompt: its story when it has one, otherwise its position. */
+function exampleData(e: FocusExample): Record<string, unknown> {
+  return {
+    ...(e.story ? storyWords(e.story) : { fen: e.fen, played: e.played, ...(e.best ? { best: e.best } : {}) }),
+    ...(e.evidence ? { fact: e.evidence } : {}),
+    ...(e.motif ? { motif: e.motif } : {}),
+    ...(e.traits && e.traits.length > 0 ? { traits: e.traits } : {}),
+    winPctLost: round(e.winPctLoss, 1),
+  };
+}
+
+/**
+ * How common a blind spot is among all the player's countable mistakes in the same games, the
+ * pattern's own occurrences included: `baselineCount / baselineOf`, never a share of "other"
+ * mistakes. "rare elsewhere" only when every mistake with the property is one of this pattern's.
+ */
+function overallShare(b: BlindSpot): string {
+  if (b.baselineCount === b.count) return "rare elsewhere";
+  if (b.baselineOf <= 0 || b.baselineCount <= 0) return "none of the mistakes overall";
+  const n = Math.round(b.baselineOf / b.baselineCount);
+  return n <= 1 ? "nearly all of the mistakes overall" : `about 1 in ${n} of the mistakes overall`;
+}
+
+function blindSpotData(b: BlindSpot): Record<string, unknown> {
+  return {
+    id: b.id,
+    meaning: meaningOf(b.id),
+    ...(b.basis === "motif" ? { heuristic: true } : {}),
+    tokens: blindSpotTokenValues(b),
+    overall: overallShare(b),
+    ...(b.refinement ? { refinement: { id: b.refinement.id, meaning: meaningOf(b.refinement.id) } } : {}),
+  };
+}
+
+/** Every blind-spot id has a meaning; checked once so a new id cannot slip through without one. */
+for (const id of BLIND_SPOT_IDS) if (!BLIND_SPOT_MEANING[id]) throw new Error(`no meaning for blind spot ${id}`);
 
 /**
  * The system prefix (the same for every player) and the user part (this player's numbers).
@@ -187,14 +374,8 @@ export function buildPrompt(draft: ReportDraft, only?: string[]): { system: stri
       target: round(f.target),
       onListSince: f.since,
       tokens: wordingTokenValues(f, draft),
-      examples: f.examples.map((e) => ({
-        fen: e.fen,
-        played: e.played,
-        ...(e.best ? { best: e.best } : {}),
-        ...(e.evidence ? { fact: e.evidence } : {}),
-        ...(e.motif ? { motif: e.motif } : {}),
-        winPctLost: round(e.winPctLoss, 1),
-      })),
+      blindSpots: (f.blindSpots ?? []).map(blindSpotData),
+      examples: f.examples.map(exampleData),
     })),
     ...(others.length > 0 ? { alreadyWorded: others.map((f) => f.patternId) } : {}),
     earlierFocus: draft.progress.map((p) => ({

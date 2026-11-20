@@ -1,6 +1,13 @@
 import {
+  BLIND_SPOT_IDS,
+  BLIND_SPOTS,
+  type BlindSpot,
+  blindSpotTokenValues,
+  type ExampleStory,
   type FocusChoice,
+  type FocusExample,
   focusTokenValues,
+  type MoveDetail,
   PATTERN_IDS,
   type PatternStat,
   type PeriodStats,
@@ -11,8 +18,8 @@ import {
   summaryTokenValues,
 } from "@blunderstruck/contracts";
 import { describe, expect, it } from "vitest";
-import { templateWording } from "./templates";
-import { countSentences, parseWording, sentences } from "./validate";
+import { TEMPLATE_STEPS, templateWording } from "./templates";
+import { countSentences, exampleMoves, moveKey, namedMoves, parseWording, sentences } from "./validate";
 
 const SETTINGS = { analysisVersion: 1, patternsVersion: 1, engine: { name: "stockfish", depth: 12 } };
 
@@ -53,7 +60,18 @@ function choice(patternId: string, kind: FocusChoice["reason"]["kind"] = "new", 
       weeksCounted,
       weeks: [true, true, false, true, true, null],
     },
-    examples: [],
+    // An example from before stories: its moves and the squares of its position may be named.
+    examples: [
+      {
+        patternId,
+        gameId: `g-${patternId}`,
+        ply: 5,
+        winPctLoss: 30,
+        fen: "rnbqkb1r/pppppppp/5n2/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 2 2",
+        played: "Nf3",
+        best: "e4",
+      },
+    ],
   };
 }
 
@@ -99,6 +117,9 @@ function answer(over: { summary?: string; focus?: Partial<{ patternId: string; t
 function withWhy(why: string) {
   return answer({ focus: [{ why }, {}] });
 }
+
+/** An error from the move rule rather than the count rule. */
+const MOVE_ERROR = / names /;
 
 const errorsOf = (text: string, d: ReportDraft = TWO, only?: string[]) => {
   const r = parseWording(text, d, only);
@@ -389,7 +410,8 @@ describe("parseWording", () => {
     if (text.length <= 60) cases.push(["title", answer({ focus: [{ title: text }, {}] }), inRecord]);
     if (!/[{}]/.test(text)) cases.push(["summary", answer({ summary: text }), inRecord]);
     for (const [field, json, passes] of cases) {
-      const errors = errorsOf(json);
+      // The count rule alone: moves and squares are the move rule's business, tested below.
+      const errors = errorsOf(json).filter((e) => !MOVE_ERROR.test(e));
       expect(errors.length === 0, `${field}: ${errors.join("\n")}`).toBe(passes);
     }
   });
@@ -661,5 +683,328 @@ describe("templateWording", () => {
     expect(text).toContain("Fewer pieces left hanging than before");
     expect(text).toContain("Graduated, and well earned: thrown wins.");
     expect(parseWording(JSON.stringify(templateWording(better)), better).ok).toBe(true);
+  });
+});
+
+/*
+ * Fixture positions F1 to F3, with stories as the patterns package builds them.
+ * F1: r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2Q3R w - - 0 1, White plays Qd2 and allows Ne4+ forking king and queen.
+ * F2: r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3, White plays Nxe5 and loses the knight.
+ * F3: r4rk1/ppp2ppp/5n2/8/8/8/PPPQ1KPP/R6R b - - 1 1, Black plays h6 and misses Ne4+.
+ */
+function mv(san: string, uci: string, piece: MoveDetail["piece"], color: MoveDetail["color"], fenAfter: string, extra: Partial<MoveDetail> = {}): MoveDetail {
+  return {
+    san,
+    uci,
+    from: uci.slice(0, 2),
+    to: uci.slice(2, 4),
+    piece,
+    color,
+    check: /[+#]/.test(san),
+    mate: san.includes("#"),
+    fenAfter,
+    ...extra,
+  };
+}
+
+const F1_STORY: ExampleStory = {
+  played: mv("Qd2", "d1d2", "queen", "white", "r4rk1/ppp2ppp/5n2/8/8/8/PPPQ1KPP/R6R b - - 1 1"),
+  punish: [
+    mv("Ne4+", "f6e4", "knight", "black", "r4rk1/ppp2ppp/8/8/4n3/8/PPPQ1KPP/R6R w - - 2 2"),
+    mv("Ke1", "f2e1", "king", "white", "r4rk1/ppp2ppp/8/8/4n3/8/PPPQ2PP/R3K2R b - - 3 2"),
+    mv("Nxd2", "e4d2", "knight", "black", "r4rk1/ppp2ppp/8/8/8/8/PPPn2PP/R3K2R w - - 0 3", { captured: "queen" }),
+    mv("Kxd2", "e1d2", "king", "white", "r4rk1/ppp2ppp/8/8/8/8/PPPK2PP/R6R b - - 0 3", { captured: "knight" }),
+  ],
+  replyFound: true,
+  better: [mv("Re1", "h1e1", "rook", "white", "r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2QR3 b - - 1 1")],
+  targets: [
+    { square: "f2", piece: "king", color: "white" },
+    { square: "d2", piece: "queen", color: "white" },
+  ],
+  lost: { square: "d2", piece: "queen", color: "white" },
+  gain: -6,
+  betterReason: { kind: "covers-square", square: "e4" },
+  winPctBefore: 96,
+  winPctAfter: 28,
+  depth: 18,
+};
+
+const F2_STORY: ExampleStory = {
+  played: mv("Nxe5", "f3e5", "knight", "white", "r1bqkbnr/pppp1ppp/2n5/4N3/4P3/8/PPPP1PPP/RNBQKB1R b KQkq - 0 3", { captured: "pawn" }),
+  punish: [mv("Nxe5", "c6e5", "knight", "black", "r1bqkbnr/pppp1ppp/8/4n3/4P3/8/PPPP1PPP/RNBQKB1R w KQkq - 0 4", { captured: "knight" })],
+  replyFound: true,
+  better: [mv("Bb5", "f1b5", "bishop", "white", "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3")],
+  targets: [],
+  lost: { square: "e5", piece: "knight", color: "white" },
+  gain: -2,
+  betterReason: { kind: "holds" },
+  winPctBefore: 54,
+  winPctAfter: 8,
+  depth: 18,
+};
+
+const F3_STORY: ExampleStory = {
+  played: mv("h6", "h7h6", "pawn", "black", "r4rk1/ppp2pp1/5n1p/8/8/8/PPPQ1KPP/R6R w - - 0 2"),
+  punish: [],
+  replyFound: false,
+  better: [
+    mv("Ne4+", "f6e4", "knight", "black", "r4rk1/ppp2ppp/8/8/4n3/8/PPPQ1KPP/R6R w - - 2 2"),
+    mv("Ke1", "f2e1", "king", "white", "r4rk1/ppp2ppp/8/8/4n3/8/PPPQ2PP/R3K2R b - - 3 2"),
+    mv("Nxd2", "e4d2", "knight", "black", "r4rk1/ppp2ppp/8/8/8/8/PPPn2PP/R3K2R w - - 0 3", { captured: "queen" }),
+    mv("Kxd2", "e1d2", "king", "white", "r4rk1/ppp2ppp/8/8/8/8/PPPK2PP/R6R b - - 0 3", { captured: "knight" }),
+  ],
+  targets: [],
+  gain: 0,
+  betterGain: 6,
+  betterReason: { kind: "wins", piece: "queen", gave: "knight", gain: 6 },
+  winPctBefore: 30,
+  winPctAfter: 3,
+  depth: 18,
+};
+
+function storied(patternId: string, gameId: string, ply: number, story: ExampleStory, fen: string): FocusExample {
+  return { patternId, gameId, ply, winPctLoss: 60, fen, played: story.played.san, story };
+}
+
+function spot(id: string, over: Partial<BlindSpot> = {}): BlindSpot {
+  const basis = BLIND_SPOTS.find((b) => b.id === id)?.basis ?? "line";
+  return { id, basis, count: 23, games: 14, of: 62, baselineCount: 30, baselineOf: 240, examples: [], ...over };
+}
+
+/** allowed-tactic shown with F1 and F2, with two blind spots. */
+function allowedItem(spots = ["answer-check", "moved-piece-lost"]): FocusChoice {
+  return {
+    ...choice("allowed-tactic"),
+    blindSpots: spots.map((id) => spot(id)),
+    examples: [
+      storied("allowed-tactic", "g-f1", 21, F1_STORY, "r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2Q3R w - - 0 1"),
+      storied("allowed-tactic", "g-f2", 5, F2_STORY, "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"),
+    ],
+  };
+}
+
+/** missed-tactic shown with F3, one blind spot. */
+function missedItem(): FocusChoice {
+  return {
+    ...choice("missed-tactic"),
+    blindSpots: [spot("best-check")],
+    examples: [storied("missed-tactic", "g-f3", 22, F3_STORY, "r4rk1/ppp2ppp/5n2/8/8/8/PPPQ1KPP/R6R b - - 1 1")],
+  };
+}
+
+const STORIED = draft([allowedItem(), missedItem()]);
+
+const STEP_A = "Before every move, list each check your opponent will have after it.";
+const STEP_B = "Before you let go of a piece, count who attacks and who defends its new square.";
+const STEP_C = "On every move, look at each check you can give before anything else.";
+
+function storiedAnswer(over: {
+  summary?: string;
+  a?: Partial<{ title: string; why: string; drill: string; steps: unknown }>;
+  b?: Partial<{ title: string; why: string; drill: string; steps: unknown }>;
+} = {}): string {
+  return JSON.stringify({
+    summary: over.summary ?? "Over {games} games you made {mistakesPerGame} mistakes a game.",
+    focus: [
+      {
+        patternId: "allowed-tactic",
+        title: "Checks you did not see coming",
+        why: "In {gamesAffected} of your {games} games a move let them in. Qd2 walked into Ne4+, hitting the king on f2 and the queen on d2.",
+        drill: "Before each move, look for their checks, captures and attacks.",
+        steps: [
+          { blindSpot: "answer-check", text: STEP_A },
+          { blindSpot: "moved-piece-lost", text: STEP_B },
+        ],
+        ...over.a,
+      },
+      {
+        patternId: "missed-tactic",
+        title: "Forks that went unplayed",
+        why: "You missed a shot in {gamesAffected} of your {games} games. Ne4+ won the queen; h6 let it go.",
+        drill: "Solve 10 fork puzzles a day.",
+        steps: [{ blindSpot: "best-check", text: STEP_C }],
+        ...over.b,
+      },
+    ],
+  });
+}
+
+const storiedErrors = (text: string, d: ReportDraft = STORIED) => {
+  const r = parseWording(text, d);
+  return r.ok ? [] : r.errors;
+};
+
+describe("the move rule", () => {
+  it("accepts moves and squares from the item's example stories", () => {
+    expect(storiedErrors(storiedAnswer())).toEqual([]);
+    // Capture marks and disambiguation name the same move; check signs may be left off.
+    expect(storiedErrors(storiedAnswer({ a: { why: "Ne4 forked king and queen, then Nd2 took the queen." } }))).toEqual([]);
+    expect(storiedErrors(storiedAnswer({ a: { why: "Bb5 would have held; Nxe5 lost the knight on e5." } }))).toEqual([]);
+  });
+
+  it("rejects a move that is not in the item's examples, naming it and the moves shown", () => {
+    const errors = storiedErrors(storiedAnswer({ a: { why: "Nc3 would have kept everything safe." } }));
+    expect(errors).toEqual([
+      "focus[0] (allowed-tactic).why names Nc3: this move is not in the examples shown (the moves shown: Qd2, Ne4+, Ke1, Nxd2, Kxd2, Re1, Nxe5, Bb5). Name only those moves, or say it in words without a move.",
+    ]);
+  });
+
+  it("rejects a move from another item's examples", () => {
+    // h6 is F3's move, shown only for missed-tactic; as a bare pawn move it reads as a square.
+    expect(storiedErrors(storiedAnswer({ a: { drill: "Do not play h6 when a check is coming." } }))).toEqual([
+      expect.stringMatching(/^focus\[0\] \(allowed-tactic\)\.drill names the square h6, which is not on a move or piece/),
+    ]);
+    expect(storiedErrors(storiedAnswer({ b: { title: "Bb5 was never the answer" } }))).toEqual([
+      expect.stringMatching(/^focus\[1\] \(missed-tactic\)\.title names Bb5: this move is not in the examples shown \(the moves shown: h6, Ne4\+, Ke1, Nxd2, Kxd2\)/),
+    ]);
+  });
+
+  it("rejects squares outside the stories' moves and pieces", () => {
+    expect(storiedErrors(storiedAnswer({ a: { why: "The rook on a8 was watching." } }))).toEqual([
+      expect.stringMatching(/allowed-tactic\)\.why names the square a8/),
+    ]);
+    // e4 is a square of the punishing move and the better reason; f2 holds a piece hit.
+    expect(storiedErrors(storiedAnswer({ a: { why: "The knight landed on e4 with the king on f2." } }))).toEqual([]);
+  });
+
+  it("checks steps by the same move rule", () => {
+    const steps = [
+      { blindSpot: "answer-check", text: "Before every move, ask whether Nd5 is possible." },
+      { blindSpot: "moved-piece-lost", text: STEP_B },
+    ];
+    expect(storiedErrors(storiedAnswer({ a: { steps } }))).toEqual([
+      expect.stringMatching(/^focus\[0\] \(allowed-tactic\)\.steps\[0\] \(answer-check\) names Nd5: this move is not in the examples shown/),
+    ]);
+    const ok = [{ blindSpot: "answer-check", text: "Before every move, look for a knight check like Ne4+." }, steps[1]];
+    expect(storiedErrors(storiedAnswer({ a: { steps: ok } }))).toEqual([]);
+  });
+
+  it("lets the summary name no move or square", () => {
+    expect(storiedErrors(storiedAnswer({ summary: "Qd2 was the costliest move of the period." }))).toEqual([
+      "summary names Qd2; the summary names no move or square, so say it in words.",
+    ]);
+    expect(storiedErrors(storiedAnswer({ summary: "A lot went wrong on e4." }))).toHaveLength(1);
+  });
+
+  it("allows an example without a story its move played, best move, fact and position", () => {
+    const legacy: FocusExample = {
+      patternId: "hung-piece",
+      gameId: "g-old",
+      ply: 9,
+      winPctLoss: 40,
+      evidence: "allowed Bxf7+ Kxf7 (fork)",
+      fen: "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+      played: "Nf6",
+      best: "Bc5",
+    };
+    const m = exampleMoves([legacy]);
+    for (const san of ["Nf6", "Bc5", "Bxf7+", "Kxf7"]) expect(m.keys.has(moveKey(san))).toBe(true);
+    expect(m.squares.has("c4")).toBe(true); // the bishop on c4
+    expect(m.squares.has("d5")).toBe(false); // an empty square
+  });
+
+  it("finds moves and squares in running text, tokens and move numbers aside", () => {
+    expect(namedMoves("After 1.e4 e5 2.Nf3 Nc6, {games} games; O-O-O and exd5, e8=Q#, the f7-square.")).toEqual({
+      moves: ["Nf3", "Nc6", "O-O-O", "exd5", "e8=Q#"],
+      squares: ["e4", "e5", "f7"],
+    });
+    expect(moveKey("Nbxd2+")).toBe(moveKey("Nd2"));
+    expect(moveKey("0-0")).toBe("O-O");
+    expect(moveKey("exd5")).not.toBe(moveKey("d5"));
+  });
+});
+
+describe("habit steps", () => {
+  const withSteps = (steps: unknown) => storiedAnswer({ a: { steps } });
+  const a = { blindSpot: "answer-check", text: STEP_A };
+  const b = { blindSpot: "moved-piece-lost", text: STEP_B };
+
+  it("accepts one step per blind spot in order, with step tokens", () => {
+    const tokens = { blindSpot: "answer-check", text: "In {count} of {of} cases across {games} games the reply was a check: list their checks before every move." };
+    expect(storiedErrors(withSteps([tokens, b]))).toEqual([]);
+    const r = parseWording(withSteps([tokens, b]), STORIED);
+    expect(r.ok && renderText(r.value.focus[0]!.steps[0]!.text, blindSpotTokenValues(spot("answer-check")))).toBe(
+      "In 23 of 62 cases across 14 games the reply was a check: list their checks before every move.",
+    );
+  });
+
+  it("rejects steps in the wrong order, missing or extra", () => {
+    const order = /allowed-tactic\)\.steps must hold exactly one step per blind spot, in this order: \[answer-check, moved-piece-lost\]/;
+    expect(storiedErrors(withSteps([b, a]))).toEqual([expect.stringMatching(order)]);
+    expect(storiedErrors(withSteps([a]))).toEqual([expect.stringMatching(order)]);
+    expect(storiedErrors(withSteps([a, b, { blindSpot: "undefended", text: STEP_A }]))).toEqual([expect.stringMatching(order)]);
+    expect(storiedErrors(withSteps([]))).toEqual([expect.stringMatching(order)]);
+    expect(storiedErrors(JSON.stringify({ ...JSON.parse(storiedAnswer()), focus: JSON.parse(storiedAnswer()).focus.map((f: object) => ({ ...f, steps: undefined })) }))).toHaveLength(2);
+  });
+
+  it("rejects steps on an item with no blind spots, and accepts a missing steps field there", () => {
+    const d = draft([{ ...allowedItem([]) }, missedItem()]);
+    expect(storiedErrors(withSteps([a]), d)).toEqual([expect.stringMatching(/steps must be empty: this item has no blind spots/)]);
+    const answer = JSON.parse(withSteps([]));
+    delete answer.focus[0].steps;
+    expect(storiedErrors(JSON.stringify(answer), d)).toEqual([]);
+  });
+
+  it("rejects an over-long step, a foreign token, a copied count and a statistic", () => {
+    const long = { blindSpot: "answer-check", text: `${"Look at their checks. ".repeat(10)}` };
+    expect(storiedErrors(withSteps([long, b]))).toEqual([expect.stringMatching(/steps\[0\] \(answer-check\) is 220 characters; the limit is 200/)]);
+    for (const text of ["It happened in {gamesAffected} games.", "Keep it under {rate}.", "Check {mistakeRate}."]) {
+      expect(storiedErrors(withSteps([{ blindSpot: "answer-check", text }, b]))).toEqual([
+        expect.stringMatching(/steps\[0\] \(answer-check\) uses \{\w+\}.*allowed: \{count\}, \{of\}, \{games\}/),
+      ]);
+    }
+    // 23 is the blind spot's count, shown to the model; a count belongs in a token.
+    expect(storiedErrors(withSteps([{ blindSpot: "answer-check", text: "You allowed a check in 23 games; list them first." }, b]))).toEqual([
+      expect.stringMatching(/steps\[0\] \(answer-check\), the sentence .*Write this count with its token \(\{count\}, \{of\}, \{games\}\)/),
+    ]);
+    expect(storiedErrors(withSteps([{ blindSpot: "answer-check", text: "It was a check 37% of the time." }, b]))).toHaveLength(1);
+    // Practice numbers stay free, as in a drill.
+    expect(storiedErrors(withSteps([{ blindSpot: "answer-check", text: "Spend 10 seconds on their checks before every move." }, b]))).toEqual([]);
+  });
+
+  it("rejects steps that are not objects with blindSpot and text", () => {
+    expect(storiedErrors(withSteps("look"))).toEqual(["focus[0].steps must be an array"]);
+    expect(storiedErrors(withSteps([{ blindSpot: "answer-check", text: STEP_A, extra: 1 }, b]))).toEqual([
+      "focus[0].steps[0] has unexpected field extra",
+    ]);
+    expect(storiedErrors(withSteps([{ blindSpot: "answer-check", text: "" }, b]))).toEqual(["focus[0].steps[0].text must be a non-empty string"]);
+  });
+});
+
+describe("template steps", () => {
+  it("has a step for every blind-spot id that passes the check and renders", () => {
+    expect(Object.keys(TEMPLATE_STEPS).sort()).toEqual([...BLIND_SPOT_IDS].sort());
+    for (const id of BLIND_SPOT_IDS) {
+      for (const band of RATING_BANDS.map((b) => b.id)) {
+        const d = draft([{ ...allowedItem([id]) }], band);
+        const t = templateWording(d);
+        expect(t.focus[0]!.steps).toEqual([{ blindSpot: id, text: TEMPLATE_STEPS[id] }]);
+        const r = parseWording(JSON.stringify(t), d);
+        expect(r.ok ? [] : r.errors, id).toEqual([]);
+      }
+      const text = TEMPLATE_STEPS[id];
+      expect(text.length).toBeLessThanOrEqual(200);
+      expect(() => renderText(text, blindSpotTokenValues(spot(id)))).not.toThrow();
+    }
+  });
+
+  it("gives one step per blind spot in order, a plain step for an unknown id, and none without blind spots", () => {
+    const d = draft([allowedItem(["moved-piece-lost", "answer-check", "lost-queen"]), { ...missedItem(), blindSpots: [] }]);
+    const t = templateWording(d);
+    expect(t.focus[0]!.steps.map((s) => s.blindSpot)).toEqual(["moved-piece-lost", "answer-check", "lost-queen"]);
+    expect(t.focus[1]!.steps).toEqual([]);
+    const unknown = draft([{ ...allowedItem([]), blindSpots: [spot("from-a-later-version")] }]);
+    const u = templateWording(unknown);
+    expect(u.focus[0]!.steps[0]!.blindSpot).toBe("from-a-later-version");
+    expect(parseWording(JSON.stringify(u), unknown).ok).toBe(true);
+  });
+
+  it("words the two measured blind spots as board habits", () => {
+    expect(TEMPLATE_STEPS["answer-check"]).toBe(
+      "Before every move, list each check your opponent will have after it, and make sure every one of them has a safe answer.",
+    );
+    expect(TEMPLATE_STEPS["moved-piece-lost"]).toBe(
+      "Before you let go of a piece, look at the square it lands on and count who attacks it and who defends it once it is there.",
+    );
   });
 });

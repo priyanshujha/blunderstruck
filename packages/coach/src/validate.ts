@@ -1,14 +1,32 @@
-import { type ReportDraft, SUMMARY_TOKENS } from "@blunderstruck/contracts";
+import {
+  BLIND_SPOT_TOKENS,
+  type FocusExample,
+  type MoveDetail,
+  type ReportDraft,
+  SUMMARY_TOKENS,
+} from "@blunderstruck/contracts";
 
-/** The words of a report: a summary and, for each focus item, a title, why and drill (token templates). */
+/** One habit step as the wording gives it: the blind spot it is for and its text (a token template, `BLIND_SPOT_TOKENS`). */
+export interface StepText {
+  blindSpot: string;
+  text: string;
+}
+
+/**
+ * The words of a report: a summary and, for each focus item, a title, why and drill, and one
+ * step per blind spot (token templates).
+ */
 export interface WordingText {
   summary: string;
-  focus: { patternId: string; title: string; why: string; drill: string }[];
+  focus: { patternId: string; title: string; why: string; drill: string; steps: StepText[] }[];
 }
 
 export type WordingResult = { ok: true; value: WordingText } | { ok: false; errors: string[] };
 
-const LIMITS = { title: 60, why: 400, drill: 400, summary: 600 } as const;
+const LIMITS = { title: 60, why: 400, drill: 400, summary: 600, step: 200 } as const;
+
+/** Tokens a habit step may use, filled from its blind spot. */
+export const STEP_TOKENS = BLIND_SPOT_TOKENS;
 
 /**
  * Tokens a focus item's title, why and drill may use. The other focus tokens are left out
@@ -279,7 +297,10 @@ export function countSentences(text: string, ctx: CountContext): string[] {
   return sentences(text).filter((s) => statesCount(s, ctx));
 }
 
-/** The record values the model was shown for this draft: games, and each focus item's games affected and occurrences. */
+/**
+ * The record values the model was shown for this draft: games, each focus item's games
+ * affected and occurrences, and each blind spot's count, total and games.
+ */
 export function shownValues(draft: ReportDraft): Set<number> {
   const values = new Set<number>([draft.current.games]);
   for (const f of draft.focus) {
@@ -287,8 +308,151 @@ export function shownValues(draft: ReportDraft): Set<number> {
     values.add(stat?.games ?? draft.current.games);
     values.add(stat?.gamesAffected ?? 0);
     values.add(stat?.occurrences ?? 0);
+    for (const b of f.blindSpots ?? []) {
+      values.add(b.count);
+      values.add(b.of);
+      values.add(b.games);
+    }
   }
   return values;
+}
+
+/*
+ * The move rule. The model may name the moves and squares of the example stories it was shown
+ * for an item, and nothing else, so a move in the text is always one the page can show. The
+ * summary is about the whole period and names no move or square at all.
+ */
+
+/** A move in SAN in running text: piece moves, pawn captures, promotions and castling. A bare pawn move reads as a square. */
+const SAN_IN_TEXT =
+  /(?<![\p{L}\p{N}])(?:[O0]-[O0](?:-[O0])?|[KQRBN][a-h]?[1-8]?x?[a-h][1-8](?:=?[QRBN])?|[a-h]x[a-h][1-8](?:=?[QRBN])?|[a-h][18]=?[QRBN])[+#]?(?![\p{L}\p{N}])/gu;
+/** A square name in running text. */
+const SQUARE_IN_TEXT = /(?<![\p{L}\p{N}])[a-h][1-8](?![\p{L}\p{N}])/gu;
+const SAN_PARTS = /^([KQRBN])?([a-h])?([1-8])?(x)?([a-h][1-8])(?:=?([QRBN]))?$/;
+
+/**
+ * A move's identity for matching: castling by side; a piece move by piece and destination
+ * (so "Nd2", "Nxd2" and "Nbd2" all name the same knight move); a pawn move by its file when it
+ * captures, destination and promotion. Check, mate and annotation marks are ignored.
+ */
+export function moveKey(san: string): string {
+  const s = san.replace(/[+#!?]/g, "").replace(/0/g, "O");
+  if (s.startsWith("O-O")) return s.startsWith("O-O-O") ? "O-O-O" : "O-O";
+  const m = SAN_PARTS.exec(s);
+  if (!m) return s;
+  const [, piece, file, , x, dest, promo] = m;
+  if (piece) return `${piece}${dest}`;
+  return `${x && file ? `${file}x` : ""}${dest}${promo ?? ""}`;
+}
+
+/** The squares holding a piece in a FEN's placement field; none when the field does not read as one. */
+function occupiedSquares(fen: string): string[] {
+  const ranks = (fen.split(" ")[0] ?? "").split("/");
+  if (ranks.length !== 8) return [];
+  const out: string[] = [];
+  ranks.forEach((row, r) => {
+    let file = 0;
+    for (const ch of row) {
+      if (ch >= "1" && ch <= "8") file += Number(ch);
+      else {
+        if (file < 8) out.push(`${"abcdefgh"[file]}${8 - r}`);
+        file++;
+      }
+    }
+  });
+  return out;
+}
+
+/** The destination square of a move in SAN, when it has one. */
+function sanSquare(san: string): string | undefined {
+  return SAN_PARTS.exec(san.replace(/[+#!?]/g, ""))?.[5];
+}
+
+/** What an item's text may name: its example stories' moves (played, punishing line, better line) and their squares. */
+export interface ExampleMoves {
+  /** `moveKey` of every move. */
+  keys: ReadonlySet<string>;
+  /** The moves in SAN, in story order, for the repair hint. */
+  sans: readonly string[];
+  /** Squares of those moves and of the pieces the stories name. */
+  squares: ReadonlySet<string>;
+}
+
+/**
+ * The moves and squares of an item's examples. With a story: the move played, the punishing
+ * line and the better line, their from and to squares, and the pieces hit, behind or lost.
+ * An example without a story gives its move played and best move. Moves and squares named in
+ * an example's fact count too, since the model is shown it.
+ */
+export function exampleMoves(examples: readonly FocusExample[]): ExampleMoves {
+  const keys = new Set<string>();
+  const sans: string[] = [];
+  const squares = new Set<string>();
+  const addSan = (san: string) => {
+    keys.add(moveKey(san));
+    if (!sans.includes(san)) sans.push(san);
+    const sq = sanSquare(san);
+    if (sq) squares.add(sq);
+  };
+  const addMove = (m: MoveDetail) => {
+    addSan(m.san);
+    squares.add(m.from);
+    squares.add(m.to);
+  };
+  for (const e of examples) {
+    const st = e.story;
+    if (st) {
+      for (const m of [st.played, ...st.punish, ...st.better]) addMove(m);
+      for (const p of [...st.targets, st.rear, st.lost]) if (p) squares.add(p.square);
+      if (st.betterReason?.square) squares.add(st.betterReason.square);
+    } else {
+      // An example from before stories is shown with its position, so its pieces may be named.
+      addSan(e.played);
+      if (e.best) addSan(e.best);
+      for (const sq of occupiedSquares(e.fen)) squares.add(sq);
+    }
+    const fact = namedMoves(e.evidence ?? "");
+    for (const m of fact.moves) addSan(m);
+    for (const sq of fact.squares) squares.add(sq);
+  }
+  return { keys, sans, squares };
+}
+
+/** The moves and the squares (outside those moves) a text names, in order, tokens left out. */
+export function namedMoves(text: string): { moves: string[]; squares: string[] } {
+  const plain = text.replace(/\{[^{}]*\}/g, " ");
+  const moves = Array.from(plain.matchAll(SAN_IN_TEXT), (m) => m[0]);
+  const rest = plain.replace(SAN_IN_TEXT, " ");
+  const squares = Array.from(rest.matchAll(SQUARE_IN_TEXT), (m) => m[0]);
+  return { moves, squares };
+}
+
+/** Errors for moves and squares a field names: outside the item's examples, or any at all when `allowed` is null (the summary). */
+function checkMoves(where: string, text: string, allowed: ExampleMoves | null): string[] {
+  const errors: string[] = [];
+  const { moves, squares } = namedMoves(text);
+  const seen = new Set<string>();
+  const once = (k: string) => !seen.has(k) && (seen.add(k), true);
+  if (!allowed) {
+    for (const m of [...moves, ...squares]) {
+      if (once(m)) errors.push(`${where} names ${m}; the summary names no move or square, so say it in words.`);
+    }
+    return errors;
+  }
+  const shown = allowed.sans.length > 0 ? `the moves shown: ${allowed.sans.join(", ")}` : "this item's examples show no moves";
+  for (const m of moves) {
+    if (allowed.keys.has(moveKey(m)) || !once(m)) continue;
+    errors.push(
+      `${where} names ${m}: this move is not in the examples shown (${shown}). Name only those moves, or say it in words without a move.`,
+    );
+  }
+  for (const sq of squares) {
+    if (allowed.squares.has(sq) || !once(sq)) continue;
+    errors.push(
+      `${where} names the square ${sq}, which is not on a move or piece in this item's examples. Name only squares from the examples shown, or leave the square out.`,
+    );
+  }
+  return errors;
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -310,20 +474,38 @@ function readShape(json: unknown): { value?: WordingText; errors: string[] } {
     errors.push("focus must be an array");
     return { errors };
   }
+  // A missing steps array reads as none; the step check then says which steps are owed.
+  const steps = (v: unknown, at: string): StepText[] => {
+    if (v === undefined) return [];
+    if (!Array.isArray(v)) {
+      errors.push(`${at}.steps must be an array`);
+      return [];
+    }
+    return v.map((s: unknown, j) => {
+      const sat = `${at}.steps[${j}]`;
+      if (!isObject(s)) {
+        errors.push(`${sat} must be an object`);
+        return { blindSpot: "", text: "" };
+      }
+      for (const key of Object.keys(s)) if (key !== "blindSpot" && key !== "text") errors.push(`${sat} has unexpected field ${key}`);
+      return { blindSpot: str(s.blindSpot, `${sat}.blindSpot`), text: str(s.text, `${sat}.text`) };
+    });
+  };
   const focus = json.focus.map((f: unknown, i) => {
     const at = `focus[${i}]`;
     if (!isObject(f)) {
       errors.push(`${at} must be an object`);
-      return { patternId: "", title: "", why: "", drill: "" };
+      return { patternId: "", title: "", why: "", drill: "", steps: [] };
     }
     for (const key of Object.keys(f)) {
-      if (!["patternId", "title", "why", "drill"].includes(key)) errors.push(`${at} has unexpected field ${key}`);
+      if (!["patternId", "title", "why", "drill", "steps"].includes(key)) errors.push(`${at} has unexpected field ${key}`);
     }
     return {
       patternId: str(f.patternId, `${at}.patternId`),
       title: str(f.title, `${at}.title`),
       why: str(f.why, `${at}.why`),
       drill: str(f.drill, `${at}.drill`),
+      steps: steps(f.steps, at),
     };
   });
   return errors.length > 0 ? { errors } : { value: { summary, focus }, errors };
@@ -368,7 +550,8 @@ function checkField(where: string, text: string, max: number, allowed: readonly 
 
 /**
  * Parse and check the model's text against the schema and the draft: pattern ids, lengths,
- * allowed tokens and no counts written by the model. `only` limits the expected ids.
+ * allowed tokens, no counts written by the model, one step per blind spot in order, and moves
+ * and squares only from each item's examples (none in the summary). `only` limits the expected ids.
  */
 export function parseWording(text: string, draft: ReportDraft, only?: string[]): WordingResult {
   let json: unknown;
@@ -391,11 +574,45 @@ export function parseWording(text: string, draft: ReportDraft, only?: string[]):
   }
   const shown = shownValues(draft);
   errors.push(...checkField("summary", value.summary, LIMITS.summary, SUMMARY_TOKENS, { shown, record: true }));
+  errors.push(...checkMoves("summary", value.summary, null));
   value.focus.forEach((f, i) => {
     const at = `focus[${i}] (${f.patternId})`;
+    const item = draft.focus.find((c) => c.patternId === f.patternId);
+    const allowed = exampleMoves(item?.examples ?? []);
     for (const [field, text] of [["title", f.title], ["why", f.why], ["drill", f.drill]] as const) {
       errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], WORDING_FOCUS_TOKENS, { shown, record: field !== "drill" }));
+      errors.push(...checkMoves(`${at}.${field}`, text, allowed));
     }
+    if (item) errors.push(...checkSteps(at, f.steps, item.blindSpots ?? [], shown, allowed));
   });
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value };
+}
+
+/**
+ * Errors for an item's steps: exactly one per blind spot, in the item's blind-spot order; each
+ * within the step limit, with step tokens only, the drill's number rules and the move rule.
+ */
+function checkSteps(
+  at: string,
+  steps: readonly StepText[],
+  blindSpots: readonly { id: string }[],
+  shown: ReadonlySet<number>,
+  allowed: ExampleMoves,
+): string[] {
+  const errors: string[] = [];
+  const expected = blindSpots.map((b) => b.id);
+  const got = steps.map((s) => s.blindSpot);
+  if (got.length !== expected.length || got.some((id, i) => id !== expected[i])) {
+    errors.push(
+      expected.length === 0
+        ? `${at}.steps must be empty: this item has no blind spots; got [${got.join(", ")}]`
+        : `${at}.steps must hold exactly one step per blind spot, in this order: [${expected.join(", ")}]; got [${got.join(", ")}]. Write one step for each, in that order.`,
+    );
+  }
+  steps.forEach((s, j) => {
+    const where = `${at}.steps[${j}] (${s.blindSpot})`;
+    errors.push(...checkField(where, s.text, LIMITS.step, STEP_TOKENS, { shown, record: false }));
+    errors.push(...checkMoves(where, s.text, allowed));
+  });
+  return errors;
 }

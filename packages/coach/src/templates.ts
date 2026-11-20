@@ -1,5 +1,5 @@
-import type { FocusChoice, PatternId, RatingBand, ReportDraft } from "@blunderstruck/contracts";
-import type { WordingText } from "./validate";
+import type { BlindSpotId, FocusChoice, PatternId, RatingBand, ReportDraft } from "@blunderstruck/contracts";
+import type { StepText, WordingText } from "./validate";
 
 /** How deep a drill goes: plain words for the lower bands, real training for the upper ones. */
 type DrillLevel = "plain" | "club" | "training";
@@ -322,7 +322,71 @@ function summary(draft: ReportDraft): string {
   return parts.join(" ");
 }
 
-/** Plain wording for a report, with no model: one title, why and drill per pattern, sized by band. */
+/**
+ * One step per blind spot: something to do at the board that would have caught it. Token
+ * templates (`BLIND_SPOT_TOKENS`), one level for every band, and checked by the same rules as
+ * model steps.
+ */
+export const TEMPLATE_STEPS: Record<BlindSpotId, string> = {
+  "answer-check":
+    "Before every move, list each check your opponent will have after it, and make sure every one of them has a safe answer.",
+  "answer-knight-check":
+    "Before every move, find each square their knights could check you from, and see what else a knight there would attack.",
+  "answer-fork":
+    "Before every move, look for a square where one enemy piece could attack two of yours at once, and guard it or move a target.",
+  "answer-discovered":
+    "Before every move, look at each enemy piece standing in front of their own rook, bishop or queen: if it steps aside, what is attacked?",
+  "moved-piece-lost":
+    "Before you let go of a piece, look at the square it lands on and count who attacks it and who defends it once it is there.",
+  "moved-onto-attacked":
+    "Before you put a piece on a square, check whether an enemy piece already attacks that square, and whether yours is defended enough there.",
+  "moved-after-capture":
+    "After every capture, stop and look again before your next move: which of your pieces are loose now, and what can be taken?",
+  "left-after-attack":
+    "When the opponent attacks one of your pieces, answer that first: move it, defend it or trade it before you play your own idea.",
+  undefended:
+    "Before every move, find each of your pieces that nothing defends, and make sure none of them can be attacked and won next move.",
+  "lost-knight":
+    "Before every move, check your knights: can a pawn or a piece attack one, and does it have a defender or a safe square to go to?",
+  "lost-bishop":
+    "Before every move, check your bishops: can a pawn or a piece attack one, and does it have a defender or a safe square to go to?",
+  "lost-rook":
+    "Before every move, check both rooks: can a knight or bishop attack one next move, and is it defended if they do?",
+  "lost-queen":
+    "Before every move, check your queen first: can any smaller piece attack it next move, and does it still have a safe square if so?",
+  "best-check":
+    "On every move, look at each check you can give before anything else, even the ones that look silly, and follow each one a move deeper.",
+  "best-knight":
+    "On every move, look at each check your knights can give, and at what else the knight would attack from that square.",
+  "best-capture":
+    "On every move, list each capture you have and count attackers and defenders before deciding it is not safe.",
+  "best-quiet":
+    "When you have no good check or capture, ask what your strongest threat is: a quiet move can set up a win they cannot stop.",
+  "takes-last-moved":
+    "After every move your opponent makes, look at the piece that just moved: is it loose on its new square, and can you take it?",
+  "best-fork":
+    "On every move, look for a square where one of your pieces would attack two of theirs at once, above all a king, queen or rook.",
+  "best-discovered":
+    "On every move, look at your pieces standing in front of your own rook, bishop or queen: moving one away with a threat can win material.",
+  "moves-1-10":
+    "In the first ten moves, ask before each move what your opponent's last move threatens, and develop without leaving a piece unguarded.",
+  "moves-11-20":
+    "Once the pieces first meet, around moves eleven to twenty, check every capture and threat for both sides before each move.",
+  "moves-21-30":
+    "Between moves twenty-one and thirty, slow down whenever the position changes: after each trade, look again at which of your pieces are loose.",
+  "moves-31-plus":
+    "Late in the game, keep the blunder check going even when tired or short of time: before each move, look at their checks and captures.",
+};
+
+/** For a blind-spot id this version does not know. */
+const FALLBACK_STEP = "Before every move, look at your opponent's checks, captures and threats after it, and make sure each one has an answer.";
+
+/** The template step for one blind spot. */
+export function templateStep(blindSpot: string): StepText {
+  return { blindSpot, text: (TEMPLATE_STEPS as Record<string, string>)[blindSpot] ?? FALLBACK_STEP };
+}
+
+/** Plain wording for a report, with no model: one title, why and drill per pattern, sized by band, and one step per blind spot. */
 export function templateWording(draft: ReportDraft): WordingText {
   const level = LEVEL[draft.band];
   return {
@@ -330,7 +394,8 @@ export function templateWording(draft: ReportDraft): WordingText {
     focus: draft.focus.map((item) => {
       const t = textFor(item.patternId);
       const drill = periodCounts(item, draft).affected === 0 ? t.quietDrill[level] : t.drill[level];
-      return { patternId: item.patternId, title: t.title, why: why(item, draft), drill };
+      const steps = (item.blindSpots ?? []).map((b) => templateStep(b.id));
+      return { patternId: item.patternId, title: t.title, why: why(item, draft), drill, steps };
     }),
   };
 }

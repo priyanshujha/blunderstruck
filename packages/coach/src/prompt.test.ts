@@ -1,6 +1,10 @@
 import {
   BAND_RUBRIC,
+  BLIND_SPOT_IDS,
+  type BlindSpot,
+  type ExampleStory,
   type FocusChoice,
+  type MoveDetail,
   PATTERN_IDS,
   type PatternStat,
   type PeriodStats,
@@ -9,8 +13,8 @@ import {
   SUMMARY_TOKENS,
 } from "@blunderstruck/contracts";
 import { describe, expect, it } from "vitest";
-import { buildPrompt, WORDING_SCHEMA } from "./prompt";
-import { PRINTED_TOKENS, parseWording, WORDING_FOCUS_TOKENS } from "./validate";
+import { BLIND_SPOT_MEANING, buildPrompt, WORDING_SCHEMA } from "./prompt";
+import { PRINTED_TOKENS, parseWording, STEP_TOKENS, WORDING_FOCUS_TOKENS } from "./validate";
 
 const SETTINGS = { analysisVersion: 1, patternsVersion: 1, engine: { name: "stockfish", depth: 12 } };
 
@@ -96,6 +100,70 @@ function draft(opts: { username: string; band?: RatingBand; focus: string[]; n?:
   };
 }
 
+function mv(san: string, uci: string, piece: MoveDetail["piece"], color: MoveDetail["color"], extra: Partial<MoveDetail> = {}): MoveDetail {
+  return { san, uci, from: uci.slice(0, 2), to: uci.slice(2, 4), piece, color, check: san.includes("+"), mate: false, fenAfter: `after-${uci}`, ...extra };
+}
+
+/** Fixture F1: r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2Q3R w - - 0 1, Qd2 allows Ne4+ forking king and queen. */
+const F1_STORY: ExampleStory = {
+  played: mv("Qd2", "d1d2", "queen", "white"),
+  punish: [
+    mv("Ne4+", "f6e4", "knight", "black"),
+    mv("Ke1", "f2e1", "king", "white"),
+    mv("Nxd2", "e4d2", "knight", "black", { captured: "queen" }),
+    mv("Kxd2", "e1d2", "king", "white", { captured: "knight" }),
+  ],
+  replyFound: true,
+  better: [mv("Re1", "h1e1", "rook", "white")],
+  targets: [
+    { square: "f2", piece: "king", color: "white" },
+    { square: "d2", piece: "queen", color: "white" },
+  ],
+  lost: { square: "d2", piece: "queen", color: "white" },
+  gain: -6,
+  betterReason: { kind: "covers-square", square: "e4" },
+  winPctBefore: 96,
+  winPctAfter: 28,
+  depth: 18,
+};
+
+/** Fixture F3: r4rk1/ppp2ppp/5n2/8/8/8/PPPQ1KPP/R6R b - - 1 1, h6 misses Ne4+. */
+const F3_STORY: ExampleStory = {
+  played: mv("h6", "h7h6", "pawn", "black"),
+  punish: [],
+  replyFound: false,
+  better: [
+    mv("Ne4+", "f6e4", "knight", "black"),
+    mv("Ke1", "f2e1", "king", "white"),
+    mv("Nxd2", "e4d2", "knight", "black", { captured: "queen" }),
+    mv("Kxd2", "e1d2", "king", "white", { captured: "knight" }),
+  ],
+  targets: [],
+  gain: 0,
+  betterGain: 6,
+  betterReason: { kind: "wins", piece: "queen", gave: "knight", gain: 6 },
+  winPctBefore: 30,
+  winPctAfter: 3,
+  depth: 18,
+};
+
+function spot(id: string, over: Partial<BlindSpot> = {}): BlindSpot {
+  return { id, basis: "line", count: 23, games: 14, of: 62, baselineCount: 53, baselineOf: 302, examples: [], ...over };
+}
+
+/** The worked example's input: allowed-tactic shown with F1, missed-tactic with F3. */
+function storiedDraft(username: string, spots: { a: BlindSpot[]; b: BlindSpot[] }): ReportDraft {
+  const d = draft({ username, focus: ["allowed-tactic", "missed-tactic"] });
+  const [a, b] = d.focus as [FocusChoice, FocusChoice];
+  a.blindSpots = spots.a;
+  a.examples = [{ ...a.examples[0]!, fen: "r4rk1/ppp2ppp/5n2/8/8/8/PPP2KPP/R2Q3R w - - 0 1", played: "Qd2", story: F1_STORY, traits: ["answer-check", "moved-piece-lost"] }];
+  b.blindSpots = spots.b;
+  b.examples = [{ ...b.examples[0]!, fen: "r4rk1/ppp2ppp/5n2/8/8/8/PPPQ1KPP/R6R b - - 1 1", played: "h6", story: F3_STORY }];
+  return d;
+}
+
+const WORKED = { a: [spot("answer-check"), spot("moved-piece-lost")], b: [spot("best-check")] };
+
 describe("buildPrompt", () => {
   it("sends a byte-identical system prefix for two different players", () => {
     const a = buildPrompt(draft({ username: "alpha-invented", band: "novice", focus: ["hung-piece"], n: 3 }));
@@ -128,8 +196,9 @@ describe("buildPrompt", () => {
     const { system } = buildPrompt(draft({ username: "x", focus: [] }));
     const example = /```json\n([\s\S]*?)\n```/.exec(system)?.[1];
     expect(example).toBeDefined();
-    const result = parseWording(example!, draft({ username: "x", focus: ["hung-piece", "missed-tactic"] }));
-    expect(result).toMatchObject({ ok: true });
+    const result = parseWording(example!, storiedDraft("x", WORKED));
+    expect(result.ok ? [] : result.errors).toEqual([]);
+    expect(JSON.parse(example!).focus.map((f: { steps: unknown[] }) => f.steps.length)).toEqual([2, 1]);
     const parsed = JSON.parse(example!) as { summary: string };
     expect(parsed.summary).not.toMatch(/\b(one|two|both|pair|couple)\b/i);
     expect(system).toMatch(/illustrative only: never reuse them/);
@@ -183,5 +252,87 @@ describe("buildPrompt", () => {
 
   it("uses no schema keywords the providers reject", () => {
     expect(JSON.stringify(WORDING_SCHEMA)).not.toMatch(/maxItems|minimum|maxLength|oneOf/);
+  });
+
+  it("sends a byte-identical system prefix for two players with different blind spots", () => {
+    const a = buildPrompt(storiedDraft("alpha-invented", WORKED));
+    const b = buildPrompt(
+      storiedDraft("beta-invented", { a: [spot("lost-queen", { count: 5, refinement: { id: "answer-knight-check", count: 3 } })], b: [] }),
+      ["missed-tactic"],
+    );
+    expect(a.system).toBe(b.system);
+    expect(a.user).not.toBe(b.user);
+    expect(a.system).not.toMatch(/alpha-invented|beta-invented/);
+  });
+
+  it("explains blind spots, good steps, the move rule and the step tokens in the prefix", () => {
+    const { system } = buildPrompt(storiedDraft("x", WORKED));
+    expect(system).toContain("# Blind spots and steps");
+    expect(system).toContain("A good step is specific (what to look at, and when), checkable");
+    expect(system).toContain("# Moves and squares");
+    expect(system).toContain("Name no other move or square");
+    expect(system).toContain("The summary is about the whole period: it names no move and no square.");
+    for (const t of STEP_TOKENS) expect(system).toContain(`- {${t}}: `);
+    expect(system).toContain('An item with no blind spots gets "steps": [].');
+  });
+
+  it("gives every blind-spot id a plain meaning", () => {
+    for (const id of BLIND_SPOT_IDS) expect(BLIND_SPOT_MEANING[id]).toMatch(/\w/);
+  });
+
+  it("puts each item's blind spots and example stories in the user part", () => {
+    const d = storiedDraft("alpha-invented", {
+      a: [spot("answer-check", { refinement: { id: "answer-knight-check", count: 9 } }), spot("answer-fork", { basis: "motif", count: 0, baselineCount: 0 })],
+      b: [spot("best-check")],
+    });
+    const { user } = buildPrompt(d);
+    const data = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(user)![1]!);
+    const [a, b] = data.focus;
+    expect(a.blindSpots[0]).toEqual({
+      id: "answer-check",
+      meaning: "the opponent's punishing move was a check",
+      tokens: { count: "23", of: "62", games: "14" },
+      // 53 of 302 mistakes overall: about one in six.
+      overall: "about 1 in 6 of the mistakes overall",
+      refinement: { id: "answer-knight-check", meaning: "the punishing move was a knight check" },
+    });
+    expect(a.blindSpots[1]).toMatchObject({ id: "answer-fork", heuristic: true, overall: "rare elsewhere" });
+    // The plain share, whatever the pattern's own count: no subtraction.
+    const odd = buildPrompt(storiedDraft("x", { a: [spot("lost-queen", { count: 9, baselineCount: 4, baselineOf: 40 })], b: [] })).user;
+    expect(odd).toContain('"overall": "about 1 in 10 of the mistakes overall"');
+    expect(user).not.toContain("other mistakes");
+    expect(buildPrompt(d).system).not.toContain("other mistakes");
+    expect(a.examples[0]).toEqual({
+      played: "Qd2 (your queen d1-d2)",
+      punish: "Ne4+ (their knight f6-e4, check), Ke1 (your king f2-e1), Nxd2 (their knight e4-d2, takes your queen), Kxd2 (your king e1-d2, takes their knight)",
+      opponentFoundIt: true,
+      hits: "your king f2, your queen d2",
+      lost: "your queen d2",
+      better: "Re1 (your rook h1-e1)",
+      betterReason: { kind: "covers-square", says: "it covers e4, so the punishing move no longer works there" },
+      fact: "allowed-tactic evidence text",
+      traits: ["answer-check", "moved-piece-lost"],
+      winPctLost: 41.3,
+    });
+    expect(b.examples[0]).toMatchObject({
+      played: "h6 (your pawn h7-h6)",
+      better: "Ne4+ (your knight f6-e4, check), Ke1 (their king f2-e1), Nxd2 (your knight e4-d2, takes their queen), Kxd2 (their king e1-d2, takes your knight)",
+      betterReason: { kind: "wins", says: "it wins their queen for your knight" },
+    });
+    // A storied example is told in moves, not as a position.
+    expect(user).not.toContain("r4rk1/");
+    expect(user).not.toMatch(/"(baselineCount|baselineOf|basis|examples)": \d/);
+  });
+
+  it("keeps a position for an example without a story", () => {
+    const { user } = buildPrompt(draft({ username: "x", focus: ["hung-piece"] }));
+    expect(user).toContain('"fen": "fen-for-hung-piece w - - 0 11"');
+    expect(user).toContain('"blindSpots": []');
+  });
+
+  it("asks for steps in the schema", () => {
+    const items = (WORDING_SCHEMA as { properties: { focus: { items: { required: string[]; properties: Record<string, unknown> } } } }).properties.focus.items;
+    expect(items.required).toContain("steps");
+    expect(items.properties.steps).toMatchObject({ type: "array", items: { required: ["blindSpot", "text"] } });
   });
 });

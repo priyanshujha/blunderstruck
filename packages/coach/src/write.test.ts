@@ -1,5 +1,7 @@
 import {
+  type BlindSpot,
   type FocusChoice,
+  type FocusExample,
   PATTERN_IDS,
   type PatternStat,
   type PeriodStats,
@@ -10,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { HttpError } from "./http";
 import { buildPrompt, WORDING_SCHEMA } from "./prompt";
 import { type CoachProvider, type CompleteRequest, ProviderResponseError } from "./provider";
-import { templateWording } from "./templates";
+import { TEMPLATE_STEPS, templateWording } from "./templates";
 import { writeReport } from "./write";
 
 const SETTINGS = { analysisVersion: 1, patternsVersion: 1, engine: { name: "stockfish", depth: 12 } };
@@ -288,5 +290,205 @@ describe("writeReport", () => {
     expect(r.focus[1]!.title).toBe(templateWording(draft(["thrown-win"])).focus[0]!.title);
     expect(r.wording).toMatchObject({ source: "model", wordedFor: ["hung-piece"], calls: 1 });
     expect(r.notes).toEqual(["no-key"]);
+  });
+});
+
+/** A legacy example (no story) whose only move is Nf3, on an empty board. */
+function ex(patternId: string, gameId: string, ply: number, winPctLoss = 50): FocusExample {
+  return { patternId, gameId, ply, winPctLoss, fen: "8/8/8/8/8/8/8/8 w - - 0 1", played: "Nf3" };
+}
+
+function spot(id: string): BlindSpot {
+  return { id, basis: "line", count: 5, games: 4, of: 8, baselineCount: 6, baselineOf: 40, examples: [] };
+}
+
+/** A draft whose items carry the given examples and blind spots. */
+function drafted(
+  items: { id: string; examples?: FocusExample[]; spots?: string[] }[],
+  revision = 0,
+): ReportDraft {
+  const d = draft(items.map((i) => i.id), revision);
+  d.focus = d.focus.map((f, n) => ({
+    ...f,
+    examples: items[n]!.examples ?? [],
+    blindSpots: (items[n]!.spots ?? []).map(spot),
+  }));
+  return d;
+}
+
+/** A model answer with one step per blind spot of each asked item. */
+function stepped(d: ReportDraft, ids: string[], tag = "model"): string {
+  return JSON.stringify({
+    summary: `Over {games} games, {mistakeRate} mistakes per hundred moves (${tag}).`,
+    focus: ids.map((patternId) => ({
+      patternId,
+      title: `${tag} title ${patternId}`,
+      why: `In {gamesAffected} of your {games} games (${tag}).`,
+      drill: `One ${tag} drill.`,
+      steps: d.focus.find((f) => f.patternId === patternId)!.blindSpots.map((b) => ({ blindSpot: b.id, text: `${tag} step ${b.id}.` })),
+    })),
+  });
+}
+
+/** A provider that answers each request with a passing answer for the items it asks for, or always with `bad`. */
+function auto(d: () => ReportDraft, bad?: string): CoachProvider & { requests: CompleteRequest[] } {
+  const requests: CompleteRequest[] = [];
+  return {
+    name: "anthropic",
+    model: "test-model",
+    requests,
+    async complete(req) {
+      requests.push(req);
+      const ids = /in this order: ([^.]*)\./.exec(req.user)?.[1]?.split(", ") ?? [];
+      const text = bad ?? stepped(d(), ids, `call${requests.length}`);
+      return { text, usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 } };
+    },
+  };
+}
+
+describe("writeReport with blind spots and examples", () => {
+  const A = ex("hung-piece", "g1", 10);
+  const B = ex("hung-piece", "g2", 20);
+  const C = ex("hung-piece", "g3", 30);
+
+  it("takes the model's steps, one per blind spot", async () => {
+    const d = drafted([{ id: "hung-piece", examples: [A], spots: ["undefended", "lost-queen"] }]);
+    const r = await writeReport(d, stub([stepped(d, ["hung-piece"])]));
+    expect(r.focus[0]!.steps).toEqual([
+      { blindSpot: "undefended", text: "model step undefended." },
+      { blindSpot: "lost-queen", text: "model step lost-queen." },
+    ]);
+    expect(r.wording.calls).toBe(1);
+    expect(() => WeeklyReport.parse(r)).not.toThrow();
+  });
+
+  it("gives template steps with template text", async () => {
+    const d = drafted([{ id: "hung-piece", examples: [A], spots: ["moved-piece-lost"] }]);
+    const r = await writeReport(d);
+    expect(r.focus[0]!.steps).toEqual([{ blindSpot: "moved-piece-lost", text: TEMPLATE_STEPS["moved-piece-lost"] }]);
+  });
+
+  it("repairs steps out of order and a move outside the examples, saying which and what to do", async () => {
+    const d = drafted([{ id: "hung-piece", examples: [A], spots: ["undefended", "lost-queen"] }]);
+    const bad = JSON.parse(stepped(d, ["hung-piece"]));
+    bad.focus[0].steps.reverse();
+    bad.focus[0].why = "Qh5 was the loose move.";
+    const p = stub([JSON.stringify(bad), stepped(d, ["hung-piece"], "fixed")]);
+    const r = await writeReport(d, p);
+    expect(p.requests).toHaveLength(2);
+    const hint = p.requests[1]!.user;
+    expect(hint).toContain("steps must hold exactly one step per blind spot, in this order: [undefended, lost-queen]; got [lost-queen, undefended]. Write one step for each, in that order.");
+    expect(hint).toContain("why names Qh5: this move is not in the examples shown (the moves shown: Nf3). Name only those moves, or say it in words without a move.");
+    expect(r.focus[0]!.title).toBe("fixed title hung-piece");
+  });
+
+  it("keeps kept text with its examples, refreshed from the candidates, and makes no call", async () => {
+    const first = await writeReport(drafted([{ id: "hung-piece", examples: [A, B] }]), stub([good(["hung-piece"])]));
+    const next = drafted([{ id: "hung-piece", examples: [C] }], 1);
+    const fresh = [ex("hung-piece", "g2", 20, 71), ex("hung-piece", "g1", 10, 64), C];
+    const p = stub([]);
+    const r = await writeReport(next, p, first, { candidates: { "hung-piece": fresh } });
+    expect(p.requests).toHaveLength(0);
+    expect(r.focus[0]!.title).toBe("model title hung-piece");
+    expect(r.focus[0]!.examples).toEqual([fresh[1], fresh[0]]);
+    expect(r.wording).toEqual(first.wording);
+    expect(r.summary).toBe(first.summary);
+  });
+
+  it("keeps text and examples when the draft shows the same examples", async () => {
+    const first = await writeReport(drafted([{ id: "hung-piece", examples: [A, B] }]), stub([good(["hung-piece"])]));
+    const refreshed = [ex("hung-piece", "g1", 10, 55), ex("hung-piece", "g2", 20, 45)];
+    const p = stub([]);
+    const r = await writeReport(drafted([{ id: "hung-piece", examples: refreshed }], 1), p, first);
+    expect(p.requests).toHaveLength(0);
+    expect(r.focus[0]!.examples).toEqual(refreshed);
+  });
+
+  it("rewords an item whose kept example is gone, in one call for every changed item", async () => {
+    const first = await writeReport(
+      drafted([{ id: "hung-piece", examples: [A, B] }, { id: "missed-tactic", examples: [ex("missed-tactic", "m1", 4)] }]),
+      stub([good(["hung-piece", "missed-tactic"])]),
+    );
+    const next = drafted([{ id: "hung-piece", examples: [A, C] }, { id: "thrown-win" }], 1);
+    const p = auto(() => next);
+    const r = await writeReport(next, p, first);
+    expect(p.requests).toHaveLength(1);
+    expect(p.requests[0]!.user).toBe(buildPrompt(next, ["hung-piece", "thrown-win"]).user);
+    expect(r.focus.map((f) => f.title)).toEqual(["call1 title hung-piece", "call1 title thrown-win"]);
+    expect(r.focus[0]!.examples).toEqual([A, C]);
+    expect(r.summary).toContain("(call1)");
+    expect(r.wording).toMatchObject({ source: "model", wordedFor: ["hung-piece", "thrown-win"], calls: 2 });
+  });
+
+  it("gives an item whose kept example is gone template text when no call is left", async () => {
+    const first = await writeReport(
+      drafted([{ id: "hung-piece", examples: [A, B] }, { id: "missed-tactic", examples: [ex("missed-tactic", "m1", 4)] }]),
+      stub([good(["hung-piece", "missed-tactic"])]),
+    );
+    const capped = { ...first, wording: { ...first.wording, calls: 3 } };
+    const next = drafted([{ id: "hung-piece", examples: [C] }, { id: "missed-tactic", examples: [ex("missed-tactic", "m1", 4)] }], 1);
+    const p = auto(() => next);
+    const r = await writeReport(next, p, capped);
+    expect(p.requests).toHaveLength(0);
+    expect(r.focus[0]!.title).toBe(templateWording(next).focus[0]!.title);
+    expect(r.focus[0]!.examples).toEqual([C]);
+    expect(r.focus[1]!.title).toBe("model title missed-tactic");
+    expect(r.summary).toBe(first.summary);
+    expect(r.wording).toMatchObject({ source: "model", wordedFor: ["missed-tactic"], calls: 3 });
+    expect(() => WeeklyReport.parse(r)).not.toThrow();
+  });
+
+  it("gives template text when the reword for a gone example fails, keeping the summary", async () => {
+    const first = await writeReport(drafted([{ id: "hung-piece", examples: [A] }]), stub([good(["hung-piece"])]));
+    const next = drafted([{ id: "hung-piece", examples: [C] }], 1);
+    const p = stub(["not json"]);
+    const r = await writeReport(next, p, first);
+    expect(p.requests).toHaveLength(1);
+    expect(r.focus[0]!.title).toBe(templateWording(next).focus[0]!.title);
+    expect(r.summary).toBe(first.summary);
+    expect(r.notes).toEqual(["model-failed"]);
+    expect(r.wording).toMatchObject({ wordedFor: [], calls: 2 });
+  });
+
+  it("keeps steps per blind spot: kept when still selected, template when new, gone when dropped, with calls unchanged", async () => {
+    const d0 = drafted([{ id: "hung-piece", examples: [A], spots: ["undefended", "lost-queen"] }]);
+    const first = await writeReport(d0, stub([stepped(d0, ["hung-piece"])]));
+    const next = drafted([{ id: "hung-piece", examples: [A], spots: ["lost-queen", "answer-check"] }], 1);
+    const p = stub([]);
+    const r = await writeReport(next, p, first);
+    expect(p.requests).toHaveLength(0);
+    expect(r.focus[0]!.title).toBe("model title hung-piece");
+    expect(r.focus[0]!.steps).toEqual([
+      { blindSpot: "lost-queen", text: "model step lost-queen." },
+      { blindSpot: "answer-check", text: TEMPLATE_STEPS["answer-check"] },
+    ]);
+    expect(r.wording.calls).toBe(first.wording.calls);
+    expect(() => WeeklyReport.parse(r)).not.toThrow();
+  });
+
+  it("gives a stored item without steps template steps for its blind spots", async () => {
+    const first = await writeReport(drafted([{ id: "hung-piece", examples: [A] }]), stub([good(["hung-piece"])]));
+    const old = WeeklyReport.parse({ ...first, focus: first.focus.map(({ steps: _, ...f }) => f) });
+    const r = await writeReport(drafted([{ id: "hung-piece", examples: [A], spots: ["undefended"] }], 1), stub([]), old);
+    expect(r.focus[0]!.steps).toEqual([{ blindSpot: "undefended", text: TEMPLATE_STEPS.undefended }]);
+  });
+
+  it.each([
+    ["answers that pass", undefined],
+    ["answers that never pass", "not json"],
+  ])("never makes more than three calls on any path, with %s", async (_, bad) => {
+    const examples = [[A, B], [A, C], [B], [C], [A]];
+    const sets = [["hung-piece"], ["hung-piece", "missed-tactic"], ["hung-piece", "thrown-win"], ["time-trouble"], ["hung-piece"]];
+    let current = drafted([{ id: "hung-piece", examples: examples[0] }]);
+    const p = auto(() => current, bad);
+    let report = await writeReport(current, p);
+    for (let rev = 1; rev < examples.length; rev++) {
+      current = drafted(sets[rev]!.map((id) => ({ id, examples: id === "hung-piece" ? examples[rev] : [], spots: rev % 2 ? ["undefended"] : [] })), rev);
+      report = await writeReport(current, p, report);
+      expect(report.wording.calls).toBe(p.requests.length);
+      expect(report.wording.calls).toBeLessThanOrEqual(3);
+      expect(() => WeeklyReport.parse(report)).not.toThrow();
+    }
+    expect(p.requests.length).toBe(3);
   });
 });
