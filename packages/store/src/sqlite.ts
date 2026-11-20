@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import {
@@ -9,7 +9,7 @@ import {
   WeeklyReport,
   trackKey,
 } from "@blunderstruck/contracts";
-import { BUSY_TIMEOUT_MS, migrate, rollbackQuietly } from "./migrations";
+import { BUSY_TIMEOUT_MS, migrate, requireCurrentSchema, rollbackQuietly } from "./migrations";
 import type { AnalysisKey, Store } from "./store";
 
 /** Placeholders per `IN (...)` list, well under SQLite's variable limit. */
@@ -40,18 +40,41 @@ function read<T>(schema: { safeParse(v: unknown): { success: true; data: T } | {
   return r.data;
 }
 
+export interface OpenSqliteOptions {
+  /**
+   * Open an existing file without ever writing it: no file or folder is created, nothing is
+   * migrated, and every write method rejects. A file whose schema is older or newer than this
+   * code reads is refused with a `SchemaVersionError`.
+   */
+  readOnly?: boolean;
+}
+
 /**
  * Open (creating if needed) the SQLite file at `path`, or `:memory:`, and migrate it to the
- * latest schema. Uses the built-in `node:sqlite`.
+ * latest schema. Uses the built-in `node:sqlite`. With `readOnly`, see `OpenSqliteOptions`.
  */
-export async function openSqliteStore(path: string): Promise<Store> {
-  if (path !== ":memory:" && !path.startsWith("file:")) mkdirSync(dirname(resolve(path)), { recursive: true });
-  const db = new DatabaseSync(path);
+export async function openSqliteStore(path: string, opts: OpenSqliteOptions = {}): Promise<Store> {
+  const readOnly = opts.readOnly === true;
+  let db: DatabaseSync;
+  if (readOnly) {
+    if (path === ":memory:" || path.startsWith("file:")) {
+      throw new Error(`a read-only store needs the path of an existing database file, not ${path}`);
+    }
+    if (!existsSync(path)) throw new Error(`no database file at ${path}`);
+    db = new DatabaseSync(path, { readOnly: true });
+  } else {
+    if (path !== ":memory:" && !path.startsWith("file:")) mkdirSync(dirname(resolve(path)), { recursive: true });
+    db = new DatabaseSync(path);
+  }
   try {
     db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-    db.exec("PRAGMA journal_mode = DELETE");
-    db.exec("PRAGMA foreign_keys = ON");
-    migrate(db);
+    if (readOnly) {
+      requireCurrentSchema(db);
+    } else {
+      db.exec("PRAGMA journal_mode = DELETE");
+      db.exec("PRAGMA foreign_keys = ON");
+      migrate(db);
+    }
   } catch (err) {
     db.close();
     throw err;
@@ -60,6 +83,7 @@ export async function openSqliteStore(path: string): Promise<Store> {
   let closed = false;
 
   function tx<T>(fn: () => T): T {
+    if (readOnly) throw new Error("this store was opened read-only");
     db.exec("BEGIN IMMEDIATE");
     try {
       const out = fn();

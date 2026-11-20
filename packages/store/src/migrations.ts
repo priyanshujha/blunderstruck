@@ -113,12 +113,30 @@ export function migrate(db: DatabaseSync): void {
   }
 }
 
-function checkNotNewer(version: number): void {
-  if (version > SCHEMA_VERSION) {
-    throw new Error(
-      `this database was written by a newer version of blunderstruck (schema ${version}; this version reads up to ${SCHEMA_VERSION})`,
+/** The database's schema is not the one this code reads, and it may not be changed here. */
+export class SchemaVersionError extends Error {
+  constructor(
+    readonly kind: "older" | "newer",
+    readonly found: number,
+  ) {
+    super(
+      kind === "newer"
+        ? `this database was written by a newer version of blunderstruck (schema ${found}; this version reads up to ${SCHEMA_VERSION})`
+        : `this database uses an older schema (${found}; this version reads ${SCHEMA_VERSION}): run the report command once to update this database`,
     );
+    this.name = "SchemaVersionError";
   }
+}
+
+function checkNotNewer(version: number): void {
+  if (version > SCHEMA_VERSION) throw new SchemaVersionError("newer", version);
+}
+
+/** For a connection that must not write: throw unless `db` is exactly at `SCHEMA_VERSION`. */
+export function requireCurrentSchema(db: DatabaseSync): void {
+  const version = schemaVersion(db);
+  checkNotNewer(version);
+  if (version < SCHEMA_VERSION) throw new SchemaVersionError("older", version);
 }
 
 /**
