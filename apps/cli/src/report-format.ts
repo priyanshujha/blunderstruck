@@ -1,3 +1,4 @@
+import { templateWording } from "@blunderstruck/coach";
 import type { WeeklyReport } from "@blunderstruck/contracts";
 import { type ExampleView, type FocusView, type ReportView, type StoryTag, type TableView, reportView } from "@blunderstruck/view";
 
@@ -68,7 +69,9 @@ function focusLines(item: FocusView, all: boolean, v: ReportView): string[] {
  */
 export function formatReport(report: WeeklyReport, opts: ReportFormatOptions = {}): string {
   const all = opts.all ?? false;
-  const v = reportView(report, opts.pending === undefined ? {} : { pending: opts.pending });
+  // Stored wording that cannot be shown, or that states a per-100-move figure, falls back to the built-in templates.
+  const fallback = templateWording(report);
+  const v = reportView(report, opts.pending === undefined ? { fallback } : { pending: opts.pending, fallback });
   const { header } = v;
   const out: string[] = [header.title, header.band, header.period, header.games];
 

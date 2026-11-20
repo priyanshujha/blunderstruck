@@ -1,97 +1,425 @@
-import { PATTERN_IDS, type FocusItem, type PatternStat, type PeriodStats, WeeklyReport } from "@blunderstruck/contracts";
-import { describe, expect, it } from "vitest";
-import { reportView } from "@blunderstruck/view";
+import { createHash } from "node:crypto";
+import http from "node:http";
+import { readFileSync } from "node:fs";
+import { templateWording } from "@blunderstruck/coach";
+import { type ExampleStory, type FocusItem, PATTERN_IDS, WeeklyReport } from "@blunderstruck/contracts";
+import { type ReportView, reportView, storyLines } from "@blunderstruck/view";
+import { describe, expect, it, vi } from "vitest";
 import { formatReport } from "../../cli/src/report-format";
-import { esc, renderPage } from "./render";
+import { piecesOf, xy } from "./board";
+import { esc } from "./html";
+import { SCRIPT, STYLE, pageSecurity, renderPage } from "./render";
+import {
+  END,
+  PLAYER,
+  type Sample,
+  ended,
+  example,
+  focusItem,
+  followed,
+  fullReport,
+  missed,
+  other,
+  partway,
+  period,
+  sampleReport,
+  stat,
+  weekEnd,
+} from "./test-report";
 
-// Invented players and games only.
-const SETTINGS = { analysisVersion: 2, patternsVersion: 1, engine: { name: "Stub 1", depth: 12 } };
-const FEN = "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4";
-const XSS = `<script>alert("x")</script>`;
+// Invented players and games only; stories come from the real story builder.
+const XSS = `<script>alert("x")</script><!-- -->`;
+const CTX = { pending: 0, history: [] };
+const fallback = (r: WeeklyReport) => templateWording(r);
+const view = (r: WeeklyReport, pending = 0): ReportView => reportView(r, { pending, fallback: fallback(r) });
 
-const stat = (patternId: string, games: number, moves: number, per100: number): PatternStat => {
-  const occurrences = Math.round((per100 * moves) / 100);
-  return { patternId, games, moves, gamesAffected: Math.min(games, occurrences), occurrences, per100Moves: per100, avgWinPctLoss: 30 };
+/** Visible text of a page, entities decoded, whitespace collapsed. */
+function pageText(html: string): string {
+  const decode = (t: string): string =>
+    t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+  const body = html
+    .replace(/<style>[\s\S]*?<\/style>/, "")
+    .replace(/<script>[\s\S]*?<\/script>/, "")
+    .replace(/<title>[\s\S]*?<\/title>/, "");
+  return decode(body.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").replace(/ ([,.;:)])/g, "$1");
+}
+const has = (html: string, sentence: string): void => {
+  expect(pageText(html), sentence).toContain(sentence.replace(/\s+/g, " "));
 };
 
-function period(end: string, games: number, hung = 0.2): PeriodStats {
-  const moves = games * 35;
-  return {
-    start: new Date(Date.parse(end) - 7 * 86_400_000).toISOString(),
-    end,
-    games,
-    moves,
-    mistakesPer100Moves: 6.5,
-    settings: SETTINGS,
-    stats: PATTERN_IDS.map((id) => stat(id, games, moves, id === "hung-piece" ? hung : 0.2)),
-  };
+/** The board's pieces as square → transform, read from the markup. */
+function boardPieces(html: string, exampleId: string): Map<string, string> {
+  const art = new RegExp(`<article class="ex"[^>]*id="${exampleId}"[\\s\\S]*?</article>`).exec(html)![0];
+  return new Map([...art.matchAll(/<use class="pc [wb]" href="#p[a-z]"[^>]*transform="translate\(([\d.]+) ([\d.]+)\)" data-sq="([a-h][1-8])"/g)].map((m) => [m[3]!, `${m[1]} ${m[2]}`]));
 }
 
-const END = "2026-11-19T00:00:00.000Z";
-const weekEnd = (i: number): string => new Date(Date.parse(END) - i * 7 * 86_400_000).toISOString();
+const dataOf = (html: string, exampleId: string): { f: number; p: [string, string, Record<string, unknown>?][]; b: unknown[] } => {
+  const m = new RegExp(`id="${exampleId}"[^>]*data-b="([^"]*)"`).exec(html)!;
+  return JSON.parse(m[1]!.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"));
+};
 
-const focusItem = (over: Partial<FocusItem> = {}): FocusItem => ({
-  patternId: "hung-piece",
-  title: "Look before you let go of a piece",
-  why: "You left a piece hanging in {gamesAffected} of {games} games, {rate} per 100 moves.",
-  drill: "Before each move, ask what the piece you just moved no longer protects.",
-  exampleGameIds: ["lichess:g1"],
-  blindSpots: [],
-  steps: [],
-  baseline: stat("hung-piece", 30, 1050, 3.0),
-  target: 2.25,
-  since: "2026-10-29T00:00:00.000Z",
-  reason: {
-    kind: "kept",
-    previousRank: 1,
-    score: 14.2,
-    recentCost: 7.1,
-    naiveCostThisPeriod: 6.2,
-    rate: 2.1,
-    severity: 30,
-    chronicity: 0.9,
-    weeksRecurred: 5,
-    weeksCounted: 6,
-    weeks: [true, true, true, true, true, false],
-  },
-  examples: [{ patternId: "hung-piece", gameId: "lichess:g1", ply: 23, winPctLoss: 32.4, fen: FEN, played: "Qxf7", best: "Nf3" }],
-  ...over,
+describe("security", () => {
+  it("allows exactly the emitted stylesheet and script by hash", async () => {
+    const { report, games } = await fullReport();
+    const html = renderPage(report, CTX, { games });
+    const styles = [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]!);
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+    expect(styles).toEqual([STYLE]);
+    expect(scripts).toEqual([SCRIPT]);
+    const hash = (s: string) => `'sha256-${createHash("sha256").update(s, "utf8").digest("base64")}'`;
+    const csp = pageSecurity().csp;
+    expect(csp).toBe(`default-src 'none'; style-src ${hash(styles[0]!)}; script-src ${hash(scripts[0]!)}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
+    expect(csp).not.toContain("unsafe");
+    // Nothing the policy would have to allow besides those two.
+    expect(html).not.toMatch(/\sstyle=|\son[a-z]+=|<link|<img|<iframe|src=/i);
+  });
+
+  it("names no web address except the escaped game links", async () => {
+    const { report, games } = await fullReport();
+    const html = renderPage(report, CTX, { games });
+    const urls = [...html.matchAll(/https?:\/\/[^"<\s]*/g)].map((m) => m[0]);
+    expect(urls.length).toBe(4);
+    for (const u of urls) expect(u).toMatch(/^https:\/\/lichess\.org\/fx[a-z0-9]+#1$/);
+    expect(STYLE + SCRIPT).not.toMatch(/https?:|eval\(|new Function|innerHTML/);
+  });
+
+  it("keeps hostile text inside its element and attribute, the script's data included", async () => {
+    const s = await partway();
+    const story: ExampleStory = {
+      ...s.story,
+      played: { ...s.story.played, san: `Qd2</script><!--` },
+      punish: s.story.punish.map((m, i) => (i === 0 ? { ...m, san: `"><img src=x>` } : m)),
+    };
+    const item = focusItem("allowed-tactic", [example({ ...s, story }, "allowed-tactic"), example({ ...s, fen: `"><script>bad()</script>` }, "allowed-tactic")], {
+      title: XSS,
+      why: `<img src=x onerror="alert(1)">`,
+      drill: `"><script>bad()</script>`,
+      steps: [{ blindSpot: "answer-check", text: `</script>${XSS}` }],
+      blindSpots: [{ id: `answer-check`, basis: "line", count: 3, games: 3, of: 5, baselineCount: 4, baselineOf: 20, examples: [] }],
+    });
+    const r = sampleReport([item], { player: XSS, track: { platform: "lichess", username: XSS, timeClass: "rapid" }, summary: `${XSS} {games}` });
+    const games = new Map([[s.gameId, { ...s.record, url: "javascript:alert(1)", opening: { eco: "C20", name: XSS } }]]);
+    const html = renderPage(r, CTX, { games, header: '<p class="host">host</p>', reports: [{ periodEnd: XSS, kind: "weekly" }, { periodEnd: END, kind: "weekly" }] });
+    expect(html.match(/<script/g)).toHaveLength(1);
+    expect(html.match(/<\/script>/g)).toHaveLength(1);
+    expect(html).not.toMatch(/<img|<!--|-->|javascript:/);
+    expect(html).not.toMatch(/="[^"]*"\s*onerror/);
+    has(html, XSS);
+    has(html, `${XSS}, same habit, one week on.`);
+    expect(html).toContain(esc("Qd2</script><!--"));
+    // The script's data parses and holds squares and flags only.
+    const d = dataOf(html, "ex-1-1");
+    expect(JSON.stringify(d)).not.toMatch(/[<>"']script|img/);
+    // A position that is not a board shows its sentences without one.
+    expect(html).toMatch(/<article class="ex" id="ex-1-2" data-fold><div>/);
+  });
 });
 
-function report(over: Record<string, unknown> = {}): WeeklyReport {
-  return WeeklyReport.parse({
-    player: "quiet_rook_test",
-    track: { platform: "lichess", username: "quiet_rook_test", timeClass: "rapid" },
-    kind: "weekly",
-    revision: 1,
-    periodStart: "2026-11-12T00:00:00.000Z",
-    periodEnd: END,
-    rating: 1420,
-    band: "club",
-    bandSource: "ratings",
-    settings: SETTINGS,
-    gamesFound: 31,
-    gamesAnalyzed: 31,
-    gameIds: ["lichess:g1"],
-    coverage: { sampled: 31, analysed: 31, total: 31, complete: true, sampleOnly: false },
-    current: period(END, 31, 2.1),
-    comparison: null,
-    weeks: [0, 1, 2, 3, 4, 5].map((i) => period(weekEnd(i), 6)),
-    trends: [],
-    priorities: [],
-    focus: [focusItem()],
-    progress: [],
-    retired: [],
-    summary: "{games} games, {mistakeRate} mistakes per 100 moves. {focusCount} thing to work on.",
-    wording: { source: "model", provider: "anthropic", model: "stub-model", wordedFor: ["hung-piece"], calls: 1 },
-    notes: [],
-    ...over,
+describe("boards", () => {
+  it("draws the position from its FEN, from White's side", async () => {
+    const { report, games } = await fullReport();
+    const html = renderPage(report, CTX, { games });
+    const fen = report.focus[0]!.examples[0]!.fen;
+    const want = new Map(piecesOf(fen)!.map((p) => [p.square, xy(p.square, false).join(" ")]));
+    expect(boardPieces(html, "ex-1-1")).toEqual(want);
+    expect(want.get("a1")).toBe("0 70");
   });
-}
 
-const noScript = (html: string): void => {
-  expect(html).not.toMatch(/<script/i);
-};
+  it("is flipped for Black", async () => {
+    const m = await missed();
+    const html = renderPage(sampleReport([focusItem("missed-tactic", [example(m, "missed-tactic")])]), CTX);
+    const pieces = boardPieces(html, "ex-1-1");
+    expect(pieces.get("a8")).toBe("70 70");
+    expect(pieces.get("g8")).toBe("10 70");
+    expect(html).toContain("seen from Black&#39;s side");
+    expect(html).toMatch(/<div class="rk" aria-hidden="true"><span>1<\/span>/);
+    // A missed chance has no reply to show: the move played, then the better line.
+    expect(dataOf(html, "ex-1-1").p).toHaveLength(1);
+  });
+
+  const lineCase = async (s: Sample, patternId: string) => {
+    const html = renderPage(sampleReport([focusItem(patternId, [example(s, patternId)])]), CTX);
+    return { html, steps: dataOf(html, "ex-1-1").p, lines: storyLines(s.story, patternId) };
+  };
+  const ghosts = (steps: [string, string, Record<string, unknown>?][]): boolean[] => steps.map((x) => !!x[2]?.g);
+  const key = (html: string): string[] => [...(/<p class="akey">([\s\S]*?)<\/p>/.exec(html)?.[1] ?? "").matchAll(/<\/svg>([a-z ]+)<\/span>/g)].map((m) => m[1]!);
+
+  it("draws solid only the moves the game played, as the view says", async () => {
+    for (const [make, pid] of [[partway, "allowed-tactic"], [ended, "allowed-tactic"], [followed, "hung-piece"], [other, "hung-piece"]] as const) {
+      const s = await make();
+      const { steps, lines } = await lineCase(s, pid);
+      const told = lines.filter((l) => l.tag !== "better").flatMap((l) => (l.moves.length > 0 ? l.moves.map((m) => !m.played) : l.tag === "then" ? [false] : []));
+      expect(ghosts(steps)).toEqual(told);
+    }
+  });
+
+  it("left the line part-way: the game's move solid, the rest as what could follow", async () => {
+    const { html, steps } = await lineCase(await partway(), "allowed-tactic");
+    expect(ghosts(steps)).toEqual([false, false, true, true, true]);
+    expect(steps.slice(2).every((x) => x[2]?.w === "f")).toBe(true);
+    expect(key(html)).toEqual(["you played", "their reply", "what could follow", "better"]);
+  });
+
+  it("the opponent played something else: the reply as what it allowed, then the game's moves", async () => {
+    const { html, steps } = await lineCase(await other(), "hung-piece");
+    expect(ghosts(steps)[1]).toBe(true);
+    expect(steps[1]![2]?.w).toBe("a");
+    expect(ghosts(steps).slice(2).every((g) => !g)).toBe(true);
+    expect(key(html)).toEqual(["you played", "what it allowed", "their move in the game", "better"]);
+    // The resting picture draws the reply broken.
+    expect(/data-k="r">[\s\S]*?class="ar ghost"/.test(html)).toBe(true);
+  });
+
+  it("the game ended there: the reply as a ghost and a pause for the sentence", async () => {
+    const { html, steps } = await lineCase(await ended(), "allowed-tactic");
+    expect(ghosts(steps)).toEqual([false, true, false]);
+    expect(steps[2]).toEqual(["", "", { o: 1 }]);
+    expect(key(html)).toEqual(["you played", "what it allowed", "better"]);
+  });
+
+  it("played the whole line: one solid sequence", async () => {
+    const { html, steps } = await lineCase(await followed(), "hung-piece");
+    expect(ghosts(steps).every((g) => !g)).toBe(true);
+    expect(key(html)).toEqual(["you played", "their reply", "better"]);
+    expect(html).not.toContain('class="ar ghost"');
+  });
+});
+
+describe("states", () => {
+  it("a weekly report: every sentence from the view, last period's items, the completed item", async () => {
+    const { report, games } = await fullReport();
+    const html = renderPage(report, CTX, { games });
+    const v = view(report);
+    expect(html).toContain('data-auto="1"');
+    expect(html).not.toContain('http-equiv="refresh"');
+    has(html, `${PLAYER}, one habit is off your list.`);
+    has(html, v.summary!);
+    for (const p of v.progressInGames!.items) {
+      has(html, `${p.patternName}: ${p.counts}`);
+      expect(html).toContain(p.verdictText);
+    }
+    for (const x of v.retiredInGames!.items) has(html, `${x.patternName}: ${x.verdictText}. ${x.counts}`);
+    expect(html).toContain('<span class="stamp">Fixed</span>');
+    if (v.body.kind !== "focus") throw new Error("expected focus");
+    for (const it of v.body.items) {
+      for (const s of [it.title, it.why, it.drill, it.reason, it.goalLine, it.standing, it.blindSpotsIntro!]) has(html, s);
+      if (it.frequencyPhrase) has(html, it.frequencyPhrase);
+      for (const b of it.blindSpots) for (const s of [b.label, b.comparison, b.refinement]) if (s) has(html, s);
+      for (const s of it.steps) has(html, s.text);
+      for (const ex of it.examples) {
+        for (const l of ex.story!) has(html, l.text);
+        has(html, ex.cost!.text);
+        has(html, ex.moveLabel);
+      }
+    }
+    // Folded examples are in the markup, whole.
+    expect(html).toContain('<button type="button" class="morebtn" data-open="ex-1-2">Show another example</button>');
+    expect(html).toMatch(/<article class="ex" id="ex-1-2" data-fold data-b=/);
+    // "See one on the board" points at an example that shows the blind spot.
+    expect(html).toMatch(/id="focus-1-step-2"[\s\S]*?href="#ex-1-2">See one on the board/);
+  });
+
+  it("a first report", async () => {
+    const { report, games } = await fullReport({ kind: "first", progress: [], retired: [], periodStart: weekEnd(4) });
+    const html = renderPage(report, CTX, { games });
+    has(html, `${PLAYER}, two habits are costing you the most.`);
+    has(html, "All 18 of your rapid games from the last 28 days, every mistake checked twice. Work on these two. Everything else can wait.");
+    expect(pageText(html)).toMatch(/[A-Z][a-z]+ weeks is not a trend\. It is a starting line\./);
+    expect(html).not.toContain("Last report&#39;s");
+  });
+
+  it("while the deeper check runs: its banner, no autoplay, the refresh kept", async () => {
+    const { report, games } = await fullReport({ coverage: { sampled: 18, analysed: 18, total: 18, complete: false, sampleOnly: false, checked: 7 } });
+    const html = renderPage(report, { pending: 11, history: [] }, { games });
+    const v = view(report, 11);
+    has(html, `Deeper check running: ${v.coverage!}`);
+    expect(html).toContain("· first look");
+    expect(html).toContain('data-auto="0"');
+    expect(html).toContain('<meta http-equiv="refresh" content="30">');
+    expect(html).toContain('aria-label="7 of 18 games checked"');
+    has(html, `${PLAYER}, two habits stand out so far.`);
+    expect(renderPage(report, { pending: 11, history: [] }, { latest: false })).not.toContain('http-equiv="refresh"');
+  });
+
+  it("while games are still being analysed", async () => {
+    const { report } = await fullReport({ gamesAnalyzed: 6, coverage: { sampled: 6, analysed: 6, total: 18, complete: false, sampleOnly: false, checked: 2 } });
+    const html = renderPage(report, { pending: 16, history: [] });
+    has(html, `Still analysing: ${view(report, 16).coverage!}`);
+    has(html, "From the first 6 of your 18 rapid games. The rest are in the queue.");
+    expect(html).toContain("· provisional");
+    expect(html).toContain('data-auto="0"');
+  });
+
+  it("a sample stopped on request: its banner, no bar, no refresh, boards play", async () => {
+    const { report } = await fullReport({ coverage: { sampled: 6, analysed: 6, total: 18, complete: false, sampleOnly: true } });
+    const html = renderPage(report, { pending: 12, history: [] });
+    has(html, `A sample, as you asked: ${view(report, 12).coverage!}`);
+    expect(html).not.toContain('class="bar"');
+    expect(html).not.toContain('http-equiv="refresh"');
+    expect(html).toContain('data-auto="1"');
+  });
+
+  it("too few games: the numbers, folded zeros, no cards or boards", () => {
+    const r = sampleReport([], { notes: ["few-games"], gamesFound: 6, current: period(END, 6) });
+    const html = renderPage(r, CTX);
+    const v = view(r);
+    has(html, `${PLAYER}, six games is not enough to go on.`);
+    has(html, "Play a few more and run the report again. Until then, here are the numbers.");
+    expect(html).not.toContain('class="card"');
+    expect(html).not.toContain('class="board');
+    expect(html).not.toContain(esc(v.summary!));
+    has(html, "Four other patterns 0 games");
+    if (v.body.kind === "numbers") for (const row of v.body.table.rows) for (const c of row) expect(html).toContain(`<td>${esc(c)}</td>`);
+  });
+
+  it("enough games but nothing picked: the view's intro as the lede", () => {
+    const r = sampleReport([], { current: period(END, 18) });
+    const html = renderPage(r, CTX);
+    const v = view(r);
+    has(html, `${PLAYER}, here are your numbers.`);
+    if (v.body.kind !== "numbers") throw new Error("expected numbers");
+    has(html, v.body.intro);
+  });
+
+  it("no model key: the built-in wording and its note", async () => {
+    const { report, games } = await fullReport({ notes: ["no-key"], wording: { source: "template", wordedFor: [], calls: 0 } });
+    const html = renderPage(report, CTX, { games });
+    const v = view(report);
+    has(html, `Wording Built-in templates. ${v.notes.lines[0]!}`);
+  });
+
+  it("stored wording with a per-100 figure shows the built-in text instead", async () => {
+    const { report } = await fullReport({ summary: "{mistakeRate} mistakes per 100 moves." });
+    const r = { ...report, focus: report.focus.map((f, i) => (i === 0 ? { ...f, title: "Down to {target} per 100" } : f)) };
+    const html = renderPage(r, CTX);
+    const v = view(r);
+    expect(pageText(html)).not.toContain("Down to");
+    has(html, v.summary!);
+    if (v.body.kind === "focus") has(html, v.body.items[0]!.title);
+  });
+
+  it("the precise figures, in one details element", async () => {
+    const { report, games } = await fullReport();
+    const html = renderPage(report, CTX, { games });
+    const v = view(report);
+    expect(html).toMatch(/<details id="figures">\n<summary>Precise figures \(per 100 moves\)<\/summary>/);
+    for (const l of v.details.focus) has(html, l);
+    has(html, "Blind spots (96 games, 230 mistakes)");
+    has(html, "1 · of them, from the knight that moved");
+    has(html, "The four positions shown (checked at depth 1)");
+  });
+
+  it("an older stored report without stories, blind spots, steps or goals", () => {
+    const s: FocusItem = focusItem("hung-piece", [
+      { patternId: "hung-piece", gameId: "lichess:old1", ply: 23, winPctLoss: 32, fen: "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4", played: "Qxf7", best: "Nf3" },
+    ]);
+    const { goal: _g, blindSpots: _b, steps: _s, ...old } = s;
+    const r = WeeklyReport.parse({ ...sampleReport([s]), focus: [old] });
+    const html = renderPage(r, CTX);
+    const v = view(r);
+    if (v.body.kind !== "focus") throw new Error("expected focus");
+    const it = v.body.items[0]!;
+    for (const x of [it.title, it.goalLine, it.standing, it.examples[0]!.line, it.drill]) has(html, x);
+    expect(html).toContain('<p class="habit-t">The habit to build</p>');
+    expect(html).not.toContain('class="board');
+  });
+});
+
+describe("as a library", () => {
+  it("importing the render entry starts no server", async () => {
+    const spy = vi.spyOn(http, "createServer");
+    vi.resetModules();
+    const mod = await import("./render");
+    expect(typeof mod.renderPage).toBe("function");
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+    const src = readFileSync(new URL("./render.ts", import.meta.url), "utf8");
+    expect(src).not.toMatch(/from "\.\/server"|node:http/);
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    expect(pkg.exports["./render"]).toBe("./src/render.ts");
+  });
+
+  it("prefixes every internal link with basePath", async () => {
+    const { report, games } = await fullReport();
+    const html = renderPage(report, CTX, { games, basePath: "/u/abc/", reports: [{ periodEnd: weekEnd(1), kind: "first" }, { periodEnd: END, kind: "weekly" }] });
+    const hrefs = [...html.matchAll(/href="([^"#][^"]*)"/g)].map((m) => m[1]!).filter((h) => !h.startsWith("https://"));
+    expect(hrefs.length).toBeGreaterThan(1);
+    for (const h of hrefs) expect(h.startsWith("/u/abc/")).toBe(true);
+    expect(html).toContain(`href="/u/abc/report/${encodeURIComponent(weekEnd(1))}"`);
+    expect(html).toContain('href="/u/abc/report.json"');
+  });
+
+  it("emits the trusted header and footer as given, and still escapes report data", () => {
+    const r = sampleReport([], { player: XSS, track: { platform: "lichess", username: XSS, timeClass: "rapid" } });
+    const html = renderPage(r, CTX, { header: '<nav class="host">Home</nav>', footer: '<p class="host">Bye</p>' });
+    expect(html).toMatch(/<body data-auto="1">\n<nav class="host">Home<\/nav>/);
+    expect(html).toMatch(/<p class="host">Bye<\/p>\n<script>/);
+    expect(html.match(/<script>/g)).toHaveLength(1);
+    expect(html).toContain(esc(XSS));
+  });
+
+  it("keeps the script small", () => {
+    expect(Buffer.byteLength(SCRIPT)).toBeLessThan(6 * 1024);
+    expect(Buffer.byteLength(STYLE)).toBeLessThan(24 * 1024);
+  });
+});
+
+describe("parity with the text report", () => {
+  /*
+   * Every line the terminal prints, in its precise form, appears on the page, except lines the
+   * page says another way, listed here: the title (the page's <title>), the body heading, an
+   * item's title line and "Drill:" label, the frequency sentence (the page shows its counts and
+   * phrase), each blind-spot sentence (shown as label, count and comparison), the step list's
+   * label and numbers, the example's FEN, plain line and detector evidence (terminal only for
+   * stories), the stored summary when nothing was picked and the too-few intro (the page's lede says it), the "Rating band:", "Period:" and "Games:" labels (an About list), and headings.
+   */
+  it("shows every sentence the CLI prints that the page also shows", async () => {
+    const { report, games } = await fullReport({
+      notes: ["no-key", "settings-changed"],
+      wording: { source: "template", wordedFor: [], calls: 0 },
+      trends: PATTERN_IDS.map((id) => ({ patternId: id, previous: stat(id, 69, 20), current: stat(id, 18, 5), verdict: id === "hung-piece" ? "improved" : "flat", pValue: id === "hung-piece" ? 0.04 : null })),
+    });
+    for (const variant of [report, { ...report, focus: [], notes: ["few-games" as const] }]) {
+      const cli = formatReport(variant, { all: true, pending: 0 });
+      const text = pageText(renderPage(variant, CTX, { games }));
+      const v = view(variant);
+      const items = v.body.kind === "focus" ? v.body.items : [];
+      const skip = new Set<string>([
+        v.header.title,
+        v.body.heading,
+        v.notes.heading,
+        v.weeks.heading,
+        "Examples:",
+        // With nothing picked the page leads with its own lede and leaves the stored summary out.
+        ...(items.length === 0 && v.summary ? [v.summary] : []),
+        // Too few games: the page's own lede stands in for the view's intro.
+        ...(v.body.kind === "numbers" && variant.notes.includes("few-games") ? [v.body.intro] : []),
+        "The habit to build:",
+        ...items.flatMap((i) => [`${i.number}. ${i.title} [${i.patternName}]`, i.frequency, ...i.blindSpots.map((b) => `${b.sentence}${b.refinement ? ` ${b.refinement}` : ""}`), ...i.examples.flatMap((e) => [e.line, e.evidence ?? ""])]),
+      ]);
+      for (const raw of cli.split("\n")) {
+        let line = raw.trim().replace(/^- /, "");
+        if (!line || skip.has(line) || line.startsWith("Position (FEN)") || line === v.progress?.heading || line === v.retired?.heading) continue;
+        if (/\S\s{2,}\S/.test(line)) {
+          for (const cell of line.split(/\s{2,}/)) expect(text, `cell "${cell}"`).toContain(cell);
+          continue;
+        }
+        line = line
+          .replace(/^(Drill|You|They|Then|Better): /, "")
+          .replace(/^\d\. /, "")
+          .replace(/^(Rating band|Period|Games): /, "");
+        // The cost line prints its detail after it; the page puts the detail in the precise figures.
+        const cost = items.flatMap((i) => i.examples).find((e) => e.cost && line.startsWith(e.cost.text));
+        if (cost?.cost?.detail) {
+          expect(text).toContain(cost.cost.text);
+          expect(text).toContain(cost.cost.detail);
+          continue;
+        }
+        expect(text, line).toContain(line.replace(/\s+/g, " "));
+      }
+    }
+  });
+});
 
 describe("esc", () => {
   it("escapes markup and both quote kinds", () => {
@@ -99,175 +427,3 @@ describe("esc", () => {
   });
 });
 
-describe("renderPage", () => {
-  it("shows the same numbers and wording as the text report", () => {
-    const html = renderPage(report(), { pending: 0, history: [] });
-    expect(html).toContain("Weekly report for quiet_rook_test (lichess, rapid)");
-    expect(html).toContain("Rating band: club, from your median rating of 1420 in these games");
-    expect(html).toContain("Games: 31 found, all analysed");
-    expect(html).toContain("31 games, 6.50 mistakes per 100 moves. 1 thing to work on.");
-    expect(html).toContain("You left a piece hanging in");
-    expect(html).toContain("2.10 per 100 moves.");
-    expect(html).toContain("It came up in 5 of your last 6 weeks. Kept from your last report (since 2026-10-29).");
-    expect(html).toContain("Now 2.10 per 100 moves; started at 3.00; target 2.25.");
-    expect(html).toContain("better was Nf3 (-32.4 win%)");
-    expect(html).not.toContain('http-equiv="refresh"');
-    noScript(html);
-  });
-
-  it("escapes a username, an opening name, evidence and model-written wording", () => {
-    const r = report({
-      player: XSS,
-      track: { platform: "lichess", username: XSS, timeClass: "rapid" },
-      focus: [
-        focusItem({
-          title: `${XSS} {rate}`,
-          why: `<img src=x onerror="alert(1)">`,
-          drill: `"><script>bad()</script>`,
-          examples: [
-            { patternId: "hung-piece", gameId: "lichess:g1", ply: 23, winPctLoss: 32.4, fen: FEN, played: "Qxf7", evidence: XSS },
-          ],
-        }),
-      ],
-      summary: `${XSS} {games}`,
-    });
-    const games = new Map([
-      ["lichess:g1", { platform: "lichess" as const, url: `https://lichess.org/abc"onmouseover="x`, opening: { eco: "C20", name: XSS } }],
-    ]);
-    const html = renderPage(r, { pending: 0, history: [] }, { games });
-    noScript(html);
-    expect(html).not.toContain("<img");
-    expect(html).not.toMatch(/"onmouseover=/);
-    expect(html).toContain("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; 2.10");
-    expect(html).toContain(`C20 ${esc(XSS)}`);
-  });
-
-  it("does not link to a game whose URL is not a web link", () => {
-    const games = new Map([["lichess:g1", { platform: "chesscom" as const, url: "javascript:alert(1)" }]]);
-    const html = renderPage(report(), { pending: 0, history: [] }, { games });
-    expect(html).not.toContain("javascript:");
-  });
-
-  it("asks for the report command when there is no report", () => {
-    const html = renderPage(undefined, { pending: 0, history: [] }, {
-      track: { platform: "lichess", username: XSS, timeClass: "blitz" },
-      reportCommand: `pnpm cli report lichess '${XSS}'`,
-    });
-    expect(html).toContain("No report yet");
-    expect(html).toContain(esc(`pnpm cli report lichess '${XSS}'`));
-    noScript(html);
-  });
-
-  it("shows a banner and reloads while provisional", () => {
-    const r = report({ coverage: { sampled: 150, analysed: 150, total: 400, complete: false, sampleOnly: false } });
-    const html = renderPage(r, { pending: 250, history: [] });
-    expect(html).toContain("Based on 150 of 400 games; 250 still being analysed.");
-    expect(html).toContain('<meta http-equiv="refresh" content="30">');
-    expect(renderPage(r, { pending: 250, history: [] }, { latest: false })).not.toContain('http-equiv="refresh"');
-  });
-
-  it("does not reload a sample-only report", () => {
-    const r = report({ coverage: { sampled: 150, analysed: 150, total: 400, complete: false, sampleOnly: true } });
-    const html = renderPage(r, { pending: 250, history: [] });
-    expect(html).toContain("Based on a sample of 150 of 400 games; run report again to analyse the rest.");
-    expect(html).not.toContain('http-equiv="refresh"');
-  });
-
-  it("lists every stored week for the focus patterns", () => {
-    const history = Array.from({ length: 10 }, (_, i) => period(weekEnd(9 - i), 5, 1 + i / 10));
-    const html = renderPage(report(), { pending: 0, history });
-    expect(html).toContain("Left a piece hanging /100");
-    expect(html).toContain(`<td>${weekEnd(9).slice(0, 10)}</td>`);
-    expect(html).toContain("<td>1.90</td>");
-    expect(html.indexOf(weekEnd(9).slice(0, 10))).toBeLessThan(html.indexOf(weekEnd(0).slice(0, 10) + "</td>"));
-  });
-
-  it("links to the other reports", () => {
-    const older = "2026-11-12T00:00:00.000Z";
-    const html = renderPage(report(), { pending: 0, history: [] }, {
-      reports: [
-        { periodEnd: older, kind: "first" },
-        { periodEnd: END, kind: "weekly" },
-      ],
-    });
-    expect(html).toContain(`<a href="/report/${encodeURIComponent(older)}">First report ending 2026-11-12</a>`);
-    expect(html).toContain("Week ending 2026-11-19 (latest) (this one)");
-  });
-
-  it("falls back to a neutral sentence when stored wording no longer renders", () => {
-    const r = report({ summary: "{old} games", focus: [focusItem({ title: "Fix {gone}", drill: "Drill {x" })] });
-    const html = renderPage(r, { pending: 0, history: [] });
-    expect(html).toContain("Wording for this item could not be shown.");
-    expect(html).toContain("The summary could not be shown.");
-    expect(html).toContain("Some stored wording could not be shown, so a plain sentence stands in its place.");
-    expect(html.replace(/<style>[\s\S]*?<\/style>/, "")).not.toMatch(/[{}]/);
-  });
-
-  it("says no data, not zero, for a focus pattern missing from this period", () => {
-    const current = { ...period(END, 31), stats: period(END, 31).stats.filter((s) => s.patternId !== "hung-piece") };
-    const html = renderPage(report({ current }), { pending: 0, history: [] });
-    expect(html).toContain("Now: no data this period; started at 3.00 per 100 moves; target 2.25.");
-    expect(html).not.toContain("Now 0.00");
-    // The why template quotes this period's rate, so it is not filled with a made-up zero.
-    expect(html).toContain("Wording for this item could not be shown.");
-  });
-});
-
-/** Visible text of a page, entities decoded, whitespace collapsed. */
-function pageText(html: string): { text: string; cells: Set<string> } {
-  const decode = (t: string): string =>
-    t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
-  const body = html.replace(/<style>[\s\S]*?<\/style>/, "").replace(/<title>[\s\S]*?<\/title>/, "");
-  const cells = new Set([...body.matchAll(/<t[dh][^>]*>([^<]*)<\/t[dh]>/g)].map((m) => decode(m[1]!).trim()));
-  const text = decode(body.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
-  return { text, cells };
-}
-
-describe("parity with the text report", () => {
-  it("shows every sentence and table cell the CLI prints", () => {
-    const r = report({
-      notes: ["no-key", "settings-changed"],
-      coverage: { sampled: 20, analysed: 20, total: 31, complete: false, sampleOnly: false },
-      gamesAnalyzed: 20,
-      comparison: period("2026-11-12T00:00:00.000Z", 120, 3.0),
-      trends: PATTERN_IDS.map((id) => ({
-        patternId: id,
-        previous: stat(id, 120, 4200, 3.0),
-        current: stat(id, 31, 1085, 2.1),
-        verdict: id === "hung-piece" ? "improved" : "flat",
-        pValue: id === "hung-piece" ? 0.04 : null,
-      })),
-      progress: [
-        { patternId: "hung-piece", previous: stat("hung-piece", 120, 4200, 3.0), current: stat("hung-piece", 31, 1085, 2.1), verdict: "improved", pValue: 0.04 },
-      ],
-      retired: [
-        { patternId: "thrown-win", why: "graduated", since: "2026-09-24T00:00:00.000Z", baseline: stat("thrown-win", 28, 980, 1.5), current: stat("thrown-win", 31, 1085, 0.9) },
-      ],
-      focus: [
-        focusItem({
-          examples: [
-            { patternId: "hung-piece", gameId: "lichess:g1", ply: 23, winPctLoss: 32.4, fen: FEN, played: "Qxf7", best: "Nf3", evidence: "queen on f7 taken next move", motif: "fork" },
-          ],
-        }),
-      ],
-    });
-    for (const variant of [r, { ...r, focus: [], notes: ["few-games" as const] }]) {
-      const cli = formatReport(variant, { all: true });
-      const { text, cells } = pageText(renderPage(variant, { pending: 11, history: [] }));
-      // Terminal-only until the page is rebuilt: each focus item's count in games and its goal line.
-      const v = reportView(variant, { pending: 11 });
-      const terminalOnly = new Set(
-        v.body.kind === "focus" ? v.body.items.flatMap((i) => [i.frequency, `${i.goalLine} ${i.standing}`]) : [],
-      );
-      for (const raw of cli.split("\n")) {
-        const line = raw.trim().replace(/^- /, "");
-        if (!line || terminalOnly.has(line)) continue;
-        if (/\S\s{2,}\S/.test(line)) {
-          for (const cell of line.split(/\s{2,}/)) expect(cells, `cell "${cell}" of "${line}"`).toContain(cell);
-        } else {
-          expect(text, line).toContain(line.replace(/\s+/g, " "));
-        }
-      }
-    }
-  });
-});

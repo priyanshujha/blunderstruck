@@ -1,6 +1,20 @@
 import { BLIND_SPOT_IDS, type BlindSpot, BLIND_SPOTS, PATTERN_IDS, type PeriodStats, WeeklyReport, gameGoalOf, meetsGoal } from "@blunderstruck/contracts";
 import { describe, expect, it } from "vitest";
-import { BLIND_SPOT_LABELS, PATTERN_NAMES, REFINEMENT_PHRASES, UNSHOWN_WORDING, frequencySentence, gamesPhrase, goalPhrase, reportView, standingSentence } from "./index";
+import {
+  BLIND_SPOT_LABELS,
+  PATTERN_NAMES,
+  REFINEMENT_PHRASES,
+  UNSHOWN_NOTE,
+  UNSHOWN_SUMMARY,
+  UNSHOWN_WORDING,
+  dayMonth,
+  frequencyParts,
+  frequencySentence,
+  gamesPhrase,
+  goalPhrase,
+  reportView,
+  standingSentence,
+} from "./index";
 
 const move = (san: string, from: string, to: string, piece: string, color: string, o: Record<string, unknown> = {}) => ({
   san, uci: `${from}${to}`, from, to, piece, color, check: false, mate: false, fenAfter: "8/8/8/8/8/8/8/8 w - - 0 1", ...o,
@@ -93,34 +107,78 @@ describe("reportView", () => {
     expect(Object.keys(BLIND_SPOT_LABELS).sort()).toEqual([...BLIND_SPOT_IDS].sort());
   });
 
-  it("uses the given pending count, else total minus analysed", () => {
-    expect(reportView(report()).coverage).toBe("Based on 25 of 40 games; 15 still being analysed.");
-    expect(reportView(report(), { pending: 3 }).coverage).toBe("Based on 25 of 40 games; 3 still being analysed.");
+  it("uses the given pending count, else total minus checked, else total minus analysed", () => {
+    expect(reportView(report()).pending).toBe(15);
+    expect(reportView(report(), { pending: 3 }).pending).toBe(3);
+    expect(reportView(report({ coverage: { sampled: 25, analysed: 25, total: 40, complete: false, sampleOnly: false, checked: 0 } })).pending).toBe(40);
     expect(reportView(report()).provisional).toBe(true);
   });
 
-  it("says the period is in, not that nothing is pending, when only earlier games are left", () => {
-    const coverage = { sampled: 30, analysed: 30, total: 30, complete: false, sampleOnly: false };
-    const v = reportView(report({ coverage, gamesFound: 30, gamesAnalyzed: 30 }));
-    expect(v.coverage).toBe("All 30 games of this period are in; earlier games are still being checked, so some figures may change.");
-    expect(v.provisional).toBe(true);
-    expect(reportView(report({ coverage }), { pending: 0 }).coverage).toMatch(/^All 30 games of this period are in/);
-    // Period games still pending keep the count sentence.
-    expect(reportView(report({ coverage: { ...coverage, analysed: 20 } })).coverage).toBe("Based on 20 of 30 games; 10 still being analysed.");
+  describe("the coverage sentence adds up", () => {
+    const cov = (analysed: number, total: number, o: Record<string, unknown> = {}) => ({
+      sampled: analysed, analysed, total, complete: false, sampleOnly: false, ...o,
+    });
+    const cases: [string, Record<string, unknown>, number | undefined, string | undefined, number][] = [
+      ["nothing analysed", cov(0, 412), undefined, "None of your 412 games has been analysed yet.", 412],
+      ["nothing analysed, one game", cov(0, 1), undefined, "Your one game has not been analysed yet.", 1],
+      ["sample analysed, no check", cov(150, 412), undefined, "Based on 150 of your 412 games; the other 262 are still being analysed.", 262],
+      ["sample analysed, one left", cov(411, 412), undefined, "Based on 411 of your 412 games; the other one is still being analysed.", 1],
+      ["sample analysed, first look", cov(150, 412, { checked: 0 }), undefined, "Based on a first look at 150 of your 412 games; none are fully checked so far.", 412],
+      ["sample analysed, some checked", cov(150, 412, { checked: 0 }), 374, "Based on a first look at 150 of your 412 games; 38 are fully checked so far.", 374],
+      ["sample analysed, one checked", cov(150, 412, { checked: 0 }), 411, "Based on a first look at 150 of your 412 games; 1 is fully checked so far.", 411],
+      ["sample analysed and checked", cov(150, 412, { checked: 150 }), undefined, "Based on 150 of your 412 games; the other 262 are still being analysed.", 262],
+      ["all analysed, none checked", cov(64, 64, { checked: 0 }), undefined, "64 of 64 games still to check; counts may change.", 64],
+      ["all analysed, some checked", cov(64, 64, { checked: 0 }), 41, "41 of 64 games still to check; counts may change.", 41],
+      ["all analysed, one game", cov(1, 1, { checked: 0 }), undefined, "Your one game is still to check; counts may change.", 1],
+      [
+        "all analysed and checked, earlier games left",
+        cov(30, 30),
+        undefined,
+        "All 30 games of this period are in; earlier games are still being checked, so some figures may change.",
+        0,
+      ],
+      ["complete", cov(64, 64, { complete: true, checked: 64 }), 5, undefined, 0],
+      ["sample only", cov(150, 400, { sampleOnly: true }), undefined, "Based on a sample of 150 of 400 games; run report again to analyse the rest.", 250],
+    ];
+    for (const [name, coverage, pending, sentence, shownPending] of cases) {
+      it(name, () => {
+        const v = reportView(report({ coverage }), pending === undefined ? {} : { pending });
+        expect(v.coverage).toBe(sentence);
+        expect(v.pending).toBe(shownPending);
+      });
+    }
   });
 
   it("builds the week table oldest first with a dash for an empty week", () => {
     const v = reportView(report({ kind: "weekly" }));
     expect(v.weeks.table.head).toEqual(["Week ending", "Games", "Mistakes /100"]);
     expect(v.weeks.table.rows).toHaveLength(6);
-    expect(v.weeks.table.rows[0]).toEqual(["2026-10-15", "0", "-"]);
-    expect(v.weeks.table.rows.at(-1)).toEqual(["2026-11-19", "4", "6.50"]);
+    expect(v.weeks.table.rows[0]).toEqual(["15 Oct", "0", "-"]);
+    expect(v.weeks.table.rows.at(-1)).toEqual(["19 Nov", "4", "6.50"]);
   });
 
   it("decides too few games from the note", () => {
     const v = reportView(report({ notes: ["few-games"] }));
-    expect(v.body.kind === "numbers" && v.body.intro).toBe("Too few games to pick focus items (40 games found). Here are the numbers.");
+    expect(v.body.kind === "numbers" && v.body.intro).toBe("Too few games to pick habits to work on (40 games found). Here are the numbers.");
     expect(v.notes.lines).toEqual([]);
+  });
+
+  it("words a report with nothing picked without jargon, first and weekly", () => {
+    for (const kind of ["first", "weekly"]) {
+      const picked = reportView(report({ kind }));
+      expect(picked.body.kind === "numbers" && picked.body.intro).toBe(
+        "No habit repeated often enough to pick one to work on in this period. Here are the numbers.",
+      );
+      const few = reportView(report({ kind, notes: ["few-games"] }));
+      // Said in the body when the body is the numbers; the note says it otherwise.
+      const fewNote = reportView(report({ kind, notes: ["few-games"], focus: [focusItem()] }));
+      for (const v of [picked, few, fewNote]) {
+        const all = JSON.stringify(v);
+        expect(all, kind).not.toMatch(/focus items?\b/i);
+        expect(all, kind).not.toContain("this week");
+      }
+      expect(fewNote.notes.lines).toContain("Too few games in this period, so no habits were picked to work on.");
+    }
   });
 
   it("exports the neutral fallback sentence", () => {
@@ -167,11 +225,11 @@ describe("reportView", () => {
     const v = reportView(report({ weeks, focus: [focus] }));
     expect(v.weeks.table.head[0]).toBe("Week");
     expect(v.weeks.table.rows.map((r) => r[0])).toEqual([
-      "2026-10-20 to 2026-10-22",
-      "2026-10-22 to 2026-10-29",
-      "2026-10-29 to 2026-11-05",
-      "2026-11-05 to 2026-11-12",
-      "2026-11-12 to 2026-11-19",
+      "20 Oct to 22 Oct",
+      "22 Oct to 29 Oct",
+      "29 Oct to 5 Nov",
+      "5 Nov to 12 Nov",
+      "12 Nov to 19 Nov",
     ]);
     expect(v.weeks.table.rows[0]!.slice(1)).toEqual(["0", "-", "-"]);
     expect(v.weeks.table.rows[3]!.slice(1)).toEqual(["0", "-", "-"]);
@@ -355,7 +413,8 @@ describe("focus items in games and words", () => {
       "Your queen went to d2.",
       "They found it: the knight jumped to e4 with check, hitting your king and queen at once.",
     ]);
-    expect(ex.cost?.text).toBe("It cost your queen.");
+    // Stored without the game's own moves: what the engine's line shows, as a possibility.
+    expect(ex.cost?.text).toBe("It could have cost your queen.");
     expect(v.details.focus).toEqual(["Allowed a tactic: Now 0.20 per 100 moves; started at 1.32; target 1.00."]);
     expect(v.notes.lines).toEqual([]);
   });
@@ -388,13 +447,16 @@ describe("focus items in games and words", () => {
     const v = reportView(report({ kind: "weekly", weeks, focus: [focusItem()] }));
     const w = v.body.kind === "focus" ? v.body.items[0]!.weeks : [];
     expect(w.map((x) => [x.label, x.affected, x.games, x.noGames, x.text])).toEqual([
-      ["2026-10-15", 7, 20, false, "7 of 20 games"],
-      ["2026-10-22", 6, 20, false, "6 of 20 games"],
-      ["2026-10-29", 5, 20, false, "5 of 20 games"],
-      ["2026-11-05", null, 20, false, "no data"],
-      ["2026-11-12", null, 0, true, "no games"],
-      ["2026-11-19", 2, 20, false, "2 of 20 games"],
+      ["15 Oct", 7, 20, false, "7 of 20 games"],
+      ["22 Oct", 6, 20, false, "6 of 20 games"],
+      ["29 Oct", 5, 20, false, "5 of 20 games"],
+      ["5 Nov", null, 20, false, "no data"],
+      ["12 Nov", null, 0, true, "no games"],
+      ["19 Nov", 2, 20, false, "2 of 20 games"],
     ]);
+    // The ISO days stay available.
+    expect(w[0]!.start).toBe("2026-10-08T00:00:00.000Z");
+    expect(w[0]!.end).toBe("2026-10-15T00:00:00.000Z");
     expect(w[0]!.share).toBeCloseTo(0.35);
     expect(w[4]!.share).toBeNull();
   });
@@ -431,8 +493,142 @@ describe("focus items in games and words", () => {
       "Left a piece hanging: improved. 38 of 120 games (about 1 game in 3) before, 4 of 31 games (about 1 game in 8) since.",
     ]);
     expect(v.retiredInGames?.lines).toEqual([
-      "Let a winning position slip: reached its target and stayed there. 12 of 28 games (about 4 in every 10 games) when it was chosen on 2026-09-24, 3 of 31 games (about 1 game in 10) now.",
+      "Let a winning position slip: reached its goal and stayed there. 12 of 28 games (about 4 in every 10 games) when it was chosen on 24 Sep, 3 of 31 games (about 1 game in 10) now.",
     ]);
     expect(v.details.progress?.lines[0]).toContain("per 100 moves");
+    expect(v.details.retired?.lines[0]).toBe("Let a winning position slip: reached its goal and stayed there. 1.00 per 100 moves on 24 Sep, 1.00 now.");
+
+    expect(v.progressInGames?.items).toEqual([
+      {
+        patternId: "hung-piece",
+        patternName: "Left a piece hanging",
+        verdict: "improved",
+        verdictText: "improved",
+        before: { affected: 38, games: 120, text: "38 of 120 games (about 1 game in 3)" },
+        after: { affected: 4, games: 31, text: "4 of 31 games (about 1 game in 8)" },
+        counts: "38 of 120 games (about 1 game in 3) before, 4 of 31 games (about 1 game in 8) since.",
+        text: v.progressInGames!.lines[0],
+      },
+    ]);
+    expect(v.retiredInGames?.items).toEqual([
+      {
+        patternId: "thrown-win",
+        patternName: "Let a winning position slip",
+        why: "graduated",
+        verdictText: "reached its goal and stayed there",
+        since: "2026-09-24T00:00:00.000Z",
+        sinceText: "24 Sep",
+        before: { affected: 12, games: 28, text: "12 of 28 games (about 4 in every 10 games)" },
+        after: { affected: 3, games: 31, text: "3 of 31 games (about 1 game in 10)" },
+        counts: "12 of 28 games (about 4 in every 10 games) when it was chosen on 24 Sep, 3 of 31 games (about 1 game in 10) now.",
+        text: v.retiredInGames!.lines[0],
+      },
+    ]);
+  });
+
+  it("gives the frequency phrase on its own, only when the sentence says it", () => {
+    const one = (affected: number, goal?: { per: number; of: number }) => {
+      const p = period(END, 162);
+      p.stats = p.stats.map((s) => (s.patternId === "allowed-tactic" ? { ...s, gamesAffected: affected } : s));
+      const v = reportView(report({ current: p, focus: [focusItem(goal ? { goal } : {})] }));
+      return v.body.kind === "focus" ? v.body.items[0]! : undefined;
+    };
+    expect(one(51)?.frequencyPhrase).toBe("about 1 game in 3");
+    expect(one(51)?.frequency).toBe("In 51 of your 162 games, about 1 game in 3.");
+    expect(one(162)?.frequencyPhrase).toBeUndefined();
+    expect(one(0)?.frequencyPhrase).toBeUndefined();
+    // A phrase that would read as meeting a missed goal is left out of both.
+    // 56 of 162 is about 1 game in 3, over a goal of 1 in 3 (54 games).
+    expect(one(56, { per: 1, of: 3 })?.frequency).toBe("In 56 of your 162 games.");
+    expect(one(56, { per: 1, of: 3 })?.frequencyPhrase).toBeUndefined();
+    expect(frequencyParts({ games: 100, gamesAffected: 63 })).toEqual({ sentence: "In 63 of your 100 games, about 6 in every 10 games.", phrase: "about 6 in every 10 games" });
+  });
+});
+
+describe("dates in day-month form", () => {
+  const cases: [string, boolean | number, string][] = [
+    ["2026-11-12T00:00:00.000Z", false, "12 Nov"],
+    ["2026-01-01T00:00:00.000Z", false, "1 Jan"],
+    ["2026-12-31T23:59:59.999Z", false, "31 Dec"],
+    // UTC days, whatever the offset written.
+    ["2026-03-01T01:00:00.000+02:00", false, "28 Feb"],
+    ["2026-11-12T00:00:00.000Z", true, "12 Nov 2026"],
+    ["2026-11-12T00:00:00.000Z", 2026, "12 Nov"],
+    ["2025-12-29T00:00:00.000Z", 2026, "29 Dec 2025"],
+    ["not a date", false, "not a date"],
+  ];
+  for (const [iso, year, out] of cases) {
+    it(`${iso} (${String(year)}) is ${out}`, () => expect(dayMonth(iso, year)).toBe(out));
+  }
+
+  it("writes the period, the kept item and the week labels that way, with the ISO times as data", () => {
+    const kept = focusItem({ since: "2026-10-29T00:00:00.000Z", reason: { ...focusItem().reason, kind: "kept" } });
+    const v = reportView(report({ focus: [kept] }));
+    expect(v.header.period).toBe("Period: 20 Oct to 19 Nov 2026");
+    expect(v.dates).toEqual({ periodStart: "2026-10-20T00:00:00.000Z", periodEnd: END });
+    const item = v.body.kind === "focus" ? v.body.items[0]! : undefined;
+    expect(item?.reason).toBe("It came up in 4 of your last 5 weeks. Kept from your last report (since 29 Oct).");
+    expect(item?.since).toBe("2026-10-29T00:00:00.000Z");
+    expect(JSON.stringify(v.header) + JSON.stringify(v.weeks) + item?.reason).not.toMatch(/\d{4}-\d\d-\d\d/);
+  });
+
+  it("names the year of a date from another year than the period's end", () => {
+    const v = reportView(report({ periodStart: "2025-12-22T00:00:00.000Z", periodEnd: "2026-01-05T00:00:00.000Z" }));
+    expect(v.header.period).toBe("Period: 22 Dec 2025 to 5 Jan 2026");
+  });
+});
+
+describe("no per-100 figure in wording for the main screen", () => {
+  const stored = {
+    title: "Down to {target} per 100 moves",
+    why: "You are at {rate}, from {baselineRate}.",
+    drill: "Get below {target}.",
+  };
+  const builtIn = {
+    summary: "Over {games} games you made {mistakesPerGame} mistakes a game.",
+    focus: [
+      {
+        patternId: "allowed-tactic",
+        title: "Shots left open",
+        why: "In {gamesAffected} of {games} games.",
+        drill: "Look for their checks.",
+        steps: [{ blindSpot: "answer-check", text: "{count} of your {of} came with check." }],
+      },
+    ],
+  };
+
+  it("shows the built-in wording for each field with a per-100 token, and says so", () => {
+    const r = report({ summary: "{games} games, {mistakeRate} per 100 moves.", focus: [focusItem(stored)] });
+    const v = reportView(r, { fallback: builtIn });
+    const item = v.body.kind === "focus" ? v.body.items[0]! : undefined;
+    expect(v.summary).toBe("Over 25 games you made 2.3 mistakes a game.");
+    expect([item?.title, item?.why, item?.drill]).toEqual(["Shots left open", "In 1 of 25 games.", "Look for their checks."]);
+    expect(v.notes.lines).toEqual([UNSHOWN_NOTE]);
+    // The figures stay in the details.
+    expect(v.details.focus[0]).toContain("per 100 moves");
+    const main = JSON.stringify([v.summary, item?.title, item?.why, item?.drill, item?.steps, item?.frequency, item?.standing, v.progressInGames, v.retiredInGames]);
+    expect(main).not.toContain("per 100");
+  });
+
+  it("keeps stored wording without such a token, and falls back for a step that does not render", () => {
+    const v = reportView(
+      report({ focus: [focusItem({ steps: [{ blindSpot: "answer-check", text: "{rate} {count}" }] })] }),
+      { fallback: builtIn },
+    );
+    const item = v.body.kind === "focus" ? v.body.items[0]! : undefined;
+    expect(item?.title).toBe("Look at their checks first");
+    expect(v.summary).toBe("25 games.");
+    expect(item?.steps[0]?.text).toBe("23 of your 62 came with check.");
+    expect(v.notes.lines).toEqual([UNSHOWN_NOTE]);
+  });
+
+  it("shows the plain stand-in without built-in wording, or when the built-in wording has the token too", () => {
+    const r = report({ summary: "{mistakeRate} per 100 moves.", focus: [focusItem(stored)] });
+    for (const v of [reportView(r), reportView(r, { fallback: { summary: "{mistakeRate}", focus: [{ patternId: "allowed-tactic", why: "{rate}" }] } })]) {
+      const item = v.body.kind === "focus" ? v.body.items[0]! : undefined;
+      expect(v.summary).toBe(UNSHOWN_SUMMARY);
+      expect([item?.title, item?.why, item?.drill]).toEqual([UNSHOWN_WORDING, UNSHOWN_WORDING, UNSHOWN_WORDING]);
+      expect(v.notes.lines).toEqual([UNSHOWN_NOTE]);
+    }
   });
 });

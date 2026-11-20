@@ -149,13 +149,18 @@ describe("formatReport", () => {
 
     expect(lines[0]).toBe("Weekly report for quiet_rook_test (lichess, rapid)");
     expect(text).toContain("Rating band: club, from your median rating of 1420 in these games");
-    expect(text).toContain("Period: 2026-11-12 to 2026-11-19");
+    expect(text).toContain("Period: 12 Nov to 19 Nov 2026");
     expect(text).toContain("Games: 31 found, all analysed");
     expect(text).not.toContain("still being analysed");
-    expect(text).toContain("31 games, 6.50 mistakes per 100 moves. 1 thing to work on.");
+    // The stored summary and why state rates per 100 moves: the built-in wording stands in, and a note says so.
+    expect(text).not.toContain("31 games, 6.50 mistakes per 100 moves.");
+    expect(text).toContain("Over 31 games you made 2.3 mistakes a game.");
     expect(text).toContain("1. Look before you let go of a piece");
-    expect(text).toContain("You left a piece hanging in 23 of 31 games, 2.10 per 100 moves.");
-    expect(text).toContain("It came up in 5 of your last 6 weeks.");
+    expect(text).not.toContain("You left a piece hanging in 23 of 31 games");
+    expect(text).toContain("   A piece was left where it could simply be taken.");
+    expect(text).not.toContain("per 100 moves");
+    expect(text).toContain("- Some stored wording could not be shown, so a plain sentence stands in its place.");
+    expect(text).toContain("It came up in 5 of your last 6 weeks. Kept from your last report (since 29 Oct).");
     // Games, not rates, without `all`; the older item's goal comes from its baseline.
     expect(text).toContain("   In 23 of your 31 games.");
     expect(text).toContain("   Goal: at most 7 in every 10 games. In these 31 games that means 21 or fewer; you are at 23.");
@@ -163,10 +168,12 @@ describe("formatReport", () => {
     expect(text).not.toContain("Position (FEN)");
     expect(text).toContain("   - Move 12, you had White\n     You played Qxf7; better was Nf3 (-32.4 win%)");
     expect(text).toContain("You played Bxf7 (-25.0 win%)");
-    expect(text).toContain("How often, week by week (goal: at most 7 in every 10 games):\n   - 2026-10-15: 6 of 6 games");
+    expect(text).toContain("How often, week by week (goal: at most 7 in every 10 games):\n   - 15 Oct: 6 of 6 games");
     expect(text).toContain("Left a piece hanging: improved. 30 of 30 games (in every game) before, 22 of 30 games (about 7 in every 10 games) since.");
     expect(text).toContain("Missed a winning tactic: not enough games yet");
-    expect(text).toContain("Let a winning position slip: reached its target and stayed there");
+    expect(text).toContain(
+      "Let a winning position slip: reached its goal and stayed there. 15 of 28 games (about 1 game in 2) when it was chosen on 24 Sep, 10 of 31 games (about 1 game in 3) now.",
+    );
     expect(text).not.toMatch(/\{\w+\}/);
     // No per-100 week table or trends without `all`.
     expect(text).not.toContain("rates per 100 moves");
@@ -200,11 +207,13 @@ describe("formatReport", () => {
     expect(text).toContain(`Position (FEN): ${FEN}`);
     expect(text).toContain("Left a piece hanging: improved (3.00 before, 2.10 now, per 100 moves, p = 0.040)");
     expect(text).toContain("Week by week");
-    const rows = text.split("\n").filter((l) => /^2026-\d\d-\d\d\s+6\s/.test(l));
+    const rows = text.split("\n").filter((l) => /^\d{1,2} [A-Z][a-z]{2}\s+6\s/.test(l));
     expect(rows).toHaveLength(6);
     // Oldest week first, newest last.
-    expect(rows[0]).toMatch(/^2026-10-15/);
-    expect(rows[5]).toMatch(/^2026-11-19.*2\.10$/);
+    expect(rows[0]).toMatch(/^15 Oct\s/);
+    expect(rows[5]).toMatch(/^19 Nov.*2\.10$/);
+    // The rates the main screen leaves out are all here.
+    expect(text).toContain("Retired from your list\n- Let a winning position slip: reached its goal and stayed there. 1.50 per 100 moves on 24 Sep, 0.90 now.");
     expect(text).toContain("All patterns against the 30 days before");
     for (const name of ["Missed a mate", "Walked into a mate", "Same opening mistake again"]) {
       expect(text).toContain(name);
@@ -252,8 +261,11 @@ describe("formatReport", () => {
         notes: ["few-games", "no-key"],
       }),
     );
-    expect(text).toContain("Too few games to pick focus items (7 games found).");
-    expect(text).toContain("7 games so far, 6.50 mistakes per 100 moves.");
+    expect(text).toContain("Too few games to pick habits to work on (7 games found).");
+    expect(text).not.toContain("focus items (");
+    // The stored summary states a rate per 100 moves: the built-in summary stands in.
+    expect(text).not.toContain("6.50 mistakes per 100 moves");
+    expect(text).toContain("Only 7 games in this period, so here are the numbers on their own.");
     expect(text).toContain("The numbers");
     expect(text).toContain("- Left a piece hanging: in 4 of your 7 games, about 6 in every 10 games.");
     expect(text).toContain("- Missed a mate: not once in your 7 games.");
@@ -261,11 +273,11 @@ describe("formatReport", () => {
     expect(formatReport(weekly({ kind: "first", gamesFound: 7, focus: [], notes: ["few-games"], current: period("2026-11-19T00:00:00.000Z", 7, { "hung-piece": 1.5 }) }), { all: true })).toMatch(
       /Left a piece hanging\s+1\.50\s+/,
     );
-    expect(text).not.toContain("Focus");
+    expect(text).not.toMatch(/^Focus/m);
     expect(text).not.toContain("Week by week");
     expect(text).toContain("No model key was set, so the wording comes from built-in templates.");
     // The few-games note is not repeated once the body has said it.
-    expect(text).not.toContain("so no focus items were picked");
+    expect(text).not.toContain("so no habits were picked");
   });
 
   it("marks a provisional report with the analysed share and the pending count", () => {
@@ -279,13 +291,27 @@ describe("formatReport", () => {
       { pending: 1350 },
     );
     expect(text).toContain("Games: 1,500 found, 150 analysed");
-    expect(text).toContain("Based on 150 of 1,500 games; 1,350 still being analysed.");
+    expect(text).toContain("Based on 150 of your 1,500 games; the other 1,350 are still being analysed.");
     // Without `pending`, it is worked out from the coverage.
     expect(
       formatReport(
         weekly({ gamesFound: 1500, gamesAnalyzed: 150, coverage: { sampled: 150, analysed: 150, total: 1500, complete: false, sampleOnly: false } }),
       ),
-    ).toContain("1,350 still being analysed.");
+    ).toContain("the other 1,350 are still being analysed.");
+    // A first look, with the deeper check still to come for most games.
+    expect(
+      formatReport(
+        weekly({ gamesFound: 412, gamesAnalyzed: 150, coverage: { sampled: 150, analysed: 150, total: 412, complete: false, sampleOnly: false, checked: 0 } }),
+        { pending: 374 },
+      ),
+    ).toContain("Based on a first look at 150 of your 412 games; 38 are fully checked so far.");
+    // Every game analysed, only the deeper check left.
+    expect(
+      formatReport(
+        weekly({ gamesFound: 64, gamesAnalyzed: 64, coverage: { sampled: 64, analysed: 64, total: 64, complete: false, sampleOnly: false, checked: 0 } }),
+        { pending: 41 },
+      ),
+    ).toContain("\n41 of 64 games still to check; counts may change.\n");
   });
 
   it("words a sample-only report and the note", () => {
@@ -320,8 +346,11 @@ describe("formatReport", () => {
 
   it("never throws on stored wording that no longer renders, and shows no braces", () => {
     const text = formatReport(weekly({ summary: "{oldToken} games", focus: [focusItem("hung-piece", { why: "In {renamed} games.", title: "Unpaired {" })] }));
-    expect(text).toContain("Wording for this item could not be shown.");
-    expect(text).toContain("The summary could not be shown.");
+    // The built-in wording stands in for each field.
+    expect(text).toContain("1. Pieces left out in the open [Left a piece hanging]");
+    expect(text).toContain("   A piece was left where it could simply be taken.");
+    expect(text).toContain("Over 31 games you made 2.3 mistakes a game.");
+    expect(text).not.toContain("could not be shown.\n");
     expect(text).toContain("- Some stored wording could not be shown, so a plain sentence stands in its place.");
     expect(text).not.toMatch(/[{}]/);
   });
@@ -342,7 +371,8 @@ describe("formatReport", () => {
 
   it("decides too few games from the note alone", () => {
     const text = formatReport(weekly({ focus: [], gamesFound: 5, notes: [] }));
-    expect(text).toContain("No habit repeated often enough to pick a focus item this week.");
+    expect(text).toContain("No habit repeated often enough to pick one to work on in this period.");
+    expect(text).not.toContain("this week");
     expect(text).not.toContain("Too few games");
   });
 
@@ -362,7 +392,19 @@ describe("formatReport", () => {
       ],
       replyFound: true,
       followed: 4,
-      lostInGame: true,
+      // The game played the whole line and paid for the move.
+      inGame: {
+        moves: [
+          mv("Ne4+", "f6", "e4", "knight", "black", { check: true }),
+          mv("Ke1", "f2", "e1", "king", "white"),
+          mv("Nxd2", "e4", "d2", "knight", "black", { captured: "queen" }),
+          mv("Kxd2", "e1", "d2", "king", "white", { captured: "knight" }),
+        ],
+        ended: false,
+        paid: true,
+        net: 6,
+        lost: { square: "d2", piece: "queen", color: "white" },
+      },
       better: [mv("Re1", "h1", "e1", "rook", "white")],
       targets: [{ square: "f2", piece: "king", color: "white" }, { square: "d2", piece: "queen", color: "white" }],
       lost: { square: "d2", piece: "queen", color: "white" },
@@ -468,7 +510,7 @@ describe("formatReport", () => {
     const F1_FOUND = "they: They found it: the knight jumped to e4 with check, hitting your king and queen at once.";
     const F1_BETTER = "better: Rook to e1. After it, e4 is guarded, so the knight cannot land there safely.";
 
-    it("case A, 1.Qd5? Nxd5 2.Nxd5 exd5: the queen taken another way is a fact", async () => {
+    it("case A, 1.Qd5? Nxd5 2.Nxd5 exd5: the game's moves are told, and the cost stays a possibility unless the game paid", async () => {
       expect(
         await told(
           {
@@ -484,7 +526,7 @@ describe("formatReport", () => {
         "they: That let the pawn take your queen on d5.",
         "then: In the game they took it with the knight, your knight took their knight, and the pawn took your knight. The game ended there.",
         "better: Rook to e1. It keeps the position together.",
-        "cost: It cost your queen.",
+        "cost: It could have cost about 11 pawns of material.",
       ]);
     });
 
@@ -510,9 +552,9 @@ describe("formatReport", () => {
         "better: Queen takes the knight on d4. It wins their knight.",
         "cost: It could have cost your queen for a knight.",
       ]);
-      // The same game ending after Rad8: what happened, and that it ended; nothing would follow.
+      // The same game ending after Rad8: the story keeps only the reply, so neither the end nor "nothing was lost" is said.
       expect((await told({ pgn: fenPgn(qc1, "1. Qc1 Ne2+ 2. Kh1 Rad8"), as: "white", evals }, 1, "allowed-tactic"))[2]).toBe(
-        "then: Your king stepped aside, and the rook went to d8. The game ended there.",
+        "then: From there your king would have to step aside, the knight would take your queen, and your rook would take the knight.",
       );
     });
 

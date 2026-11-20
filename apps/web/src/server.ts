@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
-import { type Platform, type ReportTimeClass, type Track, type WeeklyReport, perspective, settingsKey, trackKey } from "@blunderstruck/contracts";
+import { type Platform, type ReportTimeClass, type Track, type WeeklyReport, settingsKey, trackKey } from "@blunderstruck/contracts";
 import { SchemaVersionError, type Store, openSqliteStore } from "@blunderstruck/store";
-import { STYLE_HASH, renderMessage, renderPage } from "./render";
+import { pendingGames } from "./pending";
+import { pageSecurity, renderMessage, renderPage } from "./render";
 
 export interface HandlerOptions {
   /** Whether the time class was given on the command line, so commands shown repeat it. Default true. */
@@ -27,7 +28,7 @@ export function hostAllowed(host: string | undefined, port: number | undefined):
 
 const SECURITY_HEADERS = {
   "X-Content-Type-Options": "nosniff",
-  "Content-Security-Policy": `default-src 'none'; style-src ${STYLE_HASH}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+  "Content-Security-Policy": pageSecurity().csp,
   "Referrer-Policy": "no-referrer",
   "Cache-Control": "no-store",
 } as const;
@@ -58,39 +59,6 @@ function findReport(reports: readonly WeeklyReport[], segment: string): WeeklyRe
   if (/^\d{4}-\d{2}-\d{2}$/.test(segment)) return [...reports].reverse().find((r) => r.periodEnd.slice(0, 10) === segment);
   const t = Date.parse(segment);
   return Number.isNaN(t) ? undefined : reports.find((r) => Date.parse(r.periodEnd) === t);
-}
-
-/**
- * Games of the report's period still waiting at the report's own settings: not analysed, or,
- * when the settings ask for a deeper check, not checked for the player's colour.
- *
- * This mirrors `pendingFor` in the report package for the period's games only. That function
- * cannot be used here: the report package depends on the engine, which this app does not. So
- * games of the comparison window and the other weeks, which the report also waits on, are not
- * counted. A capped report counts the games it kept (`cappedGameIds`); one stored before that
- * field counts every game of the period, as the cut cannot be recomputed here.
- */
-export async function pendingGames(store: Store, r: WeeklyReport): Promise<number> {
-  if (r.coverage.complete) return 0;
-  const ids = r.cappedGameIds ?? r.gameIds;
-  const checkDepth = r.settings.checkDepth ?? 0;
-  const key = {
-    analysisVersion: r.settings.analysisVersion,
-    depth: r.settings.engine.depth,
-    checkDepth,
-    engineName: r.settings.engine.name,
-  };
-  if (checkDepth === 0) {
-    const done = await store.analysedIds(ids, key);
-    return ids.filter((id) => !done.has(id)).length;
-  }
-  const [analyses, games] = await Promise.all([store.getAnalyses(ids, key), store.gamesById(ids)]);
-  return ids.filter((id) => {
-    const a = analyses.get(id);
-    const g = games.get(id);
-    const color = g ? perspective(g, r.player)?.color : undefined;
-    return !(a?.check && color && a.check.colors.includes(color));
-  }).length;
 }
 
 /** Same as `handler`, with the command-line details the pages repeat back. */

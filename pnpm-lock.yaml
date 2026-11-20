@@ -53,6 +53,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@blunderstruck/coach':
+        specifier: workspace:*
+        version: link:../../packages/coach
       '@blunderstruck/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

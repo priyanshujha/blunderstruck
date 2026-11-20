@@ -19,7 +19,12 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll } from "vitest";
 import { createServer } from "node:http";
 import { writeFileSync } from "node:fs";
-import { createHandler, handler, hostAllowed, openForWeb, pendingGames, problemHandler, startServer } from "./server";
+import { templateWording } from "@blunderstruck/coach";
+import { dayMonth, reportView } from "@blunderstruck/view";
+import { esc } from "./html";
+import { pendingGames } from "./pending";
+import { pageSecurity } from "./render";
+import { createHandler, handler, hostAllowed, openForWeb, problemHandler, startServer } from "./server";
 
 // Invented players and games only. No socket: the handler is called with fake objects.
 const XSS = `<script>alert(1)</script>`;
@@ -177,10 +182,12 @@ describe("handler", () => {
     expect(r.status).toBe(200);
     expect(r.headers["content-type"]).toBe("text/html; charset=utf-8");
     expect(r.headers["x-content-type-options"]).toBe("nosniff");
-    expect(r.headers["content-security-policy"]).toMatch(/^default-src 'none'; style-src 'sha256-[A-Za-z0-9+/=]+';/);
+    expect(r.headers["content-security-policy"]).toBe(pageSecurity().csp);
+    expect(r.headers["content-security-policy"]).toMatch(/^default-src 'none'; style-src 'sha256-[A-Za-z0-9+/=]+'; script-src 'sha256-[A-Za-z0-9+/=]+';/);
     expect(r.body).toContain("Weekly report for quiet_rook_test (lichess, rapid)");
     expect(r.body).toContain("Model says &lt;script&gt;alert(1)&lt;/script&gt;");
-    expect(r.body).not.toMatch(/<script/i);
+    expect(r.body.match(/<script/gi)).toHaveLength(1);
+    expect(r.body).not.toContain("<script>alert");
   });
 
   it("escapes a username and an opening name from the store", async () => {
@@ -191,9 +198,9 @@ describe("handler", () => {
     await store.putReport(report(track));
     const r = await call(handler(store, track), "GET", "/");
     expect(r.status).toBe(200);
-    expect(r.body).not.toMatch(/<script/i);
-    expect(r.body).toContain("Weekly report for &lt;script&gt;alert(1)&lt;/script&gt;");
-    expect(r.body).toContain("C20 &quot;&gt;&lt;script&gt;x()&lt;/script&gt;");
+    expect(r.body.match(/<script/gi)).toHaveLength(1);
+    expect(r.body).toContain("<title>Weekly report for &lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(r.body).toContain(" · &quot;&gt;&lt;script&gt;x()&lt;/script&gt;");
   });
 
   it("says to run the report command first when nothing is stored", async () => {
@@ -202,7 +209,7 @@ describe("handler", () => {
     const r = await call(h, "GET", "/");
     expect(r.status).toBe(200);
     expect(r.body).toContain("No report yet");
-    expect(r.body).toContain("<code>pnpm cli report lichess new_pawn_test</code>");
+    expect(r.body).toContain('<code class="cmd">pnpm cli report lichess new_pawn_test</code>');
     const withFlags = createHandler(store, TRACK, { dbArg: "/tmp/my games.db" });
     expect((await call(withFlags, "GET", "/")).body).toContain(
       "pnpm cli report lichess quiet_rook_test --time-class rapid --db &#39;/tmp/my games.db&#39;",
@@ -215,7 +222,8 @@ describe("handler", () => {
     await store.putAnalysis(analysis("lichess:g1"));
     await store.putAnalysis(analysis("lichess:g2"));
     const r = await call(handler(store, TRACK), "GET", "/");
-    expect(r.body).toContain("Based on 1 of 4 games; 2 still being analysed.");
+    const view = reportView((await store.latestReport(TRACK))!, { pending: 2 });
+    expect(r.body).toContain(view.coverage!);
     expect(r.body).toContain('<meta http-equiv="refresh" content="30">');
   });
 
@@ -245,7 +253,7 @@ describe("handler", () => {
     const store = await seeded();
     for (let i = 0; i < 9; i++) await store.putPeriodStats(trackKey(TRACK), settingsKey(SETTINGS), period(weekEnd(END, i), 3));
     const r = await call(handler(store, TRACK), "GET", "/");
-    expect(r.body).toContain(`<td>${weekEnd(END, 8).slice(0, 10)}</td>`);
+    expect(r.body).toContain(`<td>${dayMonth(weekEnd(END, 8), 2026)}</td>`);
   });
 
   it("serves an earlier report and links between them", async () => {
@@ -318,9 +326,9 @@ describe("handler", () => {
     await store.putReport(report(TRACK, { periodEnd: older, kind: "weekly" }));
     for (let i = 0; i < 3; i++) await store.putPeriodStats(trackKey(TRACK), settingsKey(SETTINGS), period(weekEnd(END, i), 3));
     const r = await call(handler(store, TRACK), "GET", `/report/${encodeURIComponent(older)}`);
-    expect(r.body).toContain("<td>2026-11-12</td>");
-    expect(r.body).toContain("<td>2026-11-05</td>");
-    expect(r.body).not.toContain("<td>2026-11-19</td>");
+    expect(r.body).toContain("<td>12 Nov</td>");
+    expect(r.body).toContain("<td>5 Nov</td>");
+    expect(r.body).not.toContain("<td>19 Nov</td>");
   });
 
   it("shows a neutral sentence and a note when stored wording no longer renders", async () => {
@@ -329,15 +337,19 @@ describe("handler", () => {
     await store.putReport({ ...base, revision: 2, summary: "{oldToken} games", focus: [{ ...base.focus[0]!, why: "In {renamed} games." }] });
     const r = await call(handler(store, TRACK), "GET", "/");
     expect(r.status).toBe(200);
-    expect(r.body).toContain("Wording for this item could not be shown.");
-    expect(r.body).toContain("The summary could not be shown.");
+    // The built-in wording stands in, as in the terminal; the note says so.
+    const stored = (await store.latestReport(TRACK))!;
+    const view = reportView(stored, { pending: 0, fallback: templateWording(stored) });
+    if (view.body.kind !== "focus") throw new Error("expected focus");
+    expect(r.body).toContain(esc(view.body.items[0]!.why));
+    expect(r.body).toContain(esc(view.summary!));
     expect(r.body).toContain("Some stored wording could not be shown");
-    expect(r.body.replace(/<style>[\s\S]*?<\/style>/, "")).not.toMatch(/[{}]/);
+    expect(r.body.replace(/<style>[\s\S]*?<\/style>/, "").replace(/<script>[\s\S]*?<\/script>/, "").replace(/data-b="[^"]*"/g, "")).not.toMatch(/[{}]/);
   });
 
   it("shows focus items on a report with no earlier focus to compare", async () => {
     const r = await call(handler(await seeded(), TRACK), "GET", "/");
-    expect(r.body).toContain("<h2>Focus</h2>");
+    expect(r.body).toContain('<section class="focus" id="focus-1">');
     expect(r.body).not.toContain("Last report&#39;s focus");
   });
 });
@@ -358,7 +370,7 @@ describe("opening the database for the page", () => {
     const r = await show(path);
     expect(r.status).toBe(200);
     expect(r.body).toContain("Run the report command first");
-    expect(r.body).toContain(`<code>${CMD}</code>`);
+    expect(r.body).toContain(`<code class="cmd">${CMD}</code>`);
     expect(r.headers["content-security-policy"]).toMatch(/^default-src 'none'/);
     await expect(openForWeb(path, CMD)).resolves.toHaveProperty("problem");
   });
@@ -370,7 +382,7 @@ describe("opening the database for the page", () => {
     db.close();
     const r = await show(path);
     expect(r.body).toContain("run the report command once");
-    expect(r.body).toContain(`<code>${CMD}</code>`);
+    expect(r.body).toContain(`<code class="cmd">${CMD}</code>`);
   });
 
   it("names a newer database plainly", async () => {
@@ -381,7 +393,7 @@ describe("opening the database for the page", () => {
     db.close();
     const r = await show(path);
     expect(r.body).toContain("this database was written by a newer version of blunderstruck");
-    expect(r.body).not.toContain("<code>");
+    expect(r.body).not.toContain('<code class="cmd">');
   });
 
   it("rejects startup on a corrupt file and leaves no server listening", async () => {

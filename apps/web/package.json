@@ -4,7 +4,12 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",
-  "exports": { ".": "./src/main.ts" },
+  "exports": { ".": "./src/main.ts", "./render": "./src/render.ts" },
   "scripts": { "typecheck": "tsc --noEmit -p ." },
-  "dependencies": { "@blunderstruck/contracts": "workspace:*", "@blunderstruck/store": "workspace:*", "@blunderstruck/view": "workspace:*" }
+  "dependencies": {
+    "@blunderstruck/coach": "workspace:*",
+    "@blunderstruck/contracts": "workspace:*",
+    "@blunderstruck/store": "workspace:*",
+    "@blunderstruck/view": "workspace:*"
+  }
 }

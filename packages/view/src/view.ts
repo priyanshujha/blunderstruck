@@ -51,8 +51,10 @@ export interface ExampleView {
 
 /** One week of a focus pattern, in games, for a chart. */
 export interface WeekShare {
-  /** "2026-10-22 to 2026-10-29" on a first report, the end day on later ones. */
+  /** "22 Oct to 29 Oct" on a first report, the end day ("29 Oct") on later ones. */
   label: string;
+  /** ISO start and end of the week. */
+  start: string;
   end: string;
   games: number;
   /** Games of the week the pattern came up in; null when the week had no games or no figure. */
@@ -96,6 +98,8 @@ export interface FocusView {
   drill: string;
   /** How often it came back and why it is on the list. */
   reason: string;
+  /** ISO time the item was first chosen (`reason` gives it as "since 29 Oct" for a kept item). */
+  since: string;
   now: string;
   started: string;
   target: string;
@@ -104,6 +108,8 @@ export interface FocusView {
   examples: ExampleView[];
   /** "In 51 of your 162 games, about 1 game in 3." */
   frequency: string;
+  /** The phrase in `frequency` on its own, "about 1 game in 3"; absent when `frequency` leaves it out. */
+  frequencyPhrase?: string;
   /** The goal in games: the item's own, or derived from its baseline on older items. */
   goal: GameGoal;
   /** "at most 1 game in 4". */
@@ -126,12 +132,55 @@ export interface SectionView {
   lines: string[];
 }
 
+/** A count in games: "17 of 69 games (about 1 game in 4)" as `text`. */
+export interface GamesCountView {
+  affected: number;
+  games: number;
+  text: string;
+}
+
+/** One line of `progressInGames`, in parts. */
+export interface ProgressLineView {
+  patternId: string;
+  patternName: string;
+  verdict: ProgressVerdict;
+  /** "improved", "no clear change", "worse" or "not enough games yet". */
+  verdictText: string;
+  before: GamesCountView;
+  after: GamesCountView;
+  /** "17 of 69 games (about 1 game in 4) before, 1 of 18 games (about 1 game in 18) since." */
+  counts: string;
+  /** The whole line, as in `lines`. */
+  text: string;
+}
+
+/** One line of `retiredInGames`, in parts. */
+export interface RetiredLineView {
+  patternId: string;
+  patternName: string;
+  why: RetiredFocus["why"];
+  /** "reached its goal and stayed there", and the like. */
+  verdictText: string;
+  /** ISO time it was chosen; `sinceText` is the same day as "24 Sep". */
+  since: string;
+  sinceText: string;
+  before: GamesCountView;
+  after: GamesCountView;
+  /** "12 of 28 games (…) when it was chosen on 24 Sep, 3 of 31 games (…) now." */
+  counts: string;
+  /** The whole line, as in `lines`. */
+  text: string;
+}
+
 export interface ReportView {
   header: { title: string; band: string; period: string; games: string };
-  /** The provisional or sample-only line; absent once every game is analysed. */
+  /** The report's period as ISO times; `header.period` says it in words. */
+  dates: { periodStart: string; periodEnd: string };
+  /** The provisional, deeper-check or sample-only line; absent once the report is complete. */
   coverage?: string;
-  /** Games are still being analysed (not stopped after a sample on request). */
+  /** Games are still being analysed or checked (not stopped after a sample on request). */
   provisional: boolean;
+  /** Games not yet fully checked: the given count, else total minus checked (or minus analysed when no check count is stored). */
   pending: number;
   summary?: string;
   /** Focus items, or the numbers when there are none. */
@@ -148,8 +197,8 @@ export interface ReportView {
   /** Per 100 moves; `progressInGames` says the same in games. */
   progress?: SectionView;
   retired?: SectionView;
-  progressInGames?: SectionView;
-  retiredInGames?: SectionView;
+  progressInGames?: SectionView & { items: ProgressLineView[] };
+  retiredInGames?: SectionView & { items: RetiredLineView[] };
   /** "How often, week by week": the heading for each focus item's `weeks`. */
   weeksInGames: string;
   /** Per 100 moves. */
@@ -168,11 +217,32 @@ export interface ReportView {
   };
 }
 
+/**
+ * Built-in wording to show in place of stored wording that cannot be shown: token templates of
+ * the same shape as the stored ones, matched to focus items by `patternId` and to steps by
+ * `blindSpot`.
+ */
+export interface FallbackWording {
+  summary?: string;
+  focus?: readonly {
+    patternId: string;
+    title?: string;
+    why?: string;
+    drill?: string;
+    steps?: readonly { blindSpot: string; text: string }[];
+  }[];
+}
+
 export interface ReportViewOptions {
-  /** Games still waiting for analysis. Defaults to `coverage.total - coverage.analysed`. */
+  /** Games not yet fully checked. Defaults to `coverage.total` minus `coverage.checked`, or minus `coverage.analysed` without it. */
   pending?: number;
   /** Weeks for the week table, any order. Defaults to the report's own six weeks. */
   weeks?: readonly PeriodStats[];
+  /**
+   * Built-in wording for any stored field that fails to render or states a per-100-move figure.
+   * Without it, or when it fails too, a plain stand-in sentence is shown.
+   */
+  fallback?: FallbackWording;
 }
 
 /** Stands in for a stored template that no longer renders. */
@@ -192,7 +262,7 @@ const VERDICT_WORDS: Record<ProgressVerdict, string> = {
 };
 
 const RETIRED_WHY: Record<RetiredFocus["why"], string> = {
-  graduated: "reached its target and stayed there",
+  graduated: "reached its goal and stayed there",
   rotated: "worked on for a while, and another habit now costs more",
   outgrown: "no longer a priority at your rating band",
 };
@@ -209,7 +279,25 @@ const f2 = (n: number): string => n.toFixed(2);
 const f1 = (n: number): string => n.toFixed(1);
 const count = (n: number): string => n.toLocaleString("en-US");
 const plural = (n: number, one: string, many = `${one}s`): string => `${count(n)} ${n === 1 ? one : many}`;
-const day = (iso: string): string => iso.slice(0, 10);
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+
+/**
+ * An ISO time's UTC day in day-month form, "12 Nov", with the year after it ("12 Nov 2026")
+ * when `year` is true or is a year other than the day's own. Fixed English, whatever the
+ * machine's locale. A string that is not a date is given back as its first ten characters.
+ */
+export function dayMonth(iso: string, year: boolean | number = false): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso.slice(0, 10);
+  const d = new Date(t);
+  const y = d.getUTCFullYear();
+  const dm = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
+  return year === true || (typeof year === "number" && year !== y) ? `${dm} ${y}` : dm;
+}
+
+/** The UTC year of an ISO time, or NaN. */
+const yearOf = (iso: string): number => new Date(Date.parse(iso)).getUTCFullYear();
 
 const statOf = (stats: readonly PatternStat[], id: string): PatternStat | undefined =>
   stats.find((s) => s.patternId === id);
@@ -295,17 +383,25 @@ export const goalOf = (item: Pick<FocusItem, "goal" | "baseline">): GameGoal => 
  * (compared as fractions), so a missed goal never reads as reached: only the counts are said.
  */
 export function frequencySentence(stat: Pick<PatternStat, "games" | "gamesAffected"> | undefined, goal?: GameGoal): string {
-  if (!stat) return "No data for this period.";
+  return frequencyParts(stat, goal).sentence;
+}
+
+/** `frequencySentence` and, when the sentence says it, its rounded phrase on its own. */
+export function frequencyParts(
+  stat: Pick<PatternStat, "games" | "gamesAffected"> | undefined,
+  goal?: GameGoal,
+): { sentence: string; phrase?: string } {
+  if (!stat) return { sentence: "No data for this period." };
   const { games: g, gamesAffected: a } = stat;
-  if (g <= 0) return "No games this period.";
-  if (a <= 0) return g === 1 ? "Not once in your one game." : `Not once in your ${count(g)} games.`;
-  if (a >= g) return g === 1 ? "In your one game." : `In all ${count(g)} of your games.`;
+  if (g <= 0) return { sentence: "No games this period." };
+  if (a <= 0) return { sentence: g === 1 ? "Not once in your one game." : `Not once in your ${count(g)} games.` };
+  if (a >= g) return { sentence: g === 1 ? "In your one game." : `In all ${count(g)} of your games.` };
   const stated = statedShare(a, g);
   // stated ≤ goal  ⇔  num · goal.of ≤ goal.per · den
   if (goal && !meetsGoal(stat, goal) && stated.num * goal.of <= goal.per * stated.den) {
-    return `In ${count(a)} of your ${count(g)} games.`;
+    return { sentence: `In ${count(a)} of your ${count(g)} games.` };
   }
-  return `In ${count(a)} of your ${count(g)} games, ${stated.text}.`;
+  return { sentence: `In ${count(a)} of your ${count(g)} games, ${stated.text}.`, phrase: stated.text };
 }
 
 /**
@@ -324,6 +420,12 @@ export function standingSentence(stat: Pick<PatternStat, "games" | "gamesAffecte
 /** "38 of 120 games (about 1 game in 3)". */
 const gamesShort = (s: Pick<PatternStat, "games" | "gamesAffected">): string =>
   `${count(s.gamesAffected)} of ${plural(s.games, "game")} (${gamesPhrase(s.gamesAffected, s.games)})`;
+
+const gamesCount = (s: Pick<PatternStat, "games" | "gamesAffected">): GamesCountView => ({
+  affected: s.gamesAffected,
+  games: s.games,
+  text: gamesShort(s),
+});
 
 /** "against about 1 in 8 of your mistakes overall": the share of all the player's mistakes with the property. */
 function baselinePhrase(bc: number, bo: number): string | undefined {
@@ -385,6 +487,8 @@ function exampleView(ex: FocusExample): ExampleView {
 function shownWeeks(r: WeeklyReport, weeks: readonly PeriodStats[]): { week: PeriodStats; label: string }[] {
   const first = r.kind === "first";
   const periodStart = Date.parse(r.periodStart);
+  const y = yearOf(r.periodEnd);
+  const day = (iso: string): string => dayMonth(iso, y);
   return [...weeks]
     .filter((w) => !first || Date.parse(w.end) > periodStart)
     .sort((a, b) => Date.parse(a.end) - Date.parse(b.end))
@@ -396,7 +500,7 @@ function shownWeeks(r: WeeklyReport, weeks: readonly PeriodStats[]): { week: Per
 
 function weekShares(r: WeeklyReport, weeks: readonly PeriodStats[], patternId: string): WeekShare[] {
   return shownWeeks(r, weeks).map(({ week, label }) => {
-    const base = { label, end: week.end, games: week.games };
+    const base = { label, start: week.start, end: week.end, games: week.games };
     if (week.games === 0) return { ...base, affected: null, share: null, noGames: true, text: "no games" };
     const s = statOf(week.stats, patternId);
     if (!s) return { ...base, affected: null, share: null, noGames: false, text: NO_DATA };
@@ -410,12 +514,36 @@ function weekShares(r: WeeklyReport, weeks: readonly PeriodStats[], patternId: s
   });
 }
 
+/** Stored wording that states a per-100-move figure: kept off the main screen. */
+const PER_100_TOKEN = /\{(?:rate|baselineRate|target|mistakeRate)\}/;
+
+/**
+ * Stored wording for the main screen: rendered when it renders and states no per-100-move
+ * figure; else `failed()` is called and the built-in template is rendered by the same test; else
+ * `standIn`.
+ */
+function shownWording(
+  stored: string,
+  builtIn: string | undefined,
+  values: Record<string, string>,
+  standIn: string,
+  failed: () => void,
+): string {
+  const render = (t: string | undefined): string | undefined =>
+    t === undefined || PER_100_TOKEN.test(t) ? undefined : tryRender(t, values);
+  const out = render(stored);
+  if (out !== undefined) return out;
+  failed();
+  return render(builtIn) ?? standIn;
+}
+
 function focusView(
   item: FocusItem,
   index: number,
   r: WeeklyReport,
   weeks: readonly PeriodStats[],
   failed: () => void,
+  fallback: FallbackWording | undefined,
 ): FocusView {
   const stat = statOf(r.current.stats, item.patternId);
   const values: Record<string, string> = focusTokenValues(item, r);
@@ -425,19 +553,14 @@ function focusView(
     delete values.occurrences;
     delete values.rate;
   }
-  const text = (template: string): string => {
-    const out = tryRender(template, values);
-    if (out === undefined) {
-      failed();
-      return UNSHOWN_WORDING;
-    }
-    return out;
-  };
+  const builtIn = fallback?.focus?.find((f) => f.patternId === item.patternId);
+  const text = (field: "title" | "why" | "drill"): string =>
+    shownWording(item[field], builtIn?.[field], values, UNSHOWN_WORDING, failed);
 
   const { weeksRecurred, weeksCounted, kind } = item.reason;
   const bits: string[] = [];
   if (weeksCounted >= MIN_WEEKS_TO_QUOTE) bits.push(`It came up in ${weeksRecurred} of your last ${weeksCounted} weeks.`);
-  if (kind === "kept") bits.push(`Kept from your last report (since ${day(item.since)}).`);
+  if (kind === "kept") bits.push(`Kept from your last report (since ${dayMonth(item.since, yearOf(r.periodEnd))}).`);
   else if (kind === "returned") bits.push("Back on the list after a break.");
   else if (kind === "rose") bits.push("It has moved up the list.");
   else bits.push("New on your list.");
@@ -451,20 +574,24 @@ function focusView(
     ? `Now ${now} per 100 moves; started at ${started}; target ${target}.`
     : `Now: ${NO_DATA} this period; started at ${started} per 100 moves; target ${target}.`;
 
+  const freq = frequencyParts(stat, goal);
+
   return {
     patternId: item.patternId,
     patternName: patternName(item.patternId),
     number: index + 1,
-    title: text(item.title),
-    why: text(item.why),
-    drill: text(item.drill),
+    title: text("title"),
+    why: text("why"),
+    drill: text("drill"),
     reason: bits.join(" "),
+    since: item.since,
     now,
     started,
     target,
     figures,
     examples: item.examples.map(exampleView),
-    frequency: frequencySentence(stat, goal),
+    frequency: freq.sentence,
+    ...(freq.phrase ? { frequencyPhrase: freq.phrase } : {}),
     goal,
     goalText: goalPhrase(goal),
     goalLine: `Goal: ${goalPhrase(goal)}.`,
@@ -474,9 +601,14 @@ function focusView(
     blindSpots: spots.map(blindSpotView),
     steps: (item.steps ?? []).map((step) => {
       const spot = spots.find((b) => b.id === step.blindSpot);
-      const out = spot ? tryRender(step.text, blindSpotTokenValues(spot)) : undefined;
-      if (out === undefined) failed();
-      return { blindSpot: step.blindSpot, label: blindSpotLabel(step.blindSpot), text: out ?? UNSHOWN_WORDING };
+      const label = blindSpotLabel(step.blindSpot);
+      if (!spot) {
+        failed();
+        return { blindSpot: step.blindSpot, label, text: UNSHOWN_WORDING };
+      }
+      const builtInStep = builtIn?.steps?.find((x) => x.blindSpot === step.blindSpot)?.text;
+      const text = shownWording(step.text, builtInStep, blindSpotTokenValues(spot), UNSHOWN_WORDING, failed);
+      return { blindSpot: step.blindSpot, label, text };
     }),
   };
 }
@@ -497,21 +629,45 @@ function progressLine(p: PatternProgress): string {
   );
 }
 
-function progressGamesLine(p: PatternProgress): string {
-  return `${patternName(p.patternId)}: ${VERDICT_WORDS[p.verdict]}. ${gamesShort(p.previous)} before, ${gamesShort(p.current)} since.`;
+function progressGamesLine(p: PatternProgress): ProgressLineView {
+  const name = patternName(p.patternId);
+  const verdictText = VERDICT_WORDS[p.verdict];
+  const counts = `${gamesShort(p.previous)} before, ${gamesShort(p.current)} since.`;
+  return {
+    patternId: p.patternId,
+    patternName: name,
+    verdict: p.verdict,
+    verdictText,
+    before: gamesCount(p.previous),
+    after: gamesCount(p.current),
+    counts,
+    text: `${name}: ${verdictText}. ${counts}`,
+  };
 }
 
-function retiredGamesLine(x: RetiredFocus): string {
-  return (
-    `${patternName(x.patternId)}: ${RETIRED_WHY[x.why]}. ` +
-    `${gamesShort(x.baseline)} when it was chosen on ${day(x.since)}, ${gamesShort(x.current)} now.`
-  );
+function retiredGamesLine(x: RetiredFocus, year: number): RetiredLineView {
+  const name = patternName(x.patternId);
+  const verdictText = RETIRED_WHY[x.why];
+  const sinceText = dayMonth(x.since, year);
+  const counts = `${gamesShort(x.baseline)} when it was chosen on ${sinceText}, ${gamesShort(x.current)} now.`;
+  return {
+    patternId: x.patternId,
+    patternName: name,
+    why: x.why,
+    verdictText,
+    since: x.since,
+    sinceText,
+    before: gamesCount(x.baseline),
+    after: gamesCount(x.current),
+    counts,
+    text: `${name}: ${verdictText}. ${counts}`,
+  };
 }
 
-function retiredLine(x: RetiredFocus): string {
+function retiredLine(x: RetiredFocus, year: number): string {
   return (
     `${patternName(x.patternId)}: ${RETIRED_WHY[x.why]}. ` +
-    `${f2(x.baseline.per100Moves)} per 100 moves on ${day(x.since)}, ${f2(x.current.per100Moves)} now.`
+    `${f2(x.baseline.per100Moves)} per 100 moves on ${dayMonth(x.since, year)}, ${f2(x.current.per100Moves)} now.`
   );
 }
 
@@ -540,7 +696,7 @@ function noteLines(r: WeeklyReport, fewGamesSaid: boolean, wordingFailed: boolea
   const out: string[] = [];
   for (const n of r.notes) {
     if (n === "few-games") {
-      if (!fewGamesSaid) out.push("Too few games in this period, so no focus items were picked.");
+      if (!fewGamesSaid) out.push("Too few games in this period, so no habits were picked to work on.");
     } else if (n === "no-key") {
       out.push("No model key was set, so the wording comes from built-in templates.");
     } else if (n === "model-failed") {
@@ -556,6 +712,37 @@ function noteLines(r: WeeklyReport, fewGamesSaid: boolean, wordingFailed: boolea
 }
 
 /**
+ * The line for a report that is not complete, where `pending` is the games not yet fully
+ * checked, so `total - pending` (at most `analysed`) are. A sample stopped on request says so.
+ * While games of the period wait for their first analysis: "Based on a first look at 150 of
+ * your 412 games; 38 are fully checked so far.", or "Based on 150 of your 412 games; the other
+ * 262 are still being analysed." when every analysed game is fully checked, or that none is
+ * analysed yet. Once every game is analysed and only the deeper check is left: "41 of 64 games
+ * still to check; counts may change.", or with nothing pending, that the period's games are in
+ * and earlier games are still being checked.
+ */
+function coverageSentence(c: WeeklyReport["coverage"], pending: number): string {
+  const { analysed, total, sampleOnly } = c;
+  if (sampleOnly) return `Based on a sample of ${count(analysed)} of ${count(total)} games; run report again to analyse the rest.`;
+  if (analysed < total) {
+    if (analysed <= 0) return total === 1 ? "Your one game has not been analysed yet." : `None of your ${count(total)} games has been analysed yet.`;
+    const fully = Math.max(0, Math.min(analysed, total - pending));
+    if (fully >= analysed) {
+      const rest = total - analysed;
+      return `Based on ${count(analysed)} of your ${count(total)} games; ${rest === 1 ? "the other one is" : `the other ${count(rest)} are`} still being analysed.`;
+    }
+    const done = fully === 0 ? "none are" : fully === 1 ? "1 is" : `${count(fully)} are`;
+    return `Based on a first look at ${count(analysed)} of your ${count(total)} games; ${done} fully checked so far.`;
+  }
+  if (pending > 0) {
+    if (total === 1) return "Your one game is still to check; counts may change.";
+    return `${count(Math.min(pending, total))} of ${count(total)} games still to check; counts may change.`;
+  }
+  // Every game of the period is in; what is left belongs to the earlier weeks or the comparison window.
+  return `All ${plural(total, "game")} of this period are in; earlier games are still being checked, so some figures may change.`;
+}
+
+/**
  * Every sentence and figure a report shows, ready to lay out as text or HTML. Never throws on stored wording.
  * Counts are written with thousands separators, except inside coach wording, where the `{games}`-style
  * token values from the contracts package are plain, unformatted numbers.
@@ -567,30 +754,20 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
     wordingFailed = true;
   };
 
+  const year = yearOf(r.periodEnd);
   const analysedPart = r.gamesAnalyzed === r.gamesFound ? ", all analysed" : `, ${count(r.gamesAnalyzed)} analysed`;
   const header = {
     title: `${r.kind === "first" ? "First report" : "Weekly report"} for ${r.player} (${r.track.platform}, ${r.track.timeClass})`,
     band: `Rating band: ${r.band}, ${BAND_SOURCE[r.bandSource](r)}`,
-    period: `Period: ${day(r.periodStart)} to ${day(r.periodEnd)}`,
+    period: `Period: ${dayMonth(r.periodStart, year)} to ${dayMonth(r.periodEnd, true)}`,
     games: `Games: ${count(r.gamesFound)} found${analysedPart}`,
   };
 
-  const { analysed, total, complete, sampleOnly } = r.coverage;
-  const pending = complete ? 0 : (opts.pending ?? Math.max(0, total - analysed));
-  const coverage = complete
-    ? undefined
-    : sampleOnly
-      ? `Based on a sample of ${count(analysed)} of ${count(total)} games; run report again to analyse the rest.`
-      : pending === 0 && analysed >= total
-        ? // Every game of the period is in; what is left belongs to the earlier weeks or the comparison window.
-          `All ${plural(total, "game")} of this period are in; earlier games are still being checked, so some figures may change.`
-        : `Based on ${count(analysed)} of ${count(total)} games; ${count(pending)} still being analysed.`;
+  const { complete } = r.coverage;
+  const pending = complete ? 0 : (opts.pending ?? Math.max(0, r.coverage.total - (r.coverage.checked ?? r.coverage.analysed)));
+  const coverage = complete ? undefined : coverageSentence(r.coverage, pending);
 
-  let summary = tryRender(r.summary, summaryTokenValues(r))?.trim();
-  if (summary === undefined) {
-    failed();
-    summary = UNSHOWN_SUMMARY;
-  }
+  const summary = shownWording(r.summary, opts.fallback?.summary, summaryTokenValues(r), UNSHOWN_SUMMARY, failed).trim();
 
   const weeks = opts.weeks ?? r.weeks;
   const fewGames = r.focus.length === 0 && r.notes.includes("few-games");
@@ -600,8 +777,8 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
       kind: "numbers",
       heading: "The numbers",
       intro: fewGames
-        ? `Too few games to pick focus items (${plural(r.gamesFound, "game")} found). Here are the numbers.`
-        : "No habit repeated often enough to pick a focus item this week. Here are the numbers.",
+        ? `Too few games to pick habits to work on (${plural(r.gamesFound, "game")} found). Here are the numbers.`
+        : "No habit repeated often enough to pick one to work on in this period. Here are the numbers.",
       lines: r.current.stats.map(
         (s) => {
           const f = frequencySentence(s);
@@ -622,7 +799,7 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
     body = {
       kind: "focus",
       heading: r.focus.length === 1 ? "Focus" : `Focus (${r.focus.length} things)`,
-      items: r.focus.map((item, i) => focusView(item, i, r, weeks, failed)),
+      items: r.focus.map((item, i) => focusView(item, i, r, weeks, failed, opts.fallback)),
     };
   }
 
@@ -646,23 +823,27 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
   const progress: SectionView | undefined =
     r.progress.length > 0 ? { heading: "Last report's focus, since then", lines: r.progress.map(progressLine) } : undefined;
   const retired: SectionView | undefined =
-    r.retired.length > 0 ? { heading: "Retired from your list", lines: r.retired.map(retiredLine) } : undefined;
+    r.retired.length > 0 ? { heading: "Retired from your list", lines: r.retired.map((x) => retiredLine(x, year)) } : undefined;
   const weekView = { heading: "Week by week (rates per 100 moves)", table: weekTable(r, weeks) };
   const items = body.kind === "focus" ? body.items : [];
 
+  const progressItems = r.progress.map(progressGamesLine);
+  const retiredItems = r.retired.map((x) => retiredGamesLine(x, year));
+
   return {
     header,
+    dates: { periodStart: r.periodStart, periodEnd: r.periodEnd },
     ...(coverage ? { coverage } : {}),
-    provisional: !complete && !sampleOnly,
+    provisional: !complete && !r.coverage.sampleOnly,
     pending,
     ...(summary ? { summary } : {}),
     body,
     ...(progress ? { progress } : {}),
     ...(retired ? { retired } : {}),
-    ...(r.progress.length > 0
-      ? { progressInGames: { heading: progress!.heading, lines: r.progress.map(progressGamesLine) } }
+    ...(progress
+      ? { progressInGames: { heading: progress.heading, lines: progressItems.map((x) => x.text), items: progressItems } }
       : {}),
-    ...(r.retired.length > 0 ? { retiredInGames: { heading: retired!.heading, lines: r.retired.map(retiredGamesLine) } } : {}),
+    ...(retired ? { retiredInGames: { heading: retired.heading, lines: retiredItems.map((x) => x.text), items: retiredItems } } : {}),
     weeksInGames: "How often, week by week",
     weeks: weekView,
     trends,
