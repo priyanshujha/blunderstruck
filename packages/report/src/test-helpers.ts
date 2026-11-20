@@ -155,7 +155,8 @@ export const opts = (over: Partial<ReportOptions> = {}): ReportOptions => ({
 
 /**
  * A provider that answers every request with valid wording for the pattern ids it is asked
- * for (read from the prompt), or fails from call `failFrom` on; requests are recorded.
+ * for (read from the prompt), or fails from call `failFrom` on; requests are recorded. Its
+ * answers pass the coach's wording check (`test-helpers.test.ts`).
  */
 export function wordingProvider(failFrom = Infinity): CoachProvider & { calls: number; requests: CompleteRequest[] } {
   const p = {
@@ -171,7 +172,7 @@ export function wordingProvider(failFrom = Infinity): CoachProvider & { calls: n
       const asked = /Word these focus items, in this order: ([^.]+)\./.exec(req.user)?.[1];
       const ids = asked ? asked.split(", ") : [];
       const text = JSON.stringify({
-        summary: `Over {games} games, {mistakeRate} mistakes per hundred moves (answer ${tag}).`,
+        summary: `Over {games} games, about {mistakesPerGame} mistakes a game (answer ${tag}).`,
         focus: ids.map((patternId) => ({
           patternId,
           title: `Model title ${patternId}`,
