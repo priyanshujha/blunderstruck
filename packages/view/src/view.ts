@@ -211,13 +211,23 @@ function retiredLine(x: RetiredFocus): string {
   );
 }
 
+/**
+ * The week table, oldest first. A first report shows only the weeks that overlap its period,
+ * labelled by their days within it; later reports show every week they are given, by end day.
+ */
 function weekTable(r: WeeklyReport, weeks: readonly PeriodStats[]): TableView {
   const ids = r.focus.map((f) => f.patternId);
-  const sorted = [...weeks].sort((a, b) => Date.parse(a.end) - Date.parse(b.end));
+  const first = r.kind === "first";
+  const periodStart = Date.parse(r.periodStart);
+  const sorted = [...weeks]
+    .filter((w) => !first || Date.parse(w.end) > periodStart)
+    .sort((a, b) => Date.parse(a.end) - Date.parse(b.end));
+  const label = (w: PeriodStats): string =>
+    first ? `${day(Date.parse(w.start) < periodStart ? r.periodStart : w.start)} to ${day(w.end)}` : day(w.end);
   return {
-    head: ["Week ending", "Games", "Mistakes /100", ...ids.map((id) => `${patternName(id)} /100`)],
+    head: [first ? "Week" : "Week ending", "Games", "Mistakes /100", ...ids.map((id) => `${patternName(id)} /100`)],
     rows: sorted.map((w) => [
-      day(w.end),
+      label(w),
       count(w.games),
       w.games === 0 ? "-" : f2(w.mistakesPer100Moves),
       ...ids.map((id) => {

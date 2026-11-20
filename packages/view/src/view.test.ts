@@ -69,8 +69,9 @@ describe("reportView", () => {
   });
 
   it("builds the week table oldest first with a dash for an empty week", () => {
-    const v = reportView(report());
+    const v = reportView(report({ kind: "weekly" }));
     expect(v.weeks.table.head).toEqual(["Week ending", "Games", "Mistakes /100"]);
+    expect(v.weeks.table.rows).toHaveLength(6);
     expect(v.weeks.table.rows[0]).toEqual(["2026-10-15", "0", "-"]);
     expect(v.weeks.table.rows.at(-1)).toEqual(["2026-11-19", "4", "6.50"]);
   });
@@ -91,5 +92,52 @@ describe("reportView", () => {
     const v = reportView(report({ current, gamesFound: 1200, gamesAnalyzed: 1200 }));
     expect(v.body.kind === "numbers" && v.body.table.rows[0]![3]).toBe("1,100/1,200");
     expect(v.header.games).toBe("Games: 1,200 found, all analysed");
+  });
+
+  it("shows a first report's weeks only within its period, four counted and two empty", () => {
+    // Period 2026-10-20 to 2026-11-19: the weeks ending 10-29 .. 11-19 overlap it; 10-22 overlaps by two days.
+    const weeks = [0, 1, 2, 3, 4, 5].map((i) =>
+      period(new Date(Date.parse(END) - i * 7 * 86_400_000).toISOString(), i === 1 || i === 4 ? 0 : 4),
+    );
+    const focus = {
+      patternId: "hung-piece",
+      title: "Look before you let go",
+      why: "In {gamesAffected} of {games} games.",
+      drill: "Check every piece.",
+      exampleGameIds: [],
+      baseline: weeks[0]!.stats[2]!,
+      target: 0.1,
+      since: END,
+      reason: {
+        kind: "new",
+        previousRank: null,
+        score: 1,
+        recentCost: 1,
+        naiveCostThisPeriod: 1,
+        rate: 0.2,
+        severity: 30,
+        chronicity: 0.8,
+        weeksRecurred: 3,
+        weeksCounted: 4,
+        weeks: [true, null, true, false, null, true],
+      },
+      examples: [],
+    };
+    const v = reportView(report({ weeks, focus: [focus] }));
+    expect(v.weeks.table.head[0]).toBe("Week");
+    expect(v.weeks.table.rows.map((r) => r[0])).toEqual([
+      "2026-10-20 to 2026-10-22",
+      "2026-10-22 to 2026-10-29",
+      "2026-10-29 to 2026-11-05",
+      "2026-11-05 to 2026-11-12",
+      "2026-11-12 to 2026-11-19",
+    ]);
+    expect(v.weeks.table.rows[0]!.slice(1)).toEqual(["0", "-", "-"]);
+    expect(v.weeks.table.rows[3]!.slice(1)).toEqual(["0", "-", "-"]);
+    expect(v.body.kind === "focus" && v.body.items[0]!.reason).toBe("It came up in 3 of your last 4 weeks. New on your list.");
+
+    const fewer = { ...focus, reason: { ...focus.reason, weeksCounted: 2, weeksRecurred: 2 } };
+    const v2 = reportView(report({ weeks, focus: [fewer] }));
+    expect(v2.body.kind === "focus" && v2.body.items[0]!.reason).toBe("New on your list.");
   });
 });

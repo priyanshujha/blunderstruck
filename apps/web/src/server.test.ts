@@ -293,7 +293,7 @@ describe("handler", () => {
   it("lists only weeks up to an earlier report's end", async () => {
     const store = await seeded();
     const older = "2026-11-12T00:00:00.000Z";
-    await store.putReport(report(TRACK, { periodEnd: older, kind: "first" }));
+    await store.putReport(report(TRACK, { periodEnd: older, kind: "weekly" }));
     for (let i = 0; i < 3; i++) await store.putPeriodStats(trackKey(TRACK), settingsKey(SETTINGS), period(weekEnd(END, i), 3));
     const r = await call(handler(store, TRACK), "GET", `/report/${encodeURIComponent(older)}`);
     expect(r.body).toContain("<td>2026-11-12</td>");
