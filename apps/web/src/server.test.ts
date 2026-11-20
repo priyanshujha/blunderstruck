@@ -200,7 +200,7 @@ describe("handler", () => {
     expect(r.status).toBe(200);
     expect(r.body.match(/<script/gi)).toHaveLength(1);
     expect(r.body).toContain("<title>Weekly report for &lt;script&gt;alert(1)&lt;/script&gt;");
-    expect(r.body).toContain(" · &quot;&gt;&lt;script&gt;x()&lt;/script&gt;");
+    expect(r.body).toContain("<span>&quot;&gt;&lt;script&gt;x()&lt;/script&gt;</span>");
   });
 
   it("says to run the report command first when nothing is stored", async () => {

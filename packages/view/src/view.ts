@@ -21,6 +21,9 @@ import { REFINEMENT_PHRASES, blindSpotLabel, patternName } from "./names";
 import { type StoryCost, type StoryLine, storyCost, storyLines } from "./story";
 
 export * from "./story";
+export * from "./titles";
+export * from "./page";
+import { type PageText, pageText } from "./page";
 
 /** A table as text cells; the first column is a label, the rest are figures. */
 export interface TableView {
@@ -204,7 +207,10 @@ export interface ReportView {
   /** Per 100 moves. */
   weeks: { heading: string; table: TableView };
   trends: { heading: string; table?: TableView; empty?: string };
-  notes: SectionView;
+  /** All notes in `lines`; `wording` are those about who wrote the text, `other` the rest. */
+  notes: SectionView & { wording: string[]; other: string[] };
+  /** Every sentence, label with a number and figure the report page shows beyond the fields above. */
+  page: PageText;
   /** The precise figures, per 100 moves, for whoever wants them. */
   details: {
     heading: string;
@@ -418,7 +424,7 @@ export function standingSentence(stat: Pick<PatternStat, "games" | "gamesAffecte
 }
 
 /** "38 of 120 games (about 1 game in 3)". */
-const gamesShort = (s: Pick<PatternStat, "games" | "gamesAffected">): string =>
+export const gamesShort = (s: Pick<PatternStat, "games" | "gamesAffected">): string =>
   `${count(s.gamesAffected)} of ${plural(s.games, "game")} (${gamesPhrase(s.gamesAffected, s.games)})`;
 
 const gamesCount = (s: Pick<PatternStat, "games" | "gamesAffected">): GamesCountView => ({
@@ -692,22 +698,23 @@ function weekTable(r: WeeklyReport, weeks: readonly PeriodStats[]): TableView {
   };
 }
 
-function noteLines(r: WeeklyReport, fewGamesSaid: boolean, wordingFailed: boolean): string[] {
-  const out: string[] = [];
+/** The view's notes in report order, each marked as about the wording or not. */
+function noteLines(r: WeeklyReport, fewGamesSaid: boolean, wordingFailed: boolean): { text: string; wording: boolean }[] {
+  const out: { text: string; wording: boolean }[] = [];
   for (const n of r.notes) {
     if (n === "few-games") {
-      if (!fewGamesSaid) out.push("Too few games in this period, so no habits were picked to work on.");
+      if (!fewGamesSaid) out.push({ text: "Too few games in this period, so no habits were picked to work on.", wording: false });
     } else if (n === "no-key") {
-      out.push("No model key was set, so the wording comes from built-in templates.");
+      out.push({ text: "No model key was set, so the wording comes from built-in templates.", wording: true });
     } else if (n === "model-failed") {
-      out.push("The model did not give usable wording, so the text comes from built-in templates.");
+      out.push({ text: "The model did not give usable wording, so the text comes from built-in templates.", wording: true });
     } else if (n === "settings-changed") {
-      out.push("Analysis settings changed since the last report. Games were analysed again; older reports were left as they were.");
+      out.push({ text: "Analysis settings changed since the last report. Games were analysed again; older reports were left as they were.", wording: false });
     } else if (n === "sample-only") {
-      out.push("Stopped after the sample, as asked; run report again to analyse the rest.");
+      out.push({ text: "Stopped after the sample, as asked; run report again to analyse the rest.", wording: false });
     }
   }
-  if (wordingFailed) out.push(UNSHOWN_NOTE);
+  if (wordingFailed) out.push({ text: UNSHOWN_NOTE, wording: true });
   return out;
 }
 
@@ -721,7 +728,7 @@ function noteLines(r: WeeklyReport, fewGamesSaid: boolean, wordingFailed: boolea
  * still to check; counts may change.", or with nothing pending, that the period's games are in
  * and earlier games are still being checked.
  */
-function coverageSentence(c: WeeklyReport["coverage"], pending: number): string {
+function coverageSentence(c: WeeklyReport["coverage"], pending: number, checkDepth: number): string {
   const { analysed, total, sampleOnly } = c;
   if (sampleOnly) return `Based on a sample of ${count(analysed)} of ${count(total)} games; run report again to analyse the rest.`;
   if (analysed < total) {
@@ -734,7 +741,8 @@ function coverageSentence(c: WeeklyReport["coverage"], pending: number): string 
     const done = fully === 0 ? "none are" : fully === 1 ? "1 is" : `${count(fully)} are`;
     return `Based on a first look at ${count(analysed)} of your ${count(total)} games; ${done} fully checked so far.`;
   }
-  if (pending > 0) {
+  // Games are still to check only when a check is set: by the settings, or by a stored count of checked games.
+  if (pending > 0 && (checkDepth > 0 || c.checked !== undefined)) {
     if (total === 1) return "Your one game is still to check; counts may change.";
     return `${count(Math.min(pending, total))} of ${count(total)} games still to check; counts may change.`;
   }
@@ -765,7 +773,7 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
 
   const { complete } = r.coverage;
   const pending = complete ? 0 : (opts.pending ?? Math.max(0, r.coverage.total - (r.coverage.checked ?? r.coverage.analysed)));
-  const coverage = complete ? undefined : coverageSentence(r.coverage, pending);
+  const coverage = complete ? undefined : coverageSentence(r.coverage, pending, r.settings.checkDepth ?? 0);
 
   const summary = shownWording(r.summary, opts.fallback?.summary, summaryTokenValues(r), UNSHOWN_SUMMARY, failed).trim();
 
@@ -828,9 +836,10 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
   const items = body.kind === "focus" ? body.items : [];
 
   const progressItems = r.progress.map(progressGamesLine);
+  const notes = noteLines(r, fewGames, wordingFailed);
   const retiredItems = r.retired.map((x) => retiredGamesLine(x, year));
 
-  return {
+  const view: Omit<ReportView, "page"> = {
     header,
     dates: { periodStart: r.periodStart, periodEnd: r.periodEnd },
     ...(coverage ? { coverage } : {}),
@@ -847,7 +856,7 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
     weeksInGames: "How often, week by week",
     weeks: weekView,
     trends,
-    notes: { heading: "Notes", lines: noteLines(r, fewGames, wordingFailed) },
+    notes: { heading: "Notes", lines: notes.map((n) => n.text), wording: notes.filter((n) => n.wording).map((n) => n.text), other: notes.filter((n) => !n.wording).map((n) => n.text) },
     details: {
       heading: "Precise figures (per 100 moves)",
       focus: items.map((i) => `${i.patternName}: ${i.figures}`),
@@ -857,4 +866,5 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
       trends,
     },
   };
+  return { ...view, page: pageText(r, view) };
 }

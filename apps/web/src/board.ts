@@ -384,10 +384,6 @@ function stepLayers(plan: BoardPlan, story: ExampleStory, patternId: string | un
   return { under, over };
 }
 
-const BOARD_LABEL = (side: Color): string =>
-  `The position before your move, seen from ${side === "white" ? "White" : "Black"}'s side. The arrow that starts from a dot is the move you played. ` +
-  "The plain dark arrow is the reply; a broken one is a reply that was not played. The arrow with a line down its middle is the better move.";
-
 export interface ExampleBoard {
   /** The board with its coordinates and the note row. */
   html: string;
@@ -403,7 +399,8 @@ export interface ExampleBoard {
  * picture as hidden overlays, and the note row. Undefined when the position or a move is not
  * one a board can be drawn from.
  */
-export function exampleBoard(fen: string, story: ExampleStory, patternId: string | undefined, lines?: readonly StoryLine[]): ExampleBoard | undefined {
+/** `label` is the board's text alternative, from the view. */
+export function exampleBoard(fen: string, story: ExampleStory, patternId: string | undefined, lines: readonly StoryLine[] | undefined, label: string): ExampleBoard | undefined {
   const pieces = piecesOf(fen);
   const plan = planOf(story, patternId, lines);
   if (!pieces || ![...plan.played, ...plan.better].every((s) => validMove(s.move))) return undefined;
@@ -413,7 +410,7 @@ export function exampleBoard(fen: string, story: ExampleStory, patternId: string
   const better = stepLayers(plan, story, patternId, "b");
   const rest = `<g class="ov on" data-k="r">${tint(p0.from, flip, "bad")}${tint(p0.to, flip, "bad")}</g>`;
   const svg =
-    boardOpen("board snap", BOARD_LABEL(plan.player)) +
+    boardOpen("board snap", label) +
     rest +
     played.under +
     better.under +
