@@ -293,6 +293,47 @@ describe("chooseFocus: cooldown", () => {
   });
 });
 
+describe("chooseFocus: cooldown window and the report being completed", () => {
+  it("cooldownPatterns with `before` ignores a sample-only report for that period, as chooseFocus does", () => {
+    const sampleOnlyNow = {
+      ...report({ i: 20, retired: [{ id: Z, why: "graduated" }] }),
+      coverage: { sampled: 30, analysed: 30, total: 60, complete: false, sampleOnly: true },
+    } as WeeklyReport;
+    const history = [
+      report({ i: 10, retired: [{ id: X, why: "graduated" }] }),
+      report({ i: 11 }),
+      sampleOnlyNow,
+    ];
+    // Without a bound the sample-only report is the latest final one and shifts the window.
+    expect(cooldownPatterns(history)).toEqual(new Set([Z]));
+    expect(cooldownPatterns(history, NOW)).toEqual(new Set([X]));
+
+    const priorities = prios([
+      [X, 20],
+      [Z, 10],
+      [Y, 5],
+    ]);
+    const r = chooseFocus(input({ history, priorities }));
+    expect(ids(r.focus)).toEqual([Z, Y]);
+    expect(r.focus.some((f) => cooldownPatterns(history, NOW).has(f.patternId))).toBe(false);
+  });
+});
+
+describe("chooseFocus: unranked eligible patterns", () => {
+  it("never makes two patterns on the same moves both focus items", () => {
+    // Y and Z share every move; Z comes back eligible but unranked because Y covers them.
+    const findings: PatternFinding[] = [
+      { patternId: Y, gameId: "a", ply: 5, winPctLoss: 30 },
+      { patternId: Z, gameId: "a", ply: 5, winPctLoss: 30 },
+      { patternId: Y, gameId: "b", ply: 7, winPctLoss: 30 },
+      { patternId: Z, gameId: "b", ply: 7, winPctLoss: 30 },
+    ];
+    const priorities = prios([[Y, 10]]).map((p) => (p.patternId === Z ? { ...p, eligible: true, score: 9 } : p));
+    const r = chooseFocus(input({ history: [], priorities, current: summary({ [Y]: 2, [Z]: 2 }, 30, findings) }));
+    expect(ids(r.focus)).toEqual([Y]);
+  });
+});
+
 describe("chooseFocus: retiring and refilling", () => {
   it("retires hung-piece as outgrown when the band moves from club to advanced", () => {
     const history = [report({ i: 19, focus: [{ id: X, since: end(19) }] })];

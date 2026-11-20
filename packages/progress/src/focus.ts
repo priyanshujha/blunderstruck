@@ -120,11 +120,12 @@ function heldMeasures(finals: readonly WeeklyReport[], patternId: string, target
 /**
  * Patterns that may not be chosen now: graduated or rotated in one of the last
  * `COOLDOWN_REPORTS` final reports of `history`. Provisional revisions are ignored, and only
- * the latest revision of each period counts.
+ * the latest revision of each period counts. With `before` (the period end of the report
+ * being built), only periods ending before it count, as in `chooseFocus`.
  */
-export function cooldownPatterns(history: readonly WeeklyReport[]): Set<string> {
+export function cooldownPatterns(history: readonly WeeklyReport[], before?: string): Set<string> {
   const cooling = new Set<string>();
-  for (const r of finalHistory(history).slice(-COOLDOWN_REPORTS)) {
+  for (const r of finalHistory(history, before).slice(-COOLDOWN_REPORTS)) {
     for (const x of r.retired) if (x.why === "graduated" || x.why === "rotated") cooling.add(x.patternId);
   }
   return cooling;
@@ -202,9 +203,10 @@ export function chooseFocus(input: FocusInput): FocusDecision {
   const priorityOf = (id: string) => ranked.find((p) => p.patternId === id);
 
   // Applied here too, so a caller that did not pass it to `priorities()` gets the same result.
-  const cooling = cooldownPatterns(finals);
+  const cooling = cooldownPatterns(input.history, periodEnd);
   const everRetired = new Set(finals.flatMap((r) => r.retired.map((x) => x.patternId)));
   const held = new Set((prev?.focus ?? []).map((f) => f.patternId));
+  // Only ranked patterns: an eligible pattern whose moves a higher pick covers comes back unranked.
   const choosable = (p: PatternPriority) => p.eligible && p.rank !== null && !cooling.has(p.patternId);
 
   const sortedFindings = [...current.findings].sort(

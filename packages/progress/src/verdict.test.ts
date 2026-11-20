@@ -56,6 +56,14 @@ describe("verdict", () => {
   });
 });
 
+it("returns a verdict without throwing for very large counts", () => {
+  const result = verdict(stat(160_000, 800_000), stat(30_000, 200_000));
+  expect(result.verdict).toBe("improved");
+  expect(result.pValue).not.toBeNull();
+  expect(result.pValue!).toBeGreaterThanOrEqual(0);
+  expect(result.pValue!).toBeLessThan(0.05);
+});
+
 describe("binomialTail", () => {
   it("sums to 1 for n = 0", () => {
     expect(binomialTail(0, 0, 0.2, "le")).toBe(1);

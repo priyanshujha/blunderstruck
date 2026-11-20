@@ -47,15 +47,20 @@ export function binomialTail(k: number, n: number, p: number, side: "le" | "ge")
   if (from > to) return 0;
 
   // Log-space pmf terms, summed with log-sum-exp so large n neither overflows nor underflows.
-  const logs: number[] = [];
+  // A running maximum rescales the sum whenever a larger term appears, so no array is built.
+  let max = -Infinity;
+  let sum = 0;
   for (let x = from; x <= to; x++) {
     const term = logPmf(x, n, p);
-    if (term > -Infinity) logs.push(term);
+    if (term === -Infinity) continue;
+    if (term > max) {
+      sum = sum * Math.exp(max - term) + 1;
+      max = term;
+    } else {
+      sum += Math.exp(term - max);
+    }
   }
-  if (logs.length === 0) return 0;
-  const max = Math.max(...logs);
-  let sum = 0;
-  for (const term of logs) sum += Math.exp(term - max);
+  if (max === -Infinity) return 0;
   return Math.min(1, Math.max(0, Math.exp(max) * sum));
 }
 

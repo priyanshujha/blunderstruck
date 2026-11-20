@@ -64,9 +64,9 @@ describe("priorities: three patterns over six full weeks", () => {
   const weeks = makeWeeks([thrown, tactic, hung]);
   const result = priorities({ weeks, current: summaryOf(weeks[0]!), band: "club", cooldown: new Set() });
 
-  it("weights the moves and findings as the plan says", () => {
+  it("weights the moves and findings by recency", () => {
     const N = weighted(Array(6).fill(MOVES_PER_WEEK));
-    // The plan's 3635.5 uses weights rounded to 4 decimals; the exact sum is 3635.4916.
+    // The exact weight sum is 3635.4916 (3635.5 with weights rounded to 4 decimals).
     expect(N).toBeCloseTo(3635.492, 3);
     expect(weighted([6, 0, 1, 0, 0, 0])).toBeCloseTo(6.63, 3);
     expect(weighted([3, 4, 1, 2, 3, 4])).toBeCloseTo(10.255, 3);
@@ -130,7 +130,7 @@ describe("priorities: special cases", () => {
   it("small sample: a 5-game, 150-move week with two missed mates", () => {
     const weeks = makeWeeks([spread("missed-mate", [2, 0, 0, 0, 0, 0], 60)], [5, 25, 25, 25, 25, 25], [150, 1000, 1000, 1000, 1000, 1000]);
     const p = byId(priorities({ weeks, current: summaryOf(weeks[0]!), band: "club", cooldown: new Set() }), "missed-mate");
-    // The plan's 2785.5 uses weights rounded to 4 decimals; the exact sum is 2785.4916.
+    // The exact weighted move count is 2785.4916 (2785.5 with weights rounded to 4 decimals).
     expect(weighted([150, 1000, 1000, 1000, 1000, 1000])).toBeCloseTo(2785.492, 3);
     expect(p.rate).toBeCloseTo(0.102, 3);
     expect(p.severity).toBeCloseTo(42.5, 3);
@@ -166,7 +166,9 @@ describe("priorities: special cases", () => {
 
     expect(byId(result, "hung-piece").rank).toBe(1);
     const p = byId(result, "thrown-win");
-    expect(p.rank).toBe(2);
+    // One uncovered finding is under this period's floor, so it is not ranked.
+    expect(p.eligible).toBe(true);
+    expect(p.rank).toBeNull();
     const N = weighted(Array(6).fill(MOVES_PER_WEEK));
     // K = 1, not 3.
     expect(p.rate).toBeCloseTo((100 * (0.52 * 3 + 1)) / (300 + N), 9);
@@ -216,5 +218,45 @@ describe("priorities: special cases", () => {
     expect(p.rate).toBeCloseTo((100 * (0.52 * 3 + 3)) / (300 + N), 9);
     expect(p.severity).toBeCloseTo((50 + 120) / 5, 9);
     expect(p.persistence.weeks[0]).toBe(true);
+  });
+
+  const week0 = (findings: PatternFinding[]) => makeWeeks([[findings, [], [], [], [], []]]);
+
+  it("a pattern whose moves a higher pick already covers is eligible but not ranked", () => {
+    const weeks = week0([
+      finding("hung-piece", "g1", 20, 30),
+      finding("hung-piece", "g2", 30, 30),
+      finding("hung-piece", "g3", 30, 30),
+      finding("time-trouble", "g1", 20, 30),
+      finding("time-trouble", "g2", 30, 30),
+    ]);
+    const result = priorities({ weeks, current: summaryOf(weeks[0]!), band: "club", cooldown: new Set() });
+    expect(byId(result, "hung-piece").rank).toBe(1);
+    const p = byId(result, "time-trouble");
+    expect(p.eligible).toBe(true);
+    expect(p.rank).toBeNull();
+    // Scored in round two with both findings covered: the prior alone.
+    const N = weighted(Array(6).fill(MOVES_PER_WEEK));
+    expect(p.rate).toBeCloseTo((100 * (0.24 * 3)) / (300 + N), 9);
+    expect(p.severity).toBeCloseTo(25, 9);
+    expect(p.persistence.weeks[0]).toBe(false);
+  });
+
+  it("a pattern keeping two uncovered findings in two games is still ranked", () => {
+    const weeks = week0([
+      finding("hung-piece", "g1", 20, 30),
+      finding("hung-piece", "g2", 30, 30),
+      finding("hung-piece", "g3", 30, 30),
+      finding("time-trouble", "g1", 20, 30),
+      finding("time-trouble", "g4", 40, 30),
+      finding("time-trouble", "g5", 50, 30),
+    ]);
+    const result = priorities({ weeks, current: summaryOf(weeks[0]!), band: "club", cooldown: new Set() });
+    expect(byId(result, "hung-piece").rank).toBe(1);
+    const p = byId(result, "time-trouble");
+    expect(p.eligible).toBe(true);
+    expect(p.rank).toBe(2);
+    const N = weighted(Array(6).fill(MOVES_PER_WEEK));
+    expect(p.rate).toBeCloseTo((100 * (0.24 * 3 + 2)) / (300 + N), 9);
   });
 });

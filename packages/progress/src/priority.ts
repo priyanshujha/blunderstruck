@@ -123,11 +123,14 @@ function beats(a: Scored, b: Scored): boolean {
 /**
  * Score every pattern by recent cost and persistence, greedily over findings not yet covered.
  *
- * A pattern is eligible when its band allows it and the current period holds at least
+ * A pattern is eligible when its band allows it, the current period holds at least
  * `TOP_MIN_OCCURRENCES` of its findings in at least `TOP_MIN_GAMES` games, and it is not in
  * `cooldown`. Each round scores every remaining eligible pattern on the findings, over all
- * weeks, on moves (`gameId#ply`) no earlier pick covers; the best is ranked next and its moves
- * become covered. Every eligible pattern gets a rank. Ineligible patterns keep their round-one
+ * weeks, on moves (`gameId#ply`) no earlier pick covers. As in `rankTop`, a pattern stays
+ * rankable only while its uncovered current-period findings still meet that floor; the best
+ * rankable pattern is ranked next and its moves become covered. `eligible: true` with
+ * `rank: null` means higher picks already cover too much of the pattern this period; it keeps
+ * the numbers of the last round it was scored in. Ineligible patterns keep their round-one
  * numbers and `rank: null`. The result lists ranked patterns by rank, then the rest in
  * `PATTERN_IDS` order.
  */
@@ -150,7 +153,7 @@ export function priorities(input: PrioritiesInput): PatternPriority[] {
 
   const finish = (s: Scored, rank: number | null): PatternPriority => ({
     patternId: s.patternId,
-    eligible: rank !== null,
+    eligible: eligible.has(s.patternId),
     rank,
     rate: s.rate,
     severity: s.severity,
@@ -163,18 +166,33 @@ export function priorities(input: PrioritiesInput): PatternPriority[] {
 
   const covered = new Set<string>();
   const ranked: PatternPriority[] = [];
-  const remaining = PATTERN_IDS.filter((id) => eligible.has(id));
+  const dropped = new Map<string, PatternPriority>();
+  const remaining: string[] = PATTERN_IDS.filter((id) => eligible.has(id));
+  /** This period's floor, on findings no earlier pick covers. */
+  const passesFloor = (id: string): boolean => {
+    const xs = current.findings.filter((f) => f.patternId === id && !covered.has(plyKey(f)));
+    return xs.length >= TOP_MIN_OCCURRENCES && new Set(xs.map((f) => f.gameId)).size >= TOP_MIN_GAMES;
+  };
   while (remaining.length > 0) {
     let best: Scored | undefined;
-    for (const id of remaining) {
+    for (const id of [...remaining]) {
       const s = score(id, weeks, covered);
+      if (!passesFloor(id)) {
+        dropped.set(id, finish(s, null));
+        remaining.splice(remaining.indexOf(id), 1);
+        continue;
+      }
       if (!best || beats(s, best)) best = s;
     }
-    remaining.splice(remaining.indexOf(best!.patternId as (typeof remaining)[number]), 1);
-    for (const f of best!.used) covered.add(plyKey(f));
-    ranked.push(finish(best!, ranked.length + 1));
+    if (!best) break;
+    remaining.splice(remaining.indexOf(best.patternId), 1);
+    for (const f of best.used) covered.add(plyKey(f));
+    for (const f of current.findings) if (f.patternId === best.patternId) covered.add(plyKey(f));
+    ranked.push(finish(best, ranked.length + 1));
   }
 
-  const rest = PATTERN_IDS.filter((id) => !eligible.has(id)).map((id) => finish(score(id, weeks, new Set()), null));
+  const rest = PATTERN_IDS.filter((id) => !ranked.some((p) => p.patternId === id)).map(
+    (id) => dropped.get(id) ?? finish(score(id, weeks, new Set()), null),
+  );
   return [...ranked, ...rest];
 }
