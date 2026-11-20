@@ -36,12 +36,13 @@ interface Capture {
  * - trades are set aside first: each knight, bishop, rook or queen `side` took cancels one of
  *   its own pieces of the same value taken in the line, preferring one taken earlier on the
  *   same square (a recapture), then one of the same role;
- * - `piece` is the most valuable of `side`'s pieces left after that, when the net loss is at
- *   least `HUNG_MIN_NET` (a minor piece for a pawn) and either an enemy piece was won for it
- *   (`for`), or the piece is worth at most twice the net loss (it went for nothing or pawns).
+ * - `piece` is named only when exactly one of `side`'s pieces is left after that and the net
+ *   loss is at least `HUNG_MIN_NET` (a minor piece for a pawn): with `for` when exactly one
+ *   enemy piece is left won for it, alone when none was (it went for nothing or for pawns, and
+ *   is worth at most twice the net loss). Any messier case names nothing; `net` still holds.
  *
- * A queen for a knight is the queen for a knight; a queen for a rook and a knight, or a knight
- * for a knight and a pawn, name nothing.
+ * A queen for a knight is the queen for a knight. A queen for a rook and a knight, a queen and
+ * a knight for a rook, or a knight for a knight and a pawn, name nothing.
  */
 export function lineLoss(fen: string, line: readonly string[], side: Color): LineLoss {
   const pos = positionFromFen(fen);
@@ -81,10 +82,11 @@ export function lineLoss(fen: string, line: readonly string[], side: Color): Lin
   }
   unmatched.push(...pending);
 
-  const byValue = (a: Capture, b: Capture): number => PIECE_VALUES[b.role] - PIECE_VALUES[a.role] || a.index - b.index;
-  const top = [...open].sort(byValue)[0];
-  const gotFor = [...unmatched].sort(byValue)[0];
-  const named = !!top && net >= HUNG_MIN_NET && (!!gotFor || PIECE_VALUES[top.role] <= 2 * net);
+  // One piece for one piece, or one piece for nothing or pawns; anything messier names nothing.
+  const top = open.length === 1 ? open[0] : undefined;
+  const gotFor = unmatched.length === 1 ? unmatched[0] : undefined;
+  const named =
+    !!top && unmatched.length <= 1 && net >= HUNG_MIN_NET && (!!gotFor || PIECE_VALUES[top.role] <= 2 * net);
   const exchange = net >= 1 && open.some((l) => l.role === "rook") && unmatched.some((w) => MINORS.has(w.role));
   return {
     net,

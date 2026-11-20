@@ -108,4 +108,12 @@ describe("lostPiece", () => {
       });
     });
   });
+
+  describe("messier cases name no piece", () => {
+    it("a queen and a knight for a rook: net 7, no piece", () => {
+      // Constructed line (the engine plays Nxd5 here).
+      const fen = "4k3/8/4p3/3r4/1p6/2N5/8/3QK3 w - - 0 1";
+      expect(lineLoss(fen, ["e1f1", "b4c3", "d1d5", "e6d5"], "white")).toEqual({ net: 7, exchange: false });
+    });
+  });
 });

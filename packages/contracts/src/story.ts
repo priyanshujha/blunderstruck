@@ -87,10 +87,26 @@ export const ExampleStory = z.object({
   /** The most valuable enemy piece won for `lost`; absent when it went for nothing or pawns only. */
   lostFor: PieceRole.optional(),
   /**
-   * The capture of `lost` was played in the game: it is within the first `followed` plies of
-   * `punish`. Says nothing about the rest of the game.
+   * What the game actually did after the move, read from the game's own moves with the same
+   * rules as `punish` (whose facts are the engine's line, not the game). Filled for every
+   * pattern, "missed" ones included: there it is what the player's actual move led to.
    */
-  lostInGame: z.boolean().optional(),
+  inGame: z
+    .object({
+      /** The plies played after the move, cut like `punish`; up to the game's end when it ended within them. */
+      moves: z.array(MoveDetail).max(STORY_LINE_MAX_PLIES),
+      /** Material the player is down after the move and `moves`, in pawns (negative when up). */
+      net: z.number(),
+      /** The player's piece lost over those plies, by the same rule as `lost`. */
+      lost: StoryPiece.optional(),
+      /** The enemy piece won for it; absent when it went for nothing or pawns only. */
+      lostFor: PieceRole.optional(),
+      /** The player gave a rook for a knight or bishop over those plies (`net` gives the rest). */
+      exchange: z.boolean().optional(),
+      /** The game ended within `moves`. */
+      ended: z.boolean(),
+    })
+    .optional(),
   /** Material balance change for the player along `punish`, in pawns. */
   gain: z.number(),
   /** Material balance change for the player along `better`, in pawns. */

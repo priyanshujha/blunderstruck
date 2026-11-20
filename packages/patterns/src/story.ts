@@ -275,6 +275,38 @@ function betterReasonOf(
 }
 
 /**
+ * What the game itself did after the player's move at `ply`: its next plies, read over the
+ * plies `lineOutcome` scores them on and cut after the last capture, promotion, check or mate,
+ * like `punish`. When the game ended within those plies, every ply to its end is kept and
+ * `ended` is set. `net`, `lost`, `lostFor` and `exchange` are `lineLoss` over the move and
+ * those plies.
+ */
+function gameAfter(
+  g: PlayerGame,
+  ply: number,
+  fenBefore: string,
+  uci: string,
+  afterPlayed: Chess,
+  player: Color,
+): NonNullable<ExampleStory["inGame"]> {
+  const actual = g.analysis.moves.filter((m) => m.ply > ply).map((m) => m.uci);
+  const scored = lineOutcome(fenBefore, [uci, ...actual].slice(0, BEST_LINE_MAX_PLIES), player);
+  const window = Math.min(scored.plies - 1, STORY_LINE_MAX_PLIES);
+  const endsWithin = actual.length <= window;
+  const read = replay(afterPlayed.clone(), actual, endsWithin ? actual.length : window);
+  const steps = endsWithin ? read : cutAtLastEvent(read, 0);
+  const loss = lineLoss(fenBefore, [uci, ...steps.map((s) => s.detail.uci)], player);
+  return {
+    moves: steps.map((s) => s.detail),
+    net: loss.net,
+    ...(loss.piece ? { lost: loss.piece } : {}),
+    ...(loss.for ? { lostFor: loss.for } : {}),
+    ...(loss.exchange ? { exchange: true } : {}),
+    ended: endsWithin && steps.length === actual.length,
+  };
+}
+
+/**
  * The story of one finding, built only from the stored analysis by replaying its lines with
  * legal-move rules (no engine call). A game whose moves carry a deeper check is expected to be
  * resolved to the checked values before it is passed in; the lines are read the same way.
@@ -294,8 +326,9 @@ function betterReasonOf(
  * - `gain` and `betterGain` are the player's material change from before the move to the end
  *   of the played move plus `punish`, and to the end of `better`.
  * - `lost` and `lostFor` are the piece the played move and `punish` cost the player and what
- *   was won for it, by `lineLoss`; `lostInGame` says the capture of `lost` was among the
- *   `followed` plies.
+ *   was won for it, by `lineLoss`: what the move allowed, by the engine's line.
+ * - `inGame` reads the game's own moves after the move the same way (see `gameAfter`), for
+ *   every pattern: facts about the game never come from matching the engine's line.
  *
  * Undefined when the finding is for another game, its ply is not in the game, or the stored
  * move is not legal in its own position.
@@ -329,9 +362,7 @@ export function storyOf(
   let followed = 0;
   while (followed < punish.length && moveAt(g, move.ply + 1 + followed)?.uci === punish[followed]!.detail.uci) followed++;
   const replyFound = followed >= 1;
-  const lostAt = lost
-    ? punish.findIndex((s) => s.detail.color !== player && s.detail.captured === lost.piece && s.detail.to === lost.square)
-    : -1;
+  const inGame = gameAfter(g, move.ply, move.fenBefore, move.uci, afterPlayed, player);
 
   const bestLine = move.bestLine ?? (move.bestUci ? [move.bestUci] : []);
   const bestIsPlayed = bestLine[0] === move.uci;
@@ -358,11 +389,12 @@ export function storyOf(
     targets: key?.targets ?? [],
     ...(key?.rear ? { rear: key.rear } : {}),
     followed,
-    ...(lost ? { lost, lostInGame: lostAt !== -1 && lostAt < followed } : {}),
+    ...(lost ? { lost } : {}),
     ...(loss.for ? { lostFor: loss.for } : {}),
     gain,
     ...(betterGain !== undefined ? { betterGain } : {}),
     ...(betterReason ? { betterReason } : {}),
+    inGame,
     winPctBefore: move.winPctBefore,
     winPctAfter: move.winPctAfter,
     depth: move.check?.depth ?? g.analysis.engine.depth,
