@@ -16,7 +16,7 @@ interface PatternText {
   title: string;
   /** Short noun phrase for the summary, e.g. "pieces left hanging". */
   noun: string;
-  /** The first sentence of `why`: what happened. `WHERE` becomes the games phrase ("in {gamesAffected} of your {games} games"). */
+  /** The first sentence of `why`: what happened, with no count (the report prints how often right under it). */
   what: string;
   /** The second sentence of `why`: why it matters. Reads right for one game or many. */
   matters: string;
@@ -36,7 +36,7 @@ const TEXT: Record<PatternId, PatternText> = {
   "missed-mate": {
     title: "Checkmates left on the board",
     noun: "missed mates",
-    what: "You had a quick checkmate and played something else WHERE.",
+    what: "You had a quick checkmate and played something else.",
     matters: "A mate on the board ends the game; letting it go gives the opponent another chance.",
     quiet: "No quick mate slipped away in THESE.",
     drill: {
@@ -59,7 +59,7 @@ const TEXT: Record<PatternId, PatternText> = {
   "allowed-mate": {
     title: "Quick mates against you",
     noun: "quick mates allowed",
-    what: "A move let the other side force checkmate within a couple of moves WHERE.",
+    what: "A move let the other side force checkmate within a couple of moves.",
     matters: "Nothing else on the board matters if the king falls first.",
     quiet: "No quick mate got through against you in THESE.",
     drill: {
@@ -82,7 +82,7 @@ const TEXT: Record<PatternId, PatternText> = {
   "hung-piece": {
     title: "Pieces left out in the open",
     noun: "pieces left hanging",
-    what: "A piece was left where it could simply be taken WHERE.",
+    what: "A piece was left where it could simply be taken.",
     matters: "A free piece is often the whole game, and it is the easiest loss to stop.",
     quiet: "No piece was left hanging in THESE.",
     drill: {
@@ -105,7 +105,7 @@ const TEXT: Record<PatternId, PatternText> = {
   "allowed-tactic": {
     title: "Shots left open for the opponent",
     noun: "tactics allowed",
-    what: "A move left the other side a winning tactic, such as a fork, WHERE.",
+    what: "A move left the other side a winning tactic, such as a fork.",
     matters: "A tactic like that hands over material without the opponent having to work for it.",
     quiet: "No tactic was left open for the opponent in THESE.",
     drill: {
@@ -128,7 +128,7 @@ const TEXT: Record<PatternId, PatternText> = {
   "missed-capture": {
     title: "Free material left on the board",
     noun: "missed captures",
-    what: "You could have won material with a capture and played something else WHERE.",
+    what: "You could have won material with a capture and played something else.",
     matters: "Free material is the simplest advantage there is, and it was already sitting there.",
     quiet: "No free material was left on the board in THESE.",
     drill: {
@@ -151,7 +151,7 @@ const TEXT: Record<PatternId, PatternText> = {
   "missed-tactic": {
     title: "Tactics that went unplayed",
     noun: "missed tactics",
-    what: "You had a winning tactic and did not play it WHERE.",
+    what: "You had a winning tactic and did not play it.",
     matters: "A shot like that can decide a game on the spot.",
     quiet: "No winning tactic went unplayed in THESE.",
     drill: {
@@ -174,7 +174,7 @@ const TEXT: Record<PatternId, PatternText> = {
   "thrown-win": {
     title: "Wins that got away",
     noun: "thrown wins",
-    what: "You reached a winning position and did not win WHERE.",
+    what: "You reached a winning position and did not win.",
     matters: "The hard part was already done, so this is the cheapest kind of point to win back.",
     quiet: "No winning position got away in THESE.",
     drill: {
@@ -197,7 +197,7 @@ const TEXT: Record<PatternId, PatternText> = {
   "time-trouble": {
     title: "When the clock gets short",
     noun: "mistakes in time trouble",
-    what: "Mistakes came with the clock nearly empty WHERE.",
+    what: "Mistakes came with the clock nearly empty.",
     matters: "The position was not the problem; the clock made the decision.",
     quiet: "The clock did not cost you in THESE.",
     drill: {
@@ -220,7 +220,7 @@ const TEXT: Record<PatternId, PatternText> = {
   "opening-trouble": {
     title: "The same opening hole, again",
     noun: "repeated opening mistakes",
-    what: "An early position you have met before went wrong again WHERE.",
+    what: "An early position you have met before went wrong again.",
     matters: "Fix the position once and it stays fixed in every game that reaches it.",
     quiet: "The old opening hole stayed shut in THESE.",
     drill: {
@@ -245,7 +245,7 @@ const TEXT: Record<PatternId, PatternText> = {
 const FALLBACK: PatternText = {
   title: "A recurring mistake",
   noun: "recurring mistakes",
-  what: "This mistake turned up WHERE.",
+  what: "This mistake kept turning up.",
   matters: "It costs more than it looks.",
   quiet: "This mistake stayed away in THESE.",
   drill: {
@@ -264,14 +264,6 @@ function textFor(patternId: string): PatternText {
   return (TEXT as Record<string, PatternText>)[patternId] ?? FALLBACK;
 }
 
-/** "in {gamesAffected} of your {games} games", in the right grammar for one game, some or all. */
-function where(affected: number, games: number): string {
-  if (games <= 1) return "in your only game this period";
-  if (affected >= games) return "in each of your {games} games";
-  if (affected === 1) return "in a single game out of {games}";
-  return "in {gamesAffected} of your {games} games";
-}
-
 /** This period's games and games affected for the item's pattern. */
 function periodCounts(item: FocusChoice, draft: ReportDraft): { games: number; affected: number } {
   const stat = draft.current.stats.find((s) => s.patternId === item.patternId);
@@ -280,7 +272,7 @@ function periodCounts(item: FocusChoice, draft: ReportDraft): { games: number; a
 
 /**
  * What happened and why it matters, in two sentences, read from this period's stat for the
- * pattern. A kept item that stayed away gets a quiet-period line instead. No weeks, rate or
+ * pattern. A kept item that stayed away gets a quiet-period line instead. No count, frequency, weeks, rate or
  * target: the report prints those lines itself, right under the wording.
  */
 function why(item: FocusChoice, draft: ReportDraft): string {
@@ -290,7 +282,7 @@ function why(item: FocusChoice, draft: ReportDraft): string {
     const these = games === 0 ? "this period" : games === 1 ? "this game" : "these {games} games";
     return `${t.quiet.replace("THESE", these)} Keep the habit going so it stays that way.`;
   }
-  return `${t.what.replace("WHERE", where(affected, games))} ${t.matters}`;
+  return `${t.what} ${t.matters}`;
 }
 
 function summary(draft: ReportDraft): string {
@@ -305,7 +297,7 @@ function summary(draft: ReportDraft): string {
           : "Only {games} games in this period, so here are the numbers on their own.";
     parts.push(`${opening} Focus items start once there are enough games to go on.`);
   } else {
-    parts.push("Over {games} games you made {mistakeRate} mistakes per hundred moves.");
+    parts.push("Over {games} games you made {mistakesPerGame} mistakes a game.");
     if (draft.focus.length === 0) {
       parts.push("No single habit came back often enough to pick out, which is its own kind of good news.");
     } else if (draft.focus.length === 1) {

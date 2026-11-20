@@ -90,7 +90,7 @@ function draft(focus: string[], revision = 0): ReportDraft {
 
 function good(ids: string[], tag = "model") {
   return JSON.stringify({
-    summary: `Over {games} games, {mistakeRate} mistakes per hundred moves (${tag}).`,
+    summary: `Over {games} games, {mistakesPerGame} mistakes a game (${tag}).`,
     focus: ids.map((patternId) => ({
       patternId,
       title: `${tag} title ${patternId}`,
@@ -321,7 +321,7 @@ function drafted(
 /** A model answer with one step per blind spot of each asked item. */
 function stepped(d: ReportDraft, ids: string[], tag = "model"): string {
   return JSON.stringify({
-    summary: `Over {games} games, {mistakeRate} mistakes per hundred moves (${tag}).`,
+    summary: `Over {games} games, {mistakesPerGame} mistakes a game (${tag}).`,
     focus: ids.map((patternId) => ({
       patternId,
       title: `${tag} title ${patternId}`,

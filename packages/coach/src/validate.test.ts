@@ -111,7 +111,7 @@ function answer(over: { summary?: string; focus?: Partial<{ patternId: string; t
     { patternId: "missed-tactic", title: "Missed shots", why: "You missed a fork {occurrences} times.", drill: "Puzzles daily." },
   ];
   const focus = over.focus ? over.focus.map((f, i) => ({ ...base[i % 2]!, ...f })) : base;
-  return JSON.stringify({ summary: over.summary ?? "Over {games} games, {mistakeRate} mistakes per hundred moves.", focus });
+  return JSON.stringify({ summary: over.summary ?? "Over {games} games, {mistakesPerGame} mistakes a game.", focus });
 }
 
 function withWhy(why: string) {
@@ -470,7 +470,7 @@ describe("parseWording", () => {
     expect(errors[0]).toBe(
       'focus[0] (hung-piece).why, the sentence "It happened 12 times": Write this count with its token ({games}, {gamesAffected}, {occurrences}) or leave the number out.',
     );
-    expect(errorsOf(answer({ summary: "You hung a piece in 9 games." }))[0]).toMatch(/token \(\{games\}, \{mistakeRate\}, \{mistakesPerGame\}, \{focusCount\}\)/);
+    expect(errorsOf(answer({ summary: "You hung a piece in 9 games." }))[0]).toMatch(/token \(\{games\}, \{mistakesPerGame\}, \{focusCount\}\)/);
     for (const e of [...errors, ...errorsOf(answer({ focus: [{ drill: "Get it under 40%." }, {}] }))]) {
       expect(e).not.toMatch(/into the drill|study quantity/);
     }
@@ -601,25 +601,30 @@ describe("templateWording", () => {
     }
   });
 
-  it("renders the player's numbers in the why of the default draft", () => {
-    const d = draft([choice("hung-piece")]);
-    expect(renderText(templateWording(d).focus[0]!.why, focusTokenValues(d.focus[0]!, d))).toContain("9 of your 31 games");
+  it("does not open the why with the game count, since the report prints the frequency below it", () => {
+    for (const id of PATTERN_IDS) {
+      const d = draft([choice(id)]);
+      const why = templateWording(d).focus[0]!.why;
+      expect(why).not.toMatch(/\{(gamesAffected|games|occurrences)\}/);
+      expect(renderText(why, focusTokenValues(d.focus[0]!, d))).not.toMatch(/\d/);
+    }
   });
 
   it.each([
     [0, 14, "these 14 games. Keep the habit going so it stays that way."],
     [0, 1, "this game. Keep the habit going so it stays that way."],
-    [1, 14, "in a single game out of 14."],
-    [5, 14, "in 5 of your 14 games."],
-    [14, 14, "in each of your 14 games."],
-    [1, 1, "in your only game this period."],
+    [1, 14, "A piece was left where it could simply be taken. "],
+    [5, 14, "A piece was left where it could simply be taken. "],
+    [14, 14, "A piece was left where it could simply be taken. "],
+    [1, 1, "A piece was left where it could simply be taken. "],
   ])("reads right with %i of %i games affected, for every pattern", (affected, games, expected) => {
     for (const id of PATTERN_IDS) {
       const d = withAffected(id, affected, games);
       const w = templateWording(d);
       expect(parseWording(JSON.stringify(w), d)).toMatchObject({ ok: true });
       const why = renderText(w.focus[0]!.why, focusTokenValues(d.focus[0]!, d));
-      expect(why).toContain(expected);
+      if (affected === 0 || id === "hung-piece") expect(why).toContain(expected);
+      if (affected > 0) expect(why).not.toMatch(/\d/);
       expect(why).not.toMatch(/\b0 of\b|\b1 of\b|\b1 games\b/);
     }
   });
@@ -659,7 +664,7 @@ describe("templateWording", () => {
       }
     }
     expect(templateWording(draft([choice("missed-tactic")])).focus[0]!.why).toBe(
-      "You had a winning tactic and did not play it in {gamesAffected} of your {games} games. A shot like that can decide a game on the spot.",
+      "You had a winning tactic and did not play it. A shot like that can decide a game on the spot.",
     );
   });
 
@@ -1041,3 +1046,23 @@ describe("scope of the story allowances and blind-spot values", () => {
     expect(TEMPLATE_STEPS["moved-after-capture"]).toMatch(/^Before you capture, look at the square you take on: who can take back there/);
   });
 });
+
+describe("the summary's overall level", () => {
+  it("rejects {mistakeRate} in a new summary and says to use {mistakesPerGame}", () => {
+    expect(errorsOf(answer({ summary: "Over {games} games, {mistakeRate} mistakes per hundred moves." }))).toEqual([
+      "summary uses {mistakeRate}; per-hundred-move figures are shown only in the report's details, so state the overall level with {mistakesPerGame} (mistakes a game) instead (allowed: {games}, {mistakesPerGame}, {focusCount})",
+    ]);
+    expect(errorsOf(answer({ summary: "Over {games} games, {mistakesPerGame} mistakes a game." }))).toEqual([]);
+  });
+
+  it("still renders a stored summary that uses {mistakeRate}", () => {
+    expect(renderText("{mistakeRate} mistakes per hundred moves.", summaryTokenValues(TWO))).toBe("4.25 mistakes per hundred moves.");
+  });
+
+  it("states the level per game in the template summary", () => {
+    const text = templateWording(TWO).summary;
+    expect(text).toContain("Over {games} games you made {mistakesPerGame} mistakes a game.");
+    expect(text).not.toContain("{mistakeRate}");
+  });
+});
+

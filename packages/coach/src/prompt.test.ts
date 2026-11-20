@@ -14,7 +14,7 @@ import {
 } from "@blunderstruck/contracts";
 import { describe, expect, it } from "vitest";
 import { BLIND_SPOT_MEANING, buildPrompt, WORDING_SCHEMA } from "./prompt";
-import { PRINTED_TOKENS, parseWording, STEP_TOKENS, WORDING_FOCUS_TOKENS } from "./validate";
+import { PRINTED_TOKENS, parseWording, STEP_TOKENS, WORDING_FOCUS_TOKENS, WORDING_SUMMARY_TOKENS } from "./validate";
 
 const SETTINGS = { analysisVersion: 1, patternsVersion: 1, engine: { name: "stockfish", depth: 12 } };
 
@@ -187,7 +187,9 @@ describe("buildPrompt", () => {
       expect(system).toContain(BAND_RUBRIC[band].adviceLevel);
       expect(system).toContain(BAND_RUBRIC[band].eligible.join(", "));
     }
-    for (const t of [...WORDING_FOCUS_TOKENS, ...SUMMARY_TOKENS]) expect(system).toContain(`- {${t}}: `);
+    for (const t of [...WORDING_FOCUS_TOKENS, ...WORDING_SUMMARY_TOKENS]) expect(system).toContain(`- {${t}}: `);
+    expect(system).not.toContain("{mistakeRate}");
+    expect(SUMMARY_TOKENS).toContain("mistakeRate");
     for (const t of PRINTED_TOKENS) expect(system).not.toContain(`{${t}}`);
     expect(system.split(/\s+/).length).toBeGreaterThan(900);
   });
@@ -206,7 +208,10 @@ describe("buildPrompt", () => {
     expect(system).toContain("is written only with its token, never as a number of your own");
     expect(system).toContain("No percentages, fractions of their games or rates, in any field.");
     expect(system).toContain("Numbers that describe a position, a clock or what to practise are fine as they are");
-    expect(system).toContain("The report prints the weeks, rate and target lines itself, so leave those out entirely.");
+    expect(system).toContain("The report prints the frequency, goal and weeks lines itself, and shows rates only in its details, so leave those out entirely.");
+    expect(system).toContain("do not open the why with how many games were affected");
+    expect(system).toContain('State the player\'s overall level with {mistakesPerGame} only');
+    expect(example).not.toMatch(/\{(gamesAffected|mistakeRate)\}|per hundred/);
     expect(system).toContain('never write "{gamesAffected} of" or "0 of" for it');
     expect(system).not.toMatch(/no number words other than|move it into the drill|any digit that counts/);
     expect(system).toContain("weeksCounted of three or more and weeksRecurred is more than half of weeksCounted");
@@ -216,6 +221,8 @@ describe("buildPrompt", () => {
   it("puts the band, reasons, targets and example positions in the user part, not the username", () => {
     const { user } = buildPrompt(draft({ username: "alpha-invented", band: "beginner", focus: ["hung-piece", "missed-tactic"] }));
     expect(user).toContain('"band": "beginner"');
+    expect(user).toContain('"mistakesPerGame": ');
+    expect(user).not.toContain('"mistakeRate"');
     expect(user).toContain('"timeClass": "blitz"');
     expect(user).toContain('"kind": "new"');
     expect(user).toContain('"weeksRecurred": 4');

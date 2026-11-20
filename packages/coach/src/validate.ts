@@ -26,6 +26,13 @@ export type WordingResult = { ok: true; value: WordingText } | { ok: false; erro
 
 const LIMITS = { title: 60, why: 400, drill: 400, summary: 600, step: 200 } as const;
 
+/**
+ * Tokens a newly written summary may use. `{mistakeRate}` stays a valid token for stored
+ * reports, but per-hundred-move figures are shown only in the report's details, so new wording
+ * states the overall level with `{mistakesPerGame}`.
+ */
+export const WORDING_SUMMARY_TOKENS = SUMMARY_TOKENS.filter((t) => t !== "mistakeRate");
+
 /** Tokens a habit step may use, filled from its blind spot. */
 export const STEP_TOKENS = BLIND_SPOT_TOKENS;
 
@@ -540,7 +547,11 @@ function checkField(where: string, text: string, max: number, allowed: readonly 
   for (const m of text.matchAll(/\{([^{}]*)\}/g)) {
     const name = m[1]!;
     if (allowed.includes(name)) continue;
-    if ((PRINTED_TOKENS as readonly string[]).includes(name) && where !== "summary") {
+    if (name === "mistakeRate" && where === "summary") {
+      errors.push(
+        `summary uses {mistakeRate}; per-hundred-move figures are shown only in the report's details, so state the overall level with {mistakesPerGame} (mistakes a game) instead (allowed: ${list})`,
+      );
+    } else if ((PRINTED_TOKENS as readonly string[]).includes(name) && where !== "summary") {
       errors.push(
         `${where} uses {${name}}; the report prints the weeks, rate, starting rate and target lines itself, right under the wording, so leave it out (allowed: ${list})`,
       );
@@ -582,7 +593,7 @@ export function parseWording(text: string, draft: ReportDraft, only?: string[]):
     );
   }
   const shown = shownValues(draft);
-  errors.push(...checkField("summary", value.summary, LIMITS.summary, SUMMARY_TOKENS, { shown, record: true }));
+  errors.push(...checkField("summary", value.summary, LIMITS.summary, WORDING_SUMMARY_TOKENS, { shown, record: true }));
   errors.push(...checkMoves("summary", value.summary, null));
   value.focus.forEach((f, i) => {
     const at = `focus[${i}] (${f.patternId})`;
