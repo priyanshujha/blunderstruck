@@ -118,6 +118,9 @@ function withWhy(why: string) {
   return answer({ focus: [{ why }, {}] });
 }
 
+/** Rows of the count table that pass in an item field but state a per-game level, which a new summary may not write as a number. */
+const SUMMARY_LEVEL_ROWS: ReadonlySet<string> = new Set(["You averaged 2 blunders a game.", "You went from 3 blunders a game to 2."]);
+
 /** An error from the move rule rather than the count rule. */
 const MOVE_ERROR = / names /;
 
@@ -408,7 +411,8 @@ describe("parseWording", () => {
       ["drill", answer({ focus: [{ drill: text }, {}] }), inDrill],
     ];
     if (text.length <= 60) cases.push(["title", answer({ focus: [{ title: text }, {}] }), inRecord]);
-    if (!/[{}]/.test(text)) cases.push(["summary", answer({ summary: text }), inRecord]);
+    // A level written as a number ("2 blunders a game") is the summary's business: {mistakesPerGame}.
+    if (!/[{}]/.test(text)) cases.push(["summary", answer({ summary: text }), inRecord && !SUMMARY_LEVEL_ROWS.has(text)]);
     for (const [field, json, passes] of cases) {
       // The count rule alone: moves and squares are the move rule's business, tested below.
       const errors = errorsOf(json).filter((e) => !MOVE_ERROR.test(e));
@@ -1049,7 +1053,7 @@ describe("scope of the story allowances and blind-spot values", () => {
 
 describe("the summary's overall level", () => {
   it("rejects {mistakeRate} in a new summary and says to use {mistakesPerGame}", () => {
-    expect(errorsOf(answer({ summary: "Over {games} games, {mistakeRate} mistakes per hundred moves." }))).toEqual([
+    expect(errorsOf(answer({ summary: "Over {games} games, {mistakeRate} mistakes in all." }))).toEqual([
       "summary uses {mistakeRate}; per-hundred-move figures are shown only in the report's details, so state the overall level with {mistakesPerGame} (mistakes a game) instead (allowed: {games}, {mistakesPerGame}, {focusCount})",
     ]);
     expect(errorsOf(answer({ summary: "Over {games} games, {mistakesPerGame} mistakes a game." }))).toEqual([]);
@@ -1063,6 +1067,36 @@ describe("the summary's overall level", () => {
     const text = templateWording(TWO).summary;
     expect(text).toContain("Over {games} games you made {mistakesPerGame} mistakes a game.");
     expect(text).not.toContain("{mistakeRate}");
+  });
+
+  it.each([
+    ["Over {games} games you made 1.4 mistakes a game.", false],
+    ["You averaged 1.4 mistakes each game.", false],
+    ["You made {mistakesPerGame} mistakes per hundred moves.", false],
+    ["You made {mistakesPerGame} mistakes per 100 moves.", false],
+    ["Over 31 games the same habits did the damage.", false],
+    ["Most of it came in 2 games of the endgame kind: 2 games is no trend.", false],
+    [
+      "Over {games} games you made {mistakesPerGame} mistakes a game. Most of the damage came from pieces left loose, either for a tactic or simply for the taking.",
+      true,
+    ],
+    ["Over {games} games you made {mistakesPerGame} mistakes a game, and {focusCount} habits stand out.", true],
+  ] as const)("summary %j passes: %s", (summary, passes) => {
+    const d = draft([choice("hung-piece"), choice("missed-tactic")]);
+    // {focusCount} is 2 here, so "2 games" copies a shown value.
+    const errors = errorsOf(answer({ summary }), d);
+    expect(errors.length === 0, errors.join("\n")).toBe(passes);
+  });
+
+  it("rejects per-hundred figures in every item field, steps included, naming what to do", () => {
+    for (const over of [{ title: "Loose pieces, per hundred" }, { why: "It came {occurrences} times, per 100 moves." }, { drill: "Aim for fewer per hundred moves." }]) {
+      expect(errorsOf(answer({ focus: [over, {}] }))).toEqual([expect.stringMatching(/per-hundred-move figures are shown only in the report's details, so leave "per hundred" out\.$/)]);
+    }
+    const steps = [{ blindSpot: "answer-check", text: "Keep their checks rare, per hundred moves." }, { blindSpot: "moved-piece-lost", text: STEP_B }];
+    expect(storiedErrors(storiedAnswer({ a: { steps } }))).toEqual([expect.stringMatching(/steps\[0\] \(answer-check\), the sentence .*leave "per hundred" out/)]);
+    expect(errorsOf(answer({ summary: "You made {mistakesPerGame} mistakes per hundred moves." }))).toEqual([
+      expect.stringMatching(/^summary, the sentence .*leave "per hundred" out and state the overall level with \{mistakesPerGame\} mistakes a game\.$/),
+    ]);
   });
 });
 

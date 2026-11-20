@@ -5,6 +5,7 @@ import {
   type MoveDetail,
   type ReportDraft,
   SUMMARY_TOKENS,
+  summaryTokenValues,
 } from "@blunderstruck/contracts";
 
 /** One habit step as the wording gives it: the blind spot it is for and its text (a token template, `BLIND_SPOT_TOKENS`). */
@@ -292,6 +293,41 @@ export function countsInWords(ws: readonly string[]): boolean {
 export interface CountContext {
   shown: ReadonlySet<number>;
   record: boolean;
+  /** The summary's token values, set only when checking a newly written summary. */
+  summaryShown?: ReadonlySet<number>;
+}
+
+/*
+ * The per-game form. New wording states the overall level only with `{mistakesPerGame}` and
+ * never a per-hundred-move figure, which the report shows only in its details.
+ */
+
+/** Nouns a per-game level counts: "1.4 mistakes a game". */
+export const MISTAKE_NOUNS: ReadonlySet<string> = new Set(["mistake", "mistakes", "blunder", "blunders", "error", "errors"]);
+/** Words that, before "game", make a per-game level: "a game", "per game", "each game", "every game". */
+export const PER_GAME_LEADS: ReadonlySet<string> = new Set(["a", "per", "each", "every"]);
+/** Words a summary's own value may not stand next to in digits. */
+export const SUMMARY_VALUE_NOUNS: ReadonlySet<string> = new Set(["game", "games", "mistake", "mistakes"]);
+
+/** "per hundred" or "per 100", whatever comes before it. */
+export function perHundred(ws: readonly string[]): boolean {
+  return ws.some((w, i) => w === "per" && (ws[i + 1] === "hundred" || ws[i + 1] === "100"));
+}
+
+/**
+ * A level written as a number of the model's own in a summary: a number followed within two
+ * words by a mistake noun and "a/per/each/every game" ("1.4 mistakes a game"), or a digit copy
+ * of one of the summary's token values next to "game(s)" or "mistake(s)" ("31 games").
+ */
+export function writesLevel(ws: readonly string[], summaryShown: ReadonlySet<number>): boolean {
+  return ws.some((w, i) => {
+    const v = digitValue(w);
+    if (v === undefined) return false;
+    for (let k = i + 1; k <= i + 2 && k < ws.length; k++) {
+      if (MISTAKE_NOUNS.has(ws[k]!) && PER_GAME_LEADS.has(ws[k + 1] ?? "") && ws[k + 2] === "game") return true;
+    }
+    return summaryShown.has(v) && (SUMMARY_VALUE_NOUNS.has(ws[i + 1] ?? "") || SUMMARY_VALUE_NOUNS.has(ws[i - 1] ?? ""));
+  });
 }
 
 /** Whether one sentence states a count about the player's games. */
@@ -303,6 +339,16 @@ export function statesCount(sentence: string, ctx: CountContext): boolean {
 /** The sentences of `text` that state a count about the player's games. */
 export function countSentences(text: string, ctx: CountContext): string[] {
   return sentences(text).filter((s) => statesCount(s, ctx));
+}
+
+/** The summary's token values the model was shown, as numbers. */
+export function summaryValues(draft: ReportDraft): Set<number> {
+  const values = new Set<number>();
+  for (const t of WORDING_SUMMARY_TOKENS) {
+    const v = digitValue(summaryTokenValues(draft)[t]);
+    if (v !== undefined) values.add(v);
+  }
+  return values;
 }
 
 /** The record values the model was shown for this draft: games, and each focus item's games affected and occurrences. */
@@ -565,6 +611,16 @@ function checkField(where: string, text: string, max: number, allowed: readonly 
   for (const s of countSentences(text, ctx)) {
     errors.push(`${where}, the sentence "${quote(s)}": Write this count with its token (${list}) or leave the number out.`);
   }
+  for (const s of sentences(text)) {
+    const ws = wordsOf(s);
+    if (perHundred(ws)) {
+      errors.push(
+        `${where}, the sentence "${quote(s)}": per-hundred-move figures are shown only in the report's details, so leave "per hundred" out${where === "summary" ? " and state the overall level with {mistakesPerGame} mistakes a game" : ""}.`,
+      );
+    } else if (ctx.summaryShown && writesLevel(ws, ctx.summaryShown)) {
+      errors.push(`${where}, the sentence "${quote(s)}": state the overall level only with {mistakesPerGame} and the counts with their tokens (${list}), never as numbers of your own.`);
+    }
+  }
   return errors;
 }
 
@@ -593,7 +649,11 @@ export function parseWording(text: string, draft: ReportDraft, only?: string[]):
     );
   }
   const shown = shownValues(draft);
-  errors.push(...checkField("summary", value.summary, LIMITS.summary, WORDING_SUMMARY_TOKENS, { shown, record: true }));
+  errors.push(...checkField("summary", value.summary, LIMITS.summary, WORDING_SUMMARY_TOKENS, {
+      shown,
+      record: true,
+      summaryShown: summaryValues(draft),
+    }));
   errors.push(...checkMoves("summary", value.summary, null));
   value.focus.forEach((f, i) => {
     const at = `focus[${i}] (${f.patternId})`;
