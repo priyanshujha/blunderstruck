@@ -4,13 +4,14 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "packageManager": "pnpm@11.5.0",
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
-    "cli": "tsx apps/cli/src/main.ts"
+    "cli": "tsx apps/cli/src/main.ts",
+    "web": "tsx apps/web/src/main.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

@@ -38,6 +38,24 @@ importers:
       '@blunderstruck/patterns':
         specifier: workspace:*
         version: link:../../packages/patterns
+      '@blunderstruck/progress':
+        specifier: workspace:*
+        version: link:../../packages/progress
+      '@blunderstruck/report':
+        specifier: workspace:*
+        version: link:../../packages/report
+      '@blunderstruck/store':
+        specifier: workspace:*
+        version: link:../../packages/store
+
+  apps/web:
+    dependencies:
+      '@blunderstruck/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@blunderstruck/store':
+        specifier: workspace:*
+        version: link:../../packages/store
 
   packages/coach:
     dependencies:
@@ -78,6 +96,45 @@ importers:
       '@blunderstruck/engine':
         specifier: workspace:*
         version: link:../engine
+
+  packages/progress:
+    dependencies:
+      '@blunderstruck/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@blunderstruck/patterns':
+        specifier: workspace:*
+        version: link:../patterns
+
+  packages/report:
+    dependencies:
+      '@blunderstruck/coach':
+        specifier: workspace:*
+        version: link:../coach
+      '@blunderstruck/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@blunderstruck/engine':
+        specifier: workspace:*
+        version: link:../engine
+      '@blunderstruck/ingest':
+        specifier: workspace:*
+        version: link:../ingest
+      '@blunderstruck/patterns':
+        specifier: workspace:*
+        version: link:../patterns
+      '@blunderstruck/progress':
+        specifier: workspace:*
+        version: link:../progress
+      '@blunderstruck/store':
+        specifier: workspace:*
+        version: link:../store
+
+  packages/store:
+    dependencies:
+      '@blunderstruck/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
 packages:
 
