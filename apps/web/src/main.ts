@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { Platform, ReportTimeClass } from "@blunderstruck/contracts";
+import { UsageError, parsePort } from "./args";
 import { EnvFileError, loadEnv } from "./env";
 import { startServer } from "./server";
 
@@ -19,15 +20,21 @@ function dbPath(flag: string | undefined, env: NodeJS.ProcessEnv = process.env):
 
 /** `pnpm web <platform> <user>`: serve the latest report on this machine only. */
 async function main(): Promise<void> {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      port: { type: "string" },
-      db: { type: "string" },
-      "time-class": { type: "string" },
-      env: { type: "string" },
-    },
-  });
+  const { values, positionals } = (() => {
+    try {
+      return parseArgs({
+        allowPositionals: true,
+        options: {
+          port: { type: "string" },
+          db: { type: "string" },
+          "time-class": { type: "string" },
+          env: { type: "string" },
+        },
+      });
+    } catch (err) {
+      throw new UsageError(`${err instanceof Error ? err.message : String(err)}\n${USAGE}`);
+    }
+  })();
   // Before the database path is resolved, so BLUNDERSTRUCK_DB in the file counts.
   try {
     loadEnv(values.env === undefined ? {} : { file: values.env });
@@ -40,15 +47,14 @@ async function main(): Promise<void> {
   }
   const [platformArg, user, ...rest] = positionals;
   const platform = Platform.safeParse(platformArg);
-  if (!platform.success || !user || rest.length > 0) throw new Error(USAGE);
+  if (!platform.success || !user || rest.length > 0) throw new UsageError(USAGE);
   let timeClass: ReportTimeClass | undefined;
   if (values["time-class"] !== undefined) {
     const tc = ReportTimeClass.safeParse(values["time-class"]);
-    if (!tc.success) throw new Error(`--time-class must be one of ${ReportTimeClass.options.join(", ")}`);
+    if (!tc.success) throw new UsageError(`--time-class must be one of ${ReportTimeClass.options.join(", ")}`);
     timeClass = tc.data;
   }
-  const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
-  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("--port must be a whole number from 0 to 65535");
+  const port = values.port === undefined ? DEFAULT_PORT : parsePort(values.port);
 
   const started = await startServer({
     platform: platform.data,
@@ -67,5 +73,5 @@ async function main(): Promise<void> {
 
 main().catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));
-  process.exitCode = 1;
+  process.exitCode = err instanceof UsageError ? 2 : 1;
 });
