@@ -8,8 +8,9 @@ import {
   type Color,
 } from "@blunderstruck/contracts";
 import { attacks } from "chessops/attacks";
-import { attackersOf, classifyMotif, legalMove, lineOutcome, opposite, PIECE_VALUES, positionFromFen, type Role, type Square } from "./board";
+import { attackersOf, classifyMotif, legalMove, lineOutcome, opposite, positionFromFen, type Role, type Square, squareName } from "./board";
 import { answerTo, moveAt } from "./game";
+import { lostPiece } from "./lost";
 import type { PlayerGame } from "./types";
 
 /*
@@ -25,9 +26,10 @@ import type { PlayerGame } from "./types";
  * - "missed" family: the engine's best line from the position before the move (`bestLine`),
  *   with its decisive part up to the point `lineOutcome` reads it at.
  *
- * "The piece lost" is the most valuable of the player's knights, bishops, rooks and queens the
- * opponent captures in the decisive part of the punishing line (the first one on a tie of
- * value). Pawns are never "the piece lost".
+ * "The piece lost" is `lostPiece` (lost.ts) over the scored line: the move played plus the
+ * decisive part of the punishing line, netted against what the player takes back. A trade is
+ * not a loss; a knight, bishop, rook or queen is named only for a net loss of at least
+ * `HUNG_MIN_NET` pawns. With no piece lost, none of the traits about it hold.
  */
 
 /** One replayed ply. Squares are where the piece ends up (castling: the king's square). */
@@ -108,7 +110,6 @@ function landing(fen: string, uci: string): Step | undefined {
   return replay(fen, [uci])[0];
 }
 
-const LOSABLE: ReadonlySet<Role> = new Set(["knight", "bishop", "rook", "queen"]);
 const LOST_TRAIT: Readonly<Partial<Record<Role, BlindSpotId>>> = {
   knight: "lost-knight",
   bishop: "lost-bishop",
@@ -155,15 +156,18 @@ function allowedTraits(g: PlayerGame, move: AnalyzedMove, out: Set<BlindSpotId>)
   if (motif === "discovered-attack") out.add("answer-discovered");
 
   const outcome = lineOutcome(move.fenBefore, [move.uci, ...answer].slice(0, BEST_LINE_MAX_PLIES), me);
-  const decisive = steps.slice(0, Math.max(1, outcome.plies - 1));
+  const decisive = answer.slice(0, Math.max(1, outcome.plies - 1));
+  const named = lostPiece(move.fenBefore, [move.uci, ...decisive], me);
+  if (!named) return;
   const after = positionFromFen(move.fenAfter).board;
   const before = positionFromFen(move.fenBefore).board;
 
-  // Each of the player's pieces, by where it stands now, mapped to where it stood after their move.
+  // Where the piece lost stood right after the player's move: follow the player's pieces through
+  // the line to the first capture of a piece of that kind on the square `lostPiece` names.
   const origin = new Map<Square, Square>();
   for (const sq of after[me]) origin.set(sq, sq);
-  const losses: { role: Role; origin: Square }[] = [];
-  for (const s of decisive) {
+  let lost: { role: Role; origin: Square } | undefined;
+  for (const s of steps.slice(0, decisive.length)) {
     if (s.color === me) {
       const o = origin.get(s.from);
       origin.delete(s.from);
@@ -176,24 +180,22 @@ function allowedTraits(g: PlayerGame, move: AnalyzedMove, out: Set<BlindSpotId>)
     } else if (s.captured) {
       const o = origin.get(s.captured.square);
       origin.delete(s.captured.square);
-      if (o !== undefined && LOSABLE.has(s.captured.role)) losses.push({ role: s.captured.role, origin: o });
+      if (o !== undefined && s.captured.role === named.piece && squareName(s.captured.square) === named.square) {
+        lost = { role: s.captured.role, origin: o };
+        break;
+      }
     }
   }
+  if (!lost) return;
 
-  // `moved-piece-lost`: the punishing line takes the knight, bishop, rook or queen the player
-  // had just moved.
-  const movedLost = losses.some((l) => l.origin === played.to);
-  if (movedLost) {
+  // `moved-piece-lost`: the piece lost is the one the player had just moved.
+  if (lost.origin === played.to) {
     out.add("moved-piece-lost");
     // `moved-onto-attacked` (child): that piece had moved to a square the opponent already attacked.
     if (attackersOf(after, played.to, them).nonEmpty()) out.add("moved-onto-attacked");
     // `moved-after-capture` (child): the move that put it there was itself a capture.
     if (played.captured) out.add("moved-after-capture");
   }
-
-  let lost: { role: Role; origin: Square } | undefined;
-  for (const l of losses) if (!lost || PIECE_VALUES[l.role] > PIECE_VALUES[lost.role]) lost = l;
-  if (!lost) return;
 
   // `left-after-attack`: the piece lost had not moved, and the opponent's previous move attacked
   // it: the piece that moved attacks it, or the square had no attacker before that move.

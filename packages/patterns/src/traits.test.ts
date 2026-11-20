@@ -113,7 +113,7 @@ describe("traitsOf: the allowed family", () => {
     expect(t).not.toContain("answer-check");
   });
 
-  it("a piece left where the opponent's last move attacked it, still defended", async () => {
+  it("a piece left where the opponent's last move attacked it, still defended, lost for a pawn", async () => {
     expect(traitsAt(await LEFT_AFTER_ATTACK(), 7, "allowed")).toEqual(["left-after-attack", "lost-bishop", "moves-1-10"]);
   });
 
@@ -126,6 +126,33 @@ describe("traitsOf: the allowed family", () => {
       "lost-rook",
       "moves-1-10",
     ]);
+  });
+
+  it("a trade is not a lost piece: 1.Nd5? Nxd5 exd5 Qxd5 loses only a pawn", async () => {
+    // Best Rad1 (+2.59); after Nd5 White is +0.02 with Nxd5 exd5 Qxd5 Re1 (depth 18).
+    const g = await fixtureGame({
+      pgn: fenPgn("r2q1rk1/ppp2ppp/5n2/8/4P3/2N5/PPP1QPPP/R4RK1 w - - 0 1", "1. Nd5 Nxd5"),
+      as: "white",
+      evals: {
+        1: { cp: 259, pv: ["a1d1"] },
+        2: { cp: 2, pv: ["f6d5", "e4d5", "d8d5", "f1e1"] },
+      },
+    });
+    expect(traitsAt(g, 1, "allowed")).toEqual(["moves-1-10"]);
+  });
+
+  it("Legal's trap: the bishop goes for a knight and a pawn, so no piece is lost", async () => {
+    // Best ...Nf6 (Black +0.60); after 4...g6? White is +2.54 with Nxe5 dxe5 Qxg4 Nc6 (depth 18).
+    const g = await fixtureGame({
+      pgn: "1. e4 e5 2. Nf3 d6 3. Bc4 Bg4 4. Nc3 g6 5. Nxe5",
+      as: "black",
+      evals: {
+        8: { cp: -60, pv: ["g8f6", "h2h3", "g4f3"] },
+        9: { cp: 254, pv: ["f3e5", "d6e5", "d1g4", "b8c6"] },
+      },
+    });
+    // Nxe5 does uncover the queen onto g4, so the motif rule still names a discovered attack.
+    expect(traitsAt(g, 8, "allowed")).toEqual(["answer-discovered", "moves-1-10"]);
   });
 
   it("a move with no engine answer has only its move-number band", async () => {

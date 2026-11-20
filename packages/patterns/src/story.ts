@@ -18,6 +18,7 @@ import type { Move, Role, Square } from "chessops/types";
 import { makeSquare, makeUci, opposite } from "chessops/util";
 import { legalMove, lineOutcome, material, PIECE_VALUES, positionFromFen, see } from "./board";
 import { answerTo, moveAt, replyTo } from "./game";
+import { lostPiece } from "./lost";
 import { TACTIC_MIN_GAIN } from "./rules";
 import type { PlayerGame } from "./types";
 
@@ -177,13 +178,27 @@ interface KeyRead {
 /**
  * The key move of a line (`steps`, replayed from `fen`): the first move of the line's first
  * mover that hits at least two worthwhile pieces or opens a line from a slider behind it (a
- * fork or a discovered attack, as in Bxf7+ Kxf7 Ng5+), else the line's first move. Undefined
- * for an empty line.
+ * fork or a discovered attack, as in Bxf7+ Kxf7 Ng5+), else the line's first move. The search
+ * ends at the mover's capture of the most valuable piece it wins in the line, and before any
+ * move made when the mover is already `TACTIC_MIN_GAIN` pawns ahead: the tactic is over by then.
+ * Undefined for an empty line.
  */
 function keyOf(fen: string, steps: readonly Step[], line: KeyRead["line"]): KeyRead | undefined {
   if (steps.length === 0) return undefined;
+  const mover = steps[0]!.detail.color;
+  const startMaterial = material(positionFromFen(fen).board, mover);
+  let decisive = steps.length - 1;
+  let biggest = 0;
+  steps.forEach((s, i) => {
+    const c = s.detail.captured;
+    if (s.detail.color === mover && c && PIECE_VALUES[c] > biggest) {
+      biggest = PIECE_VALUES[c];
+      decisive = i;
+    }
+  });
   let first: KeyRead | undefined;
-  for (let i = 0; i < steps.length; i += 2) {
+  for (let i = 0; i <= decisive; i += 2) {
+    if (i > 0 && material(positionFromFen(steps[i - 1]!.detail.fenAfter).board, mover) - startMaterial >= TACTIC_MIN_GAIN) break;
     const before = positionFromFen(i === 0 ? fen : steps[i - 1]!.detail.fenAfter);
     const detail = steps[i]!.detail;
     const read = readKeyMove(before, detail);
@@ -206,12 +221,19 @@ const squareIndex = (name: string): Square => (name.charCodeAt(0) - 97) + 8 * (n
  * 4. `stops-key-move`: the key move is `punish[0]` and is no longer legal after the better move,
  *    while its destination is empty or holds the player's piece;
  * 5. `holds`: the best line keeps the material level or better.
+ *
+ * Rules 3 and 4 are skipped when they would credit the better move with something it did not
+ * do: the key move lands on the square of the piece just played, the better move gives check,
+ * the key move captures in one position and not in the other, or the player already wins back
+ * on that square later in the punishing line.
  */
 function betterReasonOf(
   player: Color,
   best: ReturnType<typeof lineOutcome>,
   better: readonly Step[],
   key: KeyRead | undefined,
+  played: MoveDetail,
+  punish: readonly Step[],
 ): BetterReason | undefined {
   if (best.mate === "for") return { kind: "mates", mateIn: Math.ceil(best.plies / 2) };
   if (best.gain >= TACTIC_MIN_GAIN) {
@@ -224,19 +246,28 @@ function betterReasonOf(
       gain: best.gain,
     };
   }
-  if (key && key.line === "punish" && key.index === 0 && better[0]) {
-    const pos = positionFromFen(better[0].detail.fenAfter);
-    const k = key.detail;
+  const k = key?.line === "punish" && key.index === 0 ? key.detail : undefined;
+  const fair =
+    !!k &&
+    !!better[0] &&
+    k.to !== played.to &&
+    !better[0].detail.check &&
+    !punish.slice(1).some((s) => s.detail.color === player && s.detail.to === k.to && !!s.detail.captured);
+  if (k && fair) {
+    const pos = positionFromFen(better[0]!.detail.fenAfter);
     const m = legalMove(pos, k.uci);
+    const there = pos.board.get(squareIndex(k.to));
     if (m) {
+      const capturesNow = !!playStep(pos.clone(), m).detail.captured;
       pos.play(m);
       const to = squareIndex(k.to);
       const canTake = [...pos.allDests()].some(([, dests]) => dests.has(to));
       const won = see(pos.board, to, player);
-      if (canTake && won > 0) return { kind: "covers-square", square: k.to, piece: k.piece, gain: won };
-    } else {
-      const there = pos.board.get(squareIndex(k.to));
-      if (!there || there.color === player) return { kind: "stops-key-move", square: k.to, piece: k.piece };
+      if (capturesNow === !!k.captured && canTake && won > 0) {
+        return { kind: "covers-square", square: k.to, piece: k.piece, gain: won };
+      }
+    } else if ((!there || there.color === player) && !!there === !!k.captured) {
+      return { kind: "stops-key-move", square: k.to, piece: k.piece };
     }
   }
   if (best.gain >= 0) return { kind: "holds", gain: best.gain };
@@ -259,7 +290,7 @@ function betterReasonOf(
  *   `punish`; from the other line when that one is empty.
  * - `gain` and `betterGain` are the player's material change from before the move to the end
  *   of the played move plus `punish`, and to the end of `better`.
- * - `lost` is the player's most valuable piece taken in `punish`, only when `gain` is negative.
+ * - `lost` is the piece the played move and `punish` cost the player, by `lostPiece`.
  *
  * Undefined when the finding is for another game, its ply is not in the game, or the stored
  * move is not legal in its own position.
@@ -284,7 +315,7 @@ export function storyOf(
   const punishPos = afterPlayed.clone();
   const punish = cutAtLastEvent(replay(punishPos, answer, punishWindow), 0);
   const gain = materialChange(start.board, punishPos.board, player);
-  const lost = gain < 0 ? biggestLoss(punish, player) : undefined;
+  const lost = lostPiece(move.fenBefore, [move.uci, ...punish.map((s) => s.detail.uci)], player);
 
   const reply = replyTo(g, move);
   const actualReply = reply ? moveDetail(move.fenAfter, reply.uci) : undefined;
@@ -303,7 +334,7 @@ export function storyOf(
   const fromBetter = (): KeyRead | undefined => keyOf(move.fenBefore, better, "better");
   const missed = finding.patternId !== undefined && blindSpotFamilyOf(finding.patternId) === "missed";
   const key = missed ? (fromBetter() ?? fromPunish()) : (fromPunish() ?? fromBetter());
-  const betterReason = better.length > 0 ? betterReasonOf(player, best, better, key) : undefined;
+  const betterReason = better.length > 0 ? betterReasonOf(player, best, better, key, played, punish) : undefined;
 
   return {
     played,

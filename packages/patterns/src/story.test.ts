@@ -275,3 +275,83 @@ describe("moveDetail flags", () => {
     expect(moveDetail("4k3/8/8/8/8/8/8/4K3 w - - 0 1", "e1e3")).toBeUndefined();
   });
 });
+
+describe("storyOf: no square reason the better move did not earn", () => {
+  const QH4 = "1. e4 e5 2. Nf3 Qh4";
+  const AFTER_NF3: ScriptedEval = { cp: 30, pv: ["b8c6", "f1b5", "g8f6", "e1g1", "f6e4", "f1e1", "e4d6", "f3e5", "f8e7", "b5f1"] };
+  const AFTER_QH4: ScriptedEval = { cp: 920, pv: ["f3h4", "d7d5", "h4f5", "d5e4", "f5g7", "f8g7", "d2d3", "g7f8", "d3e4", "g8f6"] };
+
+  it("2...Qh4?? 3.Nxh4: the point of ...Nc6 is not putting the queen there", async () => {
+    const g = await fixtureGame({ pgn: `${QH4} 3. Nxh4`, as: "black", evals: { 4: AFTER_NF3, 5: AFTER_QH4 } });
+    const s = story(g, 4);
+    expect(brief(s)).toEqual(["Nxh4", "d5", "Nf5", "dxe4", "Nxg7+", "Bxg7"]);
+    expect(s.key).toEqual({ line: "punish", index: 0 });
+    expect(s.lost).toEqual({ square: "h4", piece: "queen", color: "black" });
+    expect(s.betterReason?.kind).not.toBe("covers-square");
+    expect(s.betterReason).toEqual({ kind: "holds", gain: 1 });
+  });
+
+  it("3.d3? after 2...Qh4: the missed shot Nxh4 is the key, and the reason names h4", async () => {
+    const g = await fixtureGame({
+      pgn: `${QH4} 3. d3`,
+      as: "white",
+      evals: {
+        5: AFTER_QH4,
+        6: { cp: -109, pv: ["h4e7", "d3d4", "d7d6", "b1c3", "c7c6", "f1c4", "g8f6", "c1e3", "h7h6", "e1g1"] },
+      },
+    });
+    const s = story(g, 5, "missed-capture");
+    expect(s.key).toEqual({ line: "better", index: 0 });
+    expect(s.better[0]).toMatchObject({ san: "Nxh4", captured: "queen" });
+    expect(s.betterReason).toMatchObject({ kind: "wins", square: "h4", piece: "queen" });
+  });
+
+  it("Legal's trap, 4...g6? 5.Nxe5: Black recaptures on e5 too, so no covers-square", async () => {
+    const g = await fixtureGame({
+      pgn: "1. e4 e5 2. Nf3 d6 3. Bc4 Bg4 4. Nc3 g6 5. Nxe5",
+      as: "black",
+      evals: {
+        8: { cp: 60, pv: ["g8f6", "h2h3", "g4f3", "d1f3", "b8c6", "c3e2", "c6a5", "c4b5", "c7c6", "b5d3"] },
+        9: { cp: 254, pv: ["f3e5", "d6e5", "d1g4", "b8c6", "d2d3", "g8f6", "g4f3", "c6d4", "f3d1", "d8d7"] },
+      },
+    });
+    const s = story(g, 8);
+    expect(brief(s)).toEqual(["Nxe5", "dxe5", "Qxg4"]);
+    expect(s.gain).toBe(-1);
+    expect(s.lost).toBeUndefined();
+    expect(s.betterReason).toEqual({ kind: "holds", gain: 0 });
+  });
+
+  it("d4? exd3+ en passant: what stops it is not playing d4, not Qc6", async () => {
+    const g = await fixtureGame({
+      pgn: fenPgn("4r1k1/5ppp/8/8/4p3/8/2QP1PPP/4K3 w - - 0 1", "1. d4 exd3+"),
+      as: "white",
+      evals: {
+        1: { cp: 752, pv: ["c2c6", "g8f8", "c6d6", "f8g8", "d6d7", "g8f8", "e1e2", "e8e6", "d7d8", "e6e8"] },
+        2: { cp: -697, pv: ["e4d3", "e1d2", "d3c2", "d2c2", "g8f8", "c2d2", "f8e7", "g2g4", "e8a8", "g4g5"] },
+      },
+    });
+    const s = story(g, 1);
+    expect(brief(s)).toEqual(["exd3+", "Kd2", "dxc2", "Kxc2"]);
+    expect(s.punish[0]).toMatchObject({ enPassant: true, captured: "pawn", check: true });
+    expect(s.rear).toEqual({ square: "e8", piece: "rook", color: "black" });
+    expect(s.lost).toEqual({ square: "c2", piece: "queen", color: "white" });
+    expect(s.betterReason?.kind).not.toBe("stops-key-move");
+    expect(s.betterReason).toEqual({ kind: "holds", gain: 0 });
+  });
+
+  it("Nd5? Nxd5 exd5 Qxd5 trades knights and loses a pawn: no piece lost", async () => {
+    const g = await fixtureGame({
+      pgn: fenPgn("r2q1rk1/ppp2ppp/5n2/8/4P3/2N5/PPP1QPPP/R4RK1 w - - 0 1", "1. Nd5 Nxd5"),
+      as: "white",
+      evals: {
+        1: { cp: 259, pv: ["a1d1", "d8e7", "e4e5", "f6d7", "f2f4", "d7b6", "c3e4", "a8d8", "d1e1", "h7h6"] },
+        2: { cp: -2, pv: ["f6d5", "e4d5", "d8d5", "f1e1", "d5c6", "e2e4", "c6e4", "e1e4", "f8e8", "e4e8"] },
+      },
+    });
+    const s = story(g, 1);
+    expect(brief(s)).toEqual(["Nxd5", "exd5", "Qxd5"]);
+    expect(s.gain).toBe(-1);
+    expect(s.lost).toBeUndefined();
+  });
+});
