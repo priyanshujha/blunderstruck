@@ -4,13 +4,16 @@ Thanks for helping people blunder less.
 
 ## Before you open a pull request
 
+You need Node 22.13 or newer (the store uses Node's built-in SQLite) and pnpm.
+
 ```bash
 pnpm install
 pnpm typecheck
 pnpm test
 ```
 
-- Tests must pass without network access or a Stockfish binary.
+- Tests must pass without network access, a Stockfish binary or a model key. Coach tests
+  stub the provider (or inject `fetchImpl`) and never call a real model.
 - Chess logic needs a test with a concrete position and the expected result.
 - Never commit real players' games, and never commit anything from `data/`. A fixture keeps
   only what its test needs, and both usernames are replaced with invented ones, in the JSON
@@ -25,15 +28,22 @@ pnpm test
 2. **Analysis is deterministic.** Stockfish runs at a fixed depth on one thread, with no
    time limits. If you change engine settings or judgment thresholds, bump
    `ANALYSIS_VERSION`; analyses from different versions are never compared.
-3. **Code finds and counts mistakes; a model only words the advice.** Detection, counting
-   and progress are plain code over Stockfish output. A model sees aggregated numbers and a
-   few example positions. Never add a model call per move or per game.
+3. **Code finds and counts mistakes; a model only words the report.** Detection, counting,
+   verdicts and the choice of focus items are plain code over Stockfish output. A model sees
+   aggregated numbers and a few example positions, and words a report once per player per
+   period: one call, plus at most one repair call and one reword call. It never chooses the
+   focus items and never writes a number; numbers reach the text only through tokens that
+   code fills in. Never add a model call per move or per game.
 4. **At most two focus items.** The contract enforces the limit; do not work around it.
 5. **Keeping tests offline:** inject `fetchImpl` instead of calling the network, and pass a
    stub `Evaluator` instead of starting Stockfish.
 6. **Be a polite API client.** Fetch Chess.com archives one at a time, send a User-Agent on
    every request, and do not add parallel fetching.
 7. **Compatible licences** include GPL-3.0, MIT, Apache-2.0 and BSD.
+8. **Thresholds live in one place.** Every progress threshold (periods, verdicts, priority,
+   focus rules, sampling) is in `packages/progress/src/rules.ts`, and every pattern threshold
+   in `packages/patterns/src/rules.ts`. Do not write these numbers anywhere else, and say in
+   the pull request when you change one.
 
 ## Licensing of contributions
 
