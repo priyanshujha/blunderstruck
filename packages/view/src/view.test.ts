@@ -84,4 +84,12 @@ describe("reportView", () => {
   it("exports the neutral fallback sentence", () => {
     expect(UNSHOWN_WORDING).toBe("Wording for this item could not be shown.");
   });
+
+  it("writes every count with the same thousands separators", () => {
+    const current = period(END, 1200);
+    current.stats = current.stats.map((st) => ({ ...st, games: 1200, gamesAffected: 1100 }));
+    const v = reportView(report({ current, gamesFound: 1200, gamesAnalyzed: 1200 }));
+    expect(v.body.kind === "numbers" && v.body.table.rows[0]![3]).toBe("1,100/1,200");
+    expect(v.header.games).toBe("Games: 1,200 found, all analysed");
+  });
 });

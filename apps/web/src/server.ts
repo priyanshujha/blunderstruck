@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { type Track, type WeeklyReport, settingsKey, trackKey } from "@blunderstruck/contracts";
+import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import { type Platform, type ReportTimeClass, type Track, type WeeklyReport, settingsKey, trackKey } from "@blunderstruck/contracts";
 import { SchemaVersionError, type Store, openSqliteStore } from "@blunderstruck/store";
 import { STYLE_HASH, renderMessage, renderPage } from "./render";
 
@@ -18,9 +18,11 @@ const LOCAL_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
 /** DNS-rebinding guard: only a loopback name with our own port may address this server. */
 export function hostAllowed(host: string | undefined, port: number | undefined): boolean {
   if (!host) return false;
-  const m = /^(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})$/i.exec(host);
+  const m = /^(127\.0\.0\.1|localhost|\[::1\])(?::(\d{1,5}))?$/i.exec(host);
   if (!m || !LOCAL_HOSTS.includes(m[1]!.toLowerCase())) return false;
-  return port === undefined || Number(m[2]) === port;
+  // Browsers leave the port out of `Host` when it is the default one.
+  const given = m[2] === undefined ? 80 : Number(m[2]);
+  return port === undefined ? m[2] !== undefined : given === port;
 }
 
 const SECURITY_HEADERS = {
@@ -193,7 +195,10 @@ export async function openForWeb(path: string, reportCommand: string): Promise<{
   try {
     return { store: await openSqliteStore(path, { readOnly: true }) };
   } catch (err) {
-    if (!(err instanceof SchemaVersionError)) throw err;
+    // A corrupt or unreadable file is not something the page can help with: the caller exits.
+    if (!(err instanceof SchemaVersionError)) {
+      throw new Error(`cannot read the database at ${path}: ${err instanceof Error ? err.message : String(err)}`);
+    }
     return err.kind === "older"
       ? { problem: { title: "Database needs an update", message: `${err.message}.`, command: reportCommand } }
       : { problem: { title: "Database from a newer version", message: `${err.message}. Update blunderstruck to read it.` } };
@@ -209,4 +214,113 @@ export function problemHandler(problem: DbProblem, opts: HandlerOptions = {}): (
 /** The request handler for one track: the latest report, an earlier one, or its JSON. */
 export function handler(store: Store, track: Track): (req: IncomingMessage, res: ServerResponse) => void {
   return createHandler(store, track);
+}
+
+/** The track asked for, else the player's only one, else the one with the newest report. */
+export async function pickTrack(
+  store: Store,
+  platform: Platform,
+  user: string,
+  timeClass: ReportTimeClass | undefined,
+): Promise<{ track: Track; others: Track[] }> {
+  const prefix = `${platform}:${user.toLowerCase()}:`;
+  const mine = (await store.tracks()).filter((t) => trackKey(t).startsWith(prefix));
+  if (timeClass) {
+    const found = mine.find((t) => t.timeClass === timeClass);
+    return { track: found ?? { platform, username: user, timeClass }, others: mine.filter((t) => t !== found) };
+  }
+  if (mine.length === 0) return { track: { platform, username: user, timeClass: "rapid" }, others: [] };
+  let best = mine[0]!;
+  let bestEnd = -Infinity;
+  for (const t of mine) {
+    const r = await store.latestReport(t);
+    const end = r ? Date.parse(r.periodEnd) : -Infinity;
+    if (end > bestEnd) {
+      best = t;
+      bestEnd = end;
+    }
+  }
+  return { track: best, others: mine.filter((t) => t !== best) };
+}
+
+export interface StartOptions {
+  platform: Platform;
+  user: string;
+  timeClass?: ReportTimeClass;
+  port: number;
+  host: string;
+  /** The resolved database path. */
+  dbPath: string;
+  /** The `--db` flag as given, for the commands the pages show. */
+  dbArg?: string;
+}
+
+export interface Started {
+  server: Server;
+  url: string;
+  /** Lines for the terminal. */
+  messages: string[];
+  stop(): Promise<void>;
+}
+
+/**
+ * Opens the database, builds the handler, then listens. Any failure before listening closes
+ * what was opened and rejects, so no socket is ever left bound without a handler.
+ */
+export async function startServer(o: StartOptions): Promise<Started> {
+  const flags: HandlerOptions = { timeClassGiven: o.timeClass !== undefined, port: o.port, ...(o.dbArg === undefined ? {} : { dbArg: o.dbArg }) };
+  const asked: Track = { platform: o.platform, username: o.user, timeClass: o.timeClass ?? "rapid" };
+  const opened = await openForWeb(o.dbPath, command("cli report", asked, flags, o.timeClass !== undefined));
+  const store = "store" in opened ? opened.store : undefined;
+  try {
+    const messages: string[] = [];
+    let handle: (req: IncomingMessage, res: ServerResponse) => void;
+    let what: string;
+    if (!store) {
+      const { problem } = opened as { problem: DbProblem };
+      handle = problemHandler(problem, flags);
+      messages.push(problem.message);
+      what = "that message";
+    } else {
+      const { track, others } = await pickTrack(store, o.platform, o.user, o.timeClass);
+      if (!o.timeClass && others.length > 0) {
+        messages.push(
+          `Showing ${track.timeClass}. Also stored: ${others.map((t) => t.timeClass).join(", ")} (use --time-class to pick one).`,
+        );
+      }
+      handle = createHandler(store, track, flags);
+      what = (await store.latestReport(track))
+        ? `${track.username} (${track.platform}, ${track.timeClass})`
+        : `${track.username} (${track.platform}, no report stored yet)`;
+    }
+
+    const server = createServer(handle);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(o.port, o.host, () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const addr = server.address();
+    // With port 0 the real port is known only now; the Host check reads it per request.
+    flags.port = typeof addr === "object" && addr ? addr.port : o.port;
+    const url = `http://${o.host}:${flags.port}/`;
+    messages.push(`Serving ${what} at ${url}  (Ctrl-C to stop)`);
+    return {
+      server,
+      url,
+      messages,
+      async stop() {
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+          server.closeAllConnections();
+        });
+        await store?.close();
+      },
+    };
+  } catch (err) {
+    await store?.close();
+    throw err;
+  }
 }

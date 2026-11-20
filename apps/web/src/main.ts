@@ -1,10 +1,8 @@
-import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { Platform, ReportTimeClass, type Track, trackKey } from "@blunderstruck/contracts";
-import type { Store } from "@blunderstruck/store";
-import { command, createHandler, openForWeb, problemHandler } from "./server";
+import { Platform, ReportTimeClass } from "@blunderstruck/contracts";
+import { startServer } from "./server";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 4321;
@@ -13,33 +11,6 @@ const USAGE = "usage: pnpm web <lichess|chesscom> <user> [--port 4321] [--db <pa
 /** `--db`, else `BLUNDERSTRUCK_DB`, else `~/.blunderstruck/blunderstruck.db`. */
 function dbPath(flag: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
   return flag || env.BLUNDERSTRUCK_DB || join(homedir(), ".blunderstruck", "blunderstruck.db");
-}
-
-/** The track asked for, else the player's only one, else the one with the newest report. */
-async function pickTrack(
-  store: Store,
-  platform: Platform,
-  user: string,
-  timeClass: ReportTimeClass | undefined,
-): Promise<{ track: Track; others: Track[] }> {
-  const prefix = `${platform}:${user.toLowerCase()}:`;
-  const mine = (await store.tracks()).filter((t) => trackKey(t).startsWith(prefix));
-  if (timeClass) {
-    const found = mine.find((t) => t.timeClass === timeClass);
-    return { track: found ?? { platform, username: user, timeClass }, others: mine.filter((t) => t !== found) };
-  }
-  if (mine.length === 0) return { track: { platform, username: user, timeClass: "rapid" }, others: [] };
-  let best = mine[0]!;
-  let bestEnd = -Infinity;
-  for (const t of mine) {
-    const r = await store.latestReport(t);
-    const end = r ? Date.parse(r.periodEnd) : -Infinity;
-    if (end > bestEnd) {
-      best = t;
-      bestEnd = end;
-    }
-  }
-  return { track: best, others: mine.filter((t) => t !== best) };
 }
 
 /** `pnpm web <platform> <user>`: serve the latest report on this machine only. */
@@ -64,44 +35,17 @@ async function main(): Promise<void> {
   const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("--port must be a whole number from 0 to 65535");
 
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, HOST, () => resolve());
+  const started = await startServer({
+    platform: platform.data,
+    user,
+    port,
+    host: HOST,
+    dbPath: dbPath(values.db),
+    ...(timeClass ? { timeClass } : {}),
+    ...(values.db === undefined ? {} : { dbArg: values.db }),
   });
-  const addr = server.address();
-  const actual = typeof addr === "object" && addr ? addr.port : port;
-  const url = `http://${HOST}:${actual}/`;
-  const flags = { timeClassGiven: timeClass !== undefined, port: actual, ...(values.db === undefined ? {} : { dbArg: values.db }) };
-
-  // Read-only: the server never creates, migrates or writes the database.
-  const path = dbPath(values.db);
-  const asked: Track = { platform: platform.data, username: user, timeClass: timeClass ?? "rapid" };
-  const opened = await openForWeb(path, command("cli report", asked, flags, timeClass !== undefined));
-  let store: Store | undefined;
-  if ("problem" in opened) {
-    server.on("request", problemHandler(opened.problem, flags));
-    console.error(`${opened.problem.message}\nServing that message at ${url}  (Ctrl-C to stop)`);
-  } else {
-    store = opened.store;
-    const { track, others } = await pickTrack(store, platform.data, user, timeClass);
-    if (!timeClass && others.length > 0) {
-      console.error(
-        `Showing ${track.timeClass}. Also stored: ${others.map((t) => t.timeClass).join(", ")} (use --time-class to pick one).`,
-      );
-    }
-    server.on("request", createHandler(store, track, flags));
-    const what = (await store.latestReport(track))
-      ? `${track.username} (${track.platform}, ${track.timeClass})`
-      : `${track.username} (${track.platform}, no report stored yet)`;
-    console.error(`Serving ${what} at ${url}  (Ctrl-C to stop)`);
-  }
-
-  const stop = (): void => {
-    server.close();
-    server.closeAllConnections();
-    void store?.close();
-  };
+  for (const line of started.messages) console.error(line);
+  const stop = (): void => void started.stop();
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 }

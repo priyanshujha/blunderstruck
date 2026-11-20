@@ -17,7 +17,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll } from "vitest";
-import { createHandler, handler, openForWeb, problemHandler } from "./server";
+import { createServer } from "node:http";
+import { writeFileSync } from "node:fs";
+import { createHandler, handler, hostAllowed, openForWeb, problemHandler, startServer } from "./server";
 
 // Invented players and games only. No socket: the handler is called with fake objects.
 const XSS = `<script>alert(1)</script>`;
@@ -358,5 +360,45 @@ describe("opening the database for the page", () => {
     const r = await show(path);
     expect(r.body).toContain("this database was written by a newer version of blunderstruck");
     expect(r.body).not.toContain("<code>");
+  });
+
+  it("rejects startup on a corrupt file and leaves no server listening", async () => {
+    const path = join(dir, "garbage.db");
+    writeFileSync(path, "this is not a database, just some text that is long enough to have a header".repeat(20));
+    await expect(openForWeb(path, CMD)).rejects.toThrow(/cannot read the database at/);
+
+    const probe = createServer();
+    const port = await new Promise<number>((resolve) => probe.listen(0, "127.0.0.1", () => resolve((probe.address() as { port: number }).port)));
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    await expect(
+      startServer({ platform: "lichess", user: "quiet_rook_test", port, host: "127.0.0.1", dbPath: path }),
+    ).rejects.toThrow(/cannot read the database at/);
+    // The port is still free: nothing was bound.
+    const again = createServer();
+    await new Promise<void>((resolve, reject) => {
+      again.once("error", reject);
+      again.listen(port, "127.0.0.1", () => resolve());
+    });
+    await new Promise<void>((resolve) => again.close(() => resolve()));
+  });
+
+  it("serves the message page once started on a missing file, then stops", async () => {
+    const started = await startServer({ platform: "lichess", user: "quiet_rook_test", port: 0, host: "127.0.0.1", dbPath: join(dir, "none.db") });
+    expect(started.server.listening).toBe(true);
+    expect(started.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+    await started.stop();
+    expect(started.server.listening).toBe(false);
+  });
+});
+
+describe("hostAllowed", () => {
+  it("accepts a Host without a port only when the port is 80", () => {
+    expect(hostAllowed("localhost", 80)).toBe(true);
+    expect(hostAllowed("127.0.0.1", 80)).toBe(true);
+    expect(hostAllowed("[::1]", 80)).toBe(true);
+    expect(hostAllowed("localhost:80", 80)).toBe(true);
+    expect(hostAllowed("localhost", 4321)).toBe(false);
+    expect(hostAllowed("localhost:81", 80)).toBe(false);
+    expect(hostAllowed("evil.test", 80)).toBe(false);
   });
 });

@@ -248,7 +248,11 @@ function noteLines(r: WeeklyReport, fewGamesSaid: boolean, wordingFailed: boolea
   return out;
 }
 
-/** Every sentence and figure a report shows, ready to lay out as text or HTML. Never throws on stored wording. */
+/**
+ * Every sentence and figure a report shows, ready to lay out as text or HTML. Never throws on stored wording.
+ * Counts are written with thousands separators, except inside coach wording, where the `{games}`-style
+ * token values from the contracts package are plain, unformatted numbers.
+ */
 export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): ReportView {
   const r = report;
   let wordingFailed = false;
@@ -293,7 +297,7 @@ export function reportView(report: WeeklyReport, opts: ReportViewOptions = {}): 
           patternName(s.patternId),
           f2(s.per100Moves),
           count(s.occurrences),
-          `${s.gamesAffected}/${s.games}`,
+          `${count(s.gamesAffected)}/${count(s.games)}`,
         ]),
       },
     };
