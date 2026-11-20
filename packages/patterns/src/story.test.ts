@@ -398,7 +398,8 @@ describe("storyOf: what the game actually played", () => {
     // In the game Black won a queen for the knight: nothing lost, and up material.
     expect(s.inGame?.moves.map((m) => m.san)).toEqual(["Qxe5", "dxe5"]);
     expect(s.inGame?.lost).toBeUndefined();
-    expect(s.inGame).toMatchObject({ paid: true, net: -6, ended: true });
+    // Black came out a queen up: the game did not take what the move allowed.
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: true, paid: false });
   });
 
   describe("1.Qc1? Ne2+ Kh1 Nxc1, as far as the game went", () => {
@@ -623,7 +624,7 @@ describe("storyOf: inGame states a cost only when the game took what the move al
     expect(s.inGame).toEqual({ moves: expect.any(Array), ended: expect.any(Boolean), paid: false });
   });
 
-  it("1...Ne5 2.dxe5 dxe5: paid for the exchange on e5 only, not for the player's own later Qxf2+", async () => {
+  it("1...Ne5 2.dxe5 dxe5: a pawn won back means the game did not take the whole knight", async () => {
     const g = await fixtureGame({
       pgn: fenPgn(NE5, "1... Ne5 2. dxe5 dxe5 3. a3 Qxf2+ 4. Qxf2"),
       as: "black",
@@ -632,8 +633,8 @@ describe("storyOf: inGame states a cost only when the game took what the move al
     const s = story(g, 2);
     // The game recaptured where the engine's line stopped, so rule 1 does not apply; rule 3 does.
     expect(s.followed).toBe(1);
-    expect(s.inGame).toMatchObject({ paid: true, net: 2, lost: { square: "e5", piece: "knight", color: "black" } });
-    expect(s.inGame?.lostFor).toBeUndefined();
+    // The knight went for a pawn (net 2), less than the knight the engine's line takes (3): not paid.
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: true, paid: false });
   });
 
   it("an exchange longer than the window is not attributed", async () => {
@@ -738,5 +739,83 @@ describe("storyOf: inGame.ended only when the last kept move is the game's last 
     const s = story(g, 1);
     expect(s.inGame?.moves.length).toBeLessThanOrEqual(8);
     expect(s.inGame?.ended).toBe(false);
+  });
+});
+
+describe("storyOf: paid needs the game to have cost what the move allowed", () => {
+  const sans = (s: ExampleStory): string[] | undefined => s.inGame?.moves.map((m) => m.san);
+  const read = async (fen: string, moves: string, as: "white" | "black", evals: Record<string, ScriptedEval>, count: number) => {
+    const g = await fixtureGame({ pgn: fenPgn(fen, moves), as, evals });
+    expect(g.analysis.moves).toHaveLength(count);
+    return g;
+  };
+
+  it("1...Ne5 2.Qxe5 Nd3+ 3.Ke2 Nxe5 4.dxe5: the knight was taken, but the fork won the queen back", async () => {
+    const g = await read("6k1/pp3ppp/2n5/8/1n1P4/8/PP3PPQ/4K3 b - - 0 1", "1... Ne5 2. Qxe5 Nd3+ 3. Ke2 Nxe5 4. dxe5", "black", {
+      2: { cp: -676, pv: ["b4c2", "e1f1", "c2d4", "h2c7", "g7g6", "c7c8", "g8g7", "c8b7", "h7h5", "b7c7"] },
+      3: { cp: 874, pv: ["d4e5", "b4d3", "e1e2", "d3c5", "e5e6", "c5e6", "h2b8", "e6f8", "b8b7", "a7a5"] },
+    }, 6);
+    const s = story(g, 2);
+    expect(s.lost).toEqual({ square: "e5", piece: "knight", color: "black" });
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: true, paid: false });
+  });
+
+  it("1...Ne5 2.Qxe5 dxe5 3.dxe5: the game won the queen for the knight, not paid", async () => {
+    const g = await read("6k1/pp3ppp/2np4/8/3P4/8/PP3PPQ/4K3 b - - 0 1", "1... Ne5 2. Qxe5 dxe5 3. dxe5 Kf8 4. Ke2", "black", {
+      2: { cp: -865, pv: ["g7g6", "h2d6", "g8g7", "d6c7", "c6b4", "c7b7", "a7a5", "e1d1", "h7h6", "b7b8"] },
+      3: { cp: 976, pv: ["d4e5", "d6d5", "e5e6", "f7e6", "h2b8", "g8f7", "b8b7", "f7g6", "e1d2", "h7h5"] },
+    }, 6);
+    expect(story(g, 2).inGame?.paid).toBe(false);
+  });
+
+  it("1...Ne5 2.Nxe5 Rd5 3.Rc8+ Rd8 4.Rxd8#: the knight loss is paid; the later mate is not the move's", async () => {
+    const g = await read("3r2k1/pp3ppp/2n5/8/8/3P1N2/PP3PPP/2R3K1 b - - 0 1", "1... Ne5 2. Nxe5 Rd5 3. Rc8+ Rd8 4. Rxd8#", "black", {
+      2: { cp: 3, pv: ["d8d3", "f3e5", "d3d2", "e5c6", "b7c6", "h2h3", "d2b2", "c1c6", "g7g6", "a2a3"] },
+      3: { cp: 645, pv: ["f3e5", "f7f6", "e5c4", "d8d3", "c4e3", "h7h6", "c1d1", "d3d1", "e3d1", "g8f7"] },
+    }, 6);
+    const s = story(g, 2);
+    expect(s.inGame).toMatchObject({ paid: true, net: 3, lost: { square: "e5", piece: "knight", color: "black" } });
+    expect(s.inGame?.mated).toBeUndefined();
+  });
+
+  it("an allowed mate played as given sets mated", async () => {
+    const g = await read("4r1k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1", "1. Rd7 Re1#", "white", {
+      1: { cp: -5, pv: ["g2g4", "h7h6", "d1d6", "g8f8", "g1f1", "e8e4", "h2h3", "e4e6", "d6e6", "f7e6"] },
+      2: { mate: -1, pv: ["e8e1"] },
+    }, 2);
+    expect(story(g, 1).inGame).toMatchObject({ paid: true, mated: true, net: 0 });
+  });
+
+  it("1...Re8 2.b8=Q Rxb8 3.Rxb8+: the promoted queen counts as a pawn, so the rook went for a pawn, not for a queen", async () => {
+    // Depth 18 answers 2.b8=R; either promotion is taken back the same way.
+    const g = await read("1r4k1/1P3pp1/7p/8/8/8/5PPP/1R4K1 b - - 0 1", "1... Re8 2. b8=Q Rxb8 3. Rxb8+", "black", {
+      2: { cp: 552, pv: ["g8f8", "f2f4", "f8e7", "g1f2", "e7e6", "f2g3", "f7f5", "g3h4", "g7g6", "b1b6"] },
+      3: { cp: 694, pv: ["b7b8r", "e8b8", "b1b8", "g8h7", "g1f1", "h7g6", "b8b2", "g6h7", "b2b1", "h7g6"] },
+    }, 4);
+    const s = story(g, 2);
+    expect(s.lost).toEqual({ square: "b8", piece: "rook", color: "black" });
+    expect(s.lostFor).toBeUndefined();
+    expect(sans(s)).toEqual(["b8=Q", "Rxb8", "Rxb8+"]);
+    // The game promoted to a queen, not the engine's rook, and nothing was taken at once: by the
+    // rules this is not attributed, so no cost is stated for the game.
+    expect(s.inGame).toEqual({ moves: expect.any(Array), ended: true, paid: false });
+  });
+
+  it("1...Ne5 2.Qe4 Kf8 3.Nxe5: takeable at once, taken a move late where it stood (rule 4)", async () => {
+    const g = await read("r3k3/pp3ppp/2n5/8/8/3P1N2/PP2QPPP/4K2R b K - 0 1", "1... Ne5 2. Qe4 Kf8 3. Nxe5", "black", {
+      2: { cp: 913, pv: ["e8f8", "e1d1", "f8g8", "h1e1", "h7h5", "e2e3", "g7g6"] },
+      3: { cp: 1166, pv: ["f3e5", "e8f8", "e2f3", "f8g8", "f3f7", "g8h8", "f7b7", "a8f8", "e1d1", "g7g6"] },
+    }, 4);
+    const s = story(g, 2);
+    expect(s.followed).toBe(0);
+    expect(s.inGame).toMatchObject({ paid: true, net: 3, lost: { square: "e5", piece: "knight", color: "black" }, ended: true });
+  });
+
+  it("a punishing line that needs a fork first is not paid when the game took a move late", async () => {
+    const g = await read("r4rk1/ppp2ppp/8/8/3n4/8/PPPQ1PPP/5RK1 w - - 0 1", "1. Qc1 h6 2. a3 Ne2+ 3. Kh1 Nxc1", "white", {
+      1: { cp: 765, pv: ["d2d4", "b7b6", "d4a4", "c7c5", "h2h4", "h7h6", "f1e1", "f8c8", "c2c3", "c8c7"] },
+      2: { cp: -750, pv: ["d4e2", "g1h1", "e2c1", "f1c1", "a8d8", "g2g3", "f7f5", "c1e1", "g8f7", "h1g2"] },
+    }, 6);
+    expect(story(g, 1).inGame?.paid).toBe(false);
   });
 });

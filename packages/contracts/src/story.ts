@@ -82,7 +82,10 @@ export const ExampleStory = z.object({
   targets: z.array(StoryPiece).max(4),
   /** The piece behind a discovered attack made by the key move. */
   rear: StoryPiece.optional(),
-  /** The player's piece that was lost. */
+  /**
+   * The player's piece the punishing line takes. `square` is where it is taken, which is not
+   * where it stood after the move when it moved first (a rook that recaptured on d5 from d8).
+   */
   lost: StoryPiece.optional(),
   /** The most valuable enemy piece won for `lost`; absent when it went for nothing or pawns only. */
   lostFor: PieceRole.optional(),
@@ -102,12 +105,18 @@ export const ExampleStory = z.object({
       ended: z.boolean(),
       /**
        * The game took what the move allowed: it played the engine's punishing line through the
-       * plies `gain` counts, or the opponent's next move took the piece named in `lost` and that
-       * exchange finished within `STORY_LINE_MAX_PLIES`, or the game mated the player as the
-       * punishing line does, and in each case the exchange was over. Absent on stories stored
-       * before the field existed: read as false.
+       * plies `gain` counts, or it took the piece named in `lost` where it stood (at once, or
+       * after the punishing move, or a move late), or it mated the player as the punishing line
+       * does; the exchange was over inside the moves read; and, short of mate, the player was
+       * down at least a pawn and at least what the punishing line costs. Absent on stories
+       * stored before the field existed: read as false.
        */
       paid: z.boolean().optional(),
+      /**
+       * Only when `paid`: the punishing line ends in mate and the game mated the player inside
+       * the paid moves. A mate that came later, from other moves, does not set it.
+       */
+      mated: z.boolean().optional(),
       /** Only when `paid`: material the player is down over the paid plies, in pawns (negative when up). */
       net: z.number().optional(),
       /** Only when `paid`: the player's piece lost over the paid plies, by the rule of `lost`. */

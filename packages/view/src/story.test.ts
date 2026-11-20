@@ -77,7 +77,15 @@ const F3: ExampleStory = {
 
 /** F2: `r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3`, Nxe5 hangs the knight. */
 const F2: ExampleStory = {
-  played: mv({ san: "Nxe5", from: "f3", to: "e5", piece: "knight", color: "white", captured: "pawn" }),
+  played: mv({
+    san: "Nxe5",
+    from: "f3",
+    to: "e5",
+    piece: "knight",
+    color: "white",
+    captured: "pawn",
+    fenAfter: "r1bqkbnr/pppp1ppp/2n5/4N3/4P3/8/PPPP1PPP/RNBQKB1R b KQkq - 0 3",
+  }),
   punish: [mv({ san: "Nxe5", from: "c6", to: "e5", piece: "knight", color: "black", captured: "knight" })],
   replyFound: true,
   followed: 1,
@@ -98,7 +106,7 @@ const withGame = (s: ExampleStory, n: number, over: Partial<NonNullable<ExampleS
   ...s,
   followed: n,
   replyFound: n >= 1,
-  inGame: { moves: s.punish.slice(0, n), ended: false, ...over },
+  inGame: { moves: s.punish.slice(0, n), ended: false, paid: false, ...over },
 });
 
 /** The story as stored before the game's own moves were kept. */
@@ -113,7 +121,7 @@ describe("storyLines", () => {
     const s = { ...F1, ...over };
     if (followed >= 1) return withGame(s, followed);
     const reply = over.actualReply;
-    return { ...s, followed: 0, replyFound: false, inGame: { moves: reply ? [reply] : [], ended: !reply } };
+    return { ...s, followed: 0, replyFound: false, inGame: { moves: reply ? [reply] : [], ended: !reply, paid: false } };
   };
 
   it("tells F1 in the past when the game played the whole line", () => {
@@ -599,7 +607,7 @@ describe("storyCost", () => {
     inGame: { moves: s.punish, ended: false, paid: true, ...over },
   });
   /** F1 whose game did not (yet) take it. */
-  const unpaid = (s: ExampleStory = F1): ExampleStory => ({ ...s, inGame: { moves: [s.punish[0]!], ended: false } });
+  const unpaid = (s: ExampleStory = F1): ExampleStory => ({ ...s, inGame: { moves: [s.punish[0]!], ended: false, paid: false } });
 
   it("leads with the piece lost in the game, winning chances as the detail", () => {
     const c = storyCost(F1, "allowed-tactic");
@@ -619,7 +627,9 @@ describe("storyCost", () => {
 
   it("says checkmate, a missed win, material, or winning chances", () => {
     const mateIn1 = [mv({ san: "Qh2#", from: "h4", to: "h2", piece: "queen", color: "black", check: true, mate: true })];
-    expect(storyCost(paid({}, { ...F1, punish: mateIn1 })).text).toBe("It allowed checkmate.");
+    expect(storyCost(paid({ mated: true }, { ...F1, punish: mateIn1 })).text).toBe("It allowed checkmate.");
+    // Paid, but the game's mate was not inside what it paid for: the mate stays a possibility.
+    expect(storyCost(paid({ moves: mateIn1, net: 0 }, { ...F1, punish: mateIn1, lost: undefined })).text).toBe("It could have allowed checkmate.");
     expect(storyCost(unpaid({ ...F1, punish: mateIn1 })).text).toBe("It could have allowed checkmate.");
     expect(storyCost(withoutGame({ ...F1, punish: mateIn1 })).text).toBe("It could have allowed checkmate.");
     expect(storyCost(F3, "missed-tactic").text).toBe("It cost the chance to win their queen for your knight.");
@@ -639,8 +649,13 @@ describe("storyCost", () => {
   });
 
   it("states a cost as a fact only when the game paid, whatever else the game's moves show", () => {
-    // The whole line played but not marked paid (an older story): a possibility.
-    expect(storyCost({ ...F1, inGame: { moves: F1.punish, ended: false } }).text).toBe("It could have cost your queen.");
+    // Not paid: a possibility, whatever the game's moves were.
+    expect(storyCost({ ...F1, inGame: { moves: F1.punish, ended: false, paid: false } }).text).toBe("It could have cost your queen.");
+    // Stored before `paid` existed, the whole line played: no material claimed either way, so
+    // nothing contradicts the game's own moves told in the then line.
+    const old = { ...F1, inGame: { moves: F1.punish, ended: false } };
+    expect(texts(old)[2]).toEqual(["then", "Your king stepped aside, the knight took your queen, and your king took the knight."]);
+    expect(storyCost(old)).toEqual({ segments: [{ text: "Your winning chances went from 94% to 26%." }], text: "Your winning chances went from 94% to 26%." });
     // Stored without the game's moves, even with the whole line counted as followed.
     expect(storyCost({ ...withoutGame(F1), followed: 4 }).text).toBe("It could have cost your queen.");
   });
@@ -736,5 +751,84 @@ describe("only what the game shows is a fact, from the real story builder", () =
     expect(found[2]).toMatch(/^then: From there /);
     expect(found.at(-1)).toBe("cost: It could have cost your queen for a knight.");
     noAllClear([...lines, ...found]);
+  });
+});
+
+describe("costs and squares said only as the game shows them, from the real story builder", () => {
+  const fenPgn = (fen: string, moves: string): string => `[Event "fixture"]\n[SetUp "1"]\n[FEN "${fen}"]\n\n${moves} *`;
+  /** Engine answers for every ply, from the analysis of these games (scores from White's side). */
+  const evalsOf = (lines: Record<number, [number | { mate: number }, string[]]>): Record<string, ScriptedEval> =>
+    Object.fromEntries(
+      Object.entries(lines).map(([ply, [score, pv]]) => [ply, typeof score === "number" ? { cp: score, pv } : { mate: score.mate, pv }]),
+    );
+  const built = async (fen: string, moves: string, evals: Record<string, ScriptedEval>, ply: number, patternId: string) => {
+    const g = await fixtureGame({ pgn: fenPgn(fen, moves), as: "black", evals });
+    expect(g.analysis.moves).toHaveLength(moves.split(" ").length);
+    return ExampleStorySchema.parse(storyOf(g, { gameId: g.analysis.gameId, ply, patternId }));
+  };
+
+  it("1...Ne5? 2.Nxe5 Rd5 3.Rc8+ Rd8 4.Rxd8#: the knight is the cost; the later mate is not", async () => {
+    const s = await built(
+      "3r2k1/pp3ppp/2n5/8/8/3P1N2/PP3PPP/2R3K1 b - - 0 1",
+      "Ne5 Nxe5 Rd5 Rc8+ Rd8 Rxd8#",
+      evalsOf({
+        2: [3, ["d8d3", "f3e5", "d3d2", "e5c6", "b7c6", "h2h3", "d2b2", "c1c6", "g7g6", "a2a3"]],
+        3: [643, ["f3e5", "f7f6", "e5c4", "d8d3", "g1f1", "d3d5", "b2b3", "d5d3", "f1e2", "d3d7"]],
+        4: [640, ["f7f6", "e5c4", "d8d3", "g1f1", "h7h6", "f1e2", "d3d7", "c4e3", "d7d6", "c1c2"]],
+        5: [{ mate: 2 }, ["c1c8", "d5d8", "c8d8"]],
+        6: [{ mate: 1 }, ["d5d8", "c8d8"]],
+        7: [{ mate: 1 }, ["c8d8"]],
+      }),
+      2,
+      "hung-piece",
+    );
+    expect(s.inGame?.paid).toBe(true);
+    expect(s.inGame?.mated).toBeFalsy();
+    expect(storyLines(s, "hung-piece")[0]!.text).toBe("Your knight went to e5. That left your knight on e5 where it could be taken.");
+    expect(storyCost(s, "hung-piece").text).toBe("It cost your knight.");
+  });
+
+  it("4...Qxd5? 5.Qxd5 Rxd5 6.Rxd5: the rook is taken on d5 but stood on d8, so no square is claimed", async () => {
+    const s = await built(
+      "3r2k1/pp1qnppp/2b2n2/3p4/5N2/1BN5/PP1Q1PPP/3R2K1 b - - 0 1",
+      "Ng6 Ncxd5 Nxd5 Nxd5 Bxd5 Bxd5 Qxd5 Qxd5 Rxd5 Rxd5 Kf8",
+      evalsOf({
+        2: [-109, ["d5d4", "c3e2", "e7f5", "f4d3", "d8e8", "e2g3", "f5g3", "h2g3", "c6b5", "d2b4"]],
+        3: [9, ["f4d5", "f6d5", "c3d5", "d8e8", "h2h3", "d7f5", "b3c2", "f5e5", "d5b4", "c6b5"]],
+        4: [-558, ["g6f4", "d5e7", "g8h8", "d2e1", "d7c7", "d1d8", "c7d8", "e7c6", "b7c6", "b3f7"]],
+        5: [8, ["f4d5", "d8e8", "f2f3", "d7f5", "d5b4", "h7h5", "b4c6", "b7c6", "d2d7", "f5c5"]],
+        6: [8, ["d8e8", "h2h3", "d7f5", "b3c2", "f5d5", "d2d5", "c6d5", "d1d5", "g6f8", "d5a5"]],
+        7: [9, ["b3d5", "g8f8", "d2c1", "b7b6", "d5b3", "d7c8", "d1f1", "c8c1", "f1c1", "d8d7"]],
+        8: [13, ["g8f8", "d2c1", "b7b6", "d5b3", "d7c8", "d1f1", "c8c1", "f1c1", "d8d7", "c1c8"]],
+        9: [694, ["d2d5", "d8d5", "d1d5", "h7h6", "d5d8", "g8h7", "d8d7", "b7b6", "d7f7", "a7a6"]],
+        10: [708, ["d8d5", "d1d5", "g6f8", "d5d8", "a7a6", "d8b8", "b7b5", "b8a8", "g7g6", "f2f4"]],
+        11: [683, ["d1d5", "g8f8", "d5d7", "b7b6", "d7a7", "g6f4", "a7b7", "f4d5", "g2g3", "h7h6"]],
+        12: [660, ["g8f8", "d5d7", "b7b6", "d7a7", "g6f4", "g1f1", "f4d5", "a7b7", "f8e8", "h2h3"]],
+      }),
+      8,
+      "hung-piece",
+    );
+    expect(s.lost).toMatchObject({ square: "d5", piece: "rook" });
+    expect(storyLines(s, "hung-piece")[0]!.text).toBe("Your queen took the bishop on d5.");
+  });
+
+  it("an old story with the game's moves but no paid field states no cost against them", async () => {
+    const QC1 = "r4rk1/ppp2ppp/8/8/3n4/8/PPPQ1PPP/5RK1 w - - 0 1";
+    const g = await fixtureGame({
+      pgn: fenPgn(QC1, "1. Qc1 Ne2+ 2. Kh1 Nxc1 3. Rxc1 Rad8"),
+      as: "white",
+      evals: {
+        1: { cp: 765, pv: ["d2d4", "b7b6", "d4a4", "c7c5", "h2h4", "h7h6", "f1e1", "f8c8", "c2c3", "c8c7"] },
+        2: { cp: -750, pv: ["d4e2", "g1h1", "e2c1", "f1c1", "a8d8", "g2g3", "f7f5", "c1e1", "g8f7", "h1g2"] },
+      },
+    });
+    const s = ExampleStorySchema.parse(storyOf(g, { gameId: g.analysis.gameId, ply: 1, patternId: "allowed-tactic" }));
+    expect(storyCost(s, "allowed-tactic").text).toBe("It cost your queen for a knight.");
+    const { paid: _p, mated: _m, net: _n, lost: _l, lostFor: _f, exchange: _e, ...older } = s.inGame!;
+    const old = { ...s, inGame: older };
+    expect(storyLines(old, "allowed-tactic")[2]!.text).toBe("Your king stepped aside, the knight took your queen, and your rook took the knight.");
+    const cost = storyCost(old, "allowed-tactic");
+    expect(cost.text).toBe("Your winning chances went from 94% to 6%.".replace("94%", `${Math.round(s.winPctBefore)}%`).replace("6%", `${Math.round(s.winPctAfter)}%`));
+    expect(cost.text).not.toMatch(/cost/);
   });
 });

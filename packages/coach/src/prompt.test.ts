@@ -432,6 +432,27 @@ describe("buildPrompt", () => {
     });
   });
 
+  it("leaves out a cost that is not named, and shows mated only when paid", () => {
+    const traded = withStory(qc1Story({ moves: [mv("Ne2+", "f4e2", "knight", "black")], paid: true, net: 0, ended: false }));
+    expect(exampleOf(traded).inGame).toEqual({ moves: "Ne2+ (their knight f4-e2, check)", paid: true });
+    const up = withStory(qc1Story({ moves: [mv("Ne2+", "f4e2", "knight", "black")], paid: true, net: -2, ended: false }));
+    expect(exampleOf(up).inGame).toEqual({ moves: "Ne2+ (their knight f4-e2, check)", paid: true });
+    const mate = withStory(qc1Story({ moves: [mv("Qh2#", "h4h2", "queen", "black", { mate: true })], paid: true, mated: true, ended: true }));
+    expect(exampleOf(mate).inGame).toEqual({ moves: "Qh2# (their queen h4-h2, mate)", paid: true, mated: true, gameEnded: true });
+    const notPaid = withStory(qc1Story({ moves: [mv("Ne2+", "f4e2", "knight", "black")], mated: true, ended: false }));
+    expect(exampleOf(notPaid).inGame).toEqual({ moves: "Ne2+ (their knight f4-e2, check)", paid: false });
+    expect(JSON.stringify([traded, up, mate].map(exampleOf))).not.toMatch(/no piece|"level"|worth up|nothing/);
+  });
+
+  it("sends no paid for a missed pattern, whose cost is the win not taken", () => {
+    const d = storiedDraft("x", WORKED);
+    const missed = d.focus[1]!;
+    missed.examples = [{ ...missed.examples[0]!, story: { ...missed.examples[0]!.story!, inGame: { moves: [mv("Re1", "h1e1", "rook", "white")], paid: true, net: 3, lost: { square: "f6", piece: "knight", color: "black" }, ended: false } } }];
+    const ex = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(buildPrompt(d).user)![1]!).focus[1].examples[0];
+    expect(ex.inGame).toEqual({ moves: "Re1 (their rook h1-e1)" });
+    expect(ex.better).toContain("Nxd2");
+  });
+
   it("reads a stored inGame without paid as unpaid and shows no cost", () => {
     const stored = qc1Story({ moves: [mv("Ne2+", "f4e2", "knight", "black")], net: 9, lost: { square: "c1", piece: "queen", color: "white" }, ended: false });
     expect(exampleOf(withStory(stored)).inGame).toEqual({ moves: "Ne2+ (their knight f4-e2, check)", paid: false });
@@ -443,7 +464,9 @@ describe("buildPrompt", () => {
     expect(system).toContain("you may say the opponent did not play the punishing move, but nothing about how the game turned out after it");
     expect(system).not.toMatch(/opponentFoundIt|couldHaveLost|got away/);
     expect(system).toContain("inGame is only the next few moves the game really played, not a verdict on how the game went.");
-    expect(system).toContain('State a cost as fact (\"it cost your queen\") only for an example whose inGame says paid is true.'.replace(/\\"/g, '"'));
+    expect(system).toContain('State a cost as fact ("it cost your queen") only for an example whose inGame says paid is true, and a mate as fact only when it says mated is true.');
+    expect(system).toContain('never "nothing was lost"');
+    expect(system).toContain("For a missed win (missed-mate, missed-capture, missed-tactic) inGame has no paid");
     expect(system).toBe(buildPrompt(storiedDraft("y", { a: [], b: [spot("best-check")] })).system);
   });
 });

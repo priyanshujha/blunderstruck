@@ -204,11 +204,46 @@ function youSentence(story: ExampleStory, patternId: string | undefined): StoryS
     s.text(`${checkWords(m)}.`);
   }
   const reply = story.punish[0];
-  if (patternId === "hung-piece" && story.lost && reply?.captured && reply.to === story.lost.square) {
-    s.text(" That left ").named(story.lost.piece, story.lost.color).text(` on ${story.lost.square} where it could be taken.`);
+  const lost = story.lost;
+  // `lost.square` is where the line takes the piece: said as where it was left only when the
+  // position after the move shows that piece there, and the reply takes it there.
+  if (
+    patternId === "hung-piece" &&
+    lost &&
+    reply?.captured === lost.piece &&
+    reply.to === lost.square &&
+    sameRole(pieceOn(m.fenAfter, lost.square), lost)
+  ) {
+    s.text(" That left ").named(lost.piece, lost.color).text(` on ${lost.square} where it could be taken.`);
   }
   return s.done();
 }
+
+const FEN_ROLE: Record<string, PieceRole> = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
+
+/** The piece on `square` in a FEN's board, or undefined (also for a board that does not parse). */
+function pieceOn(fen: string, square: string): { piece: PieceRole; color: Color } | undefined {
+  const rows = fen.split(" ")[0]?.split("/");
+  const file = square.charCodeAt(0) - 97;
+  const row = rows?.[8 - Number(square[1])];
+  if (!rows || rows.length !== 8 || row === undefined) return undefined;
+  let f = 0;
+  for (const ch of row) {
+    if (/\d/.test(ch)) f += Number(ch);
+    else {
+      if (f === file) {
+        const piece = FEN_ROLE[ch.toLowerCase()];
+        return piece ? { piece, color: ch === ch.toLowerCase() ? "black" : "white" } : undefined;
+      }
+      f++;
+    }
+    if (f > file) return undefined;
+  }
+  return undefined;
+}
+
+const sameRole = (a: { piece: PieceRole; color: Color } | undefined, b: StoryPiece): boolean =>
+  !!a && a.piece === b.piece && a.color === b.color;
 
 /**
  * The game's next move was the engine's punishing reply: read from `actualReply` when the story
@@ -722,11 +757,17 @@ export function storyCost(story: ExampleStory, patternId?: string): StoryCost {
   // A cost is a fact only when the game took what the move allowed (`inGame.paid`), from the
   // game's own figures; in every other case, old stories included, it is what the engine's line shows.
   if (!missed && ig?.paid) {
-    if (ig.moves.some((m) => m.mate && m.color !== player)) {
+    // A mate is the move's cost only when the game mated inside what it paid for (`mated`).
+    if (ig.mated) {
       s.text("It allowed checkmate.");
       return { ...s.done(), detail: chances };
     }
     if (loss("It cost", ig.lost, ig.lostFor, !!ig.exchange, ig.net ?? 0)) return { ...s.done(), detail: chances };
+  }
+  if (!missed && ig && ig.paid === undefined) {
+    // Stored before `paid` existed: whether the game paid is unknown, so no material is claimed
+    // either way (a "could have" could contradict the game's own moves told above it).
+    return { segments: [{ text: chances }], text: chances };
   }
   if (!missed && story.punish.at(-1)?.mate) {
     s.text("It could have allowed checkmate.");

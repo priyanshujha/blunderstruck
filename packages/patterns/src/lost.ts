@@ -34,6 +34,7 @@ interface Capture {
 /**
  * Reads what `line` (UCI from `fen`, replayed up to its first illegal move) cost `side`:
  * - `net` is the line's net material loss for `side`;
+ * - a piece promoted in the line and then taken counts as the pawn it was, never as a piece;
  * - trades are set aside first: each knight, bishop, rook or queen `side` took cancels one of
  *   its own pieces of the same value taken in the line, preferring one taken earlier on the
  *   same square (a recapture), then one of the same role;
@@ -50,14 +51,18 @@ export function lineLoss(fen: string, line: readonly string[], side: Color): Lin
   const start = material(pos.board, side);
   const lost: Capture[] = [];
   const won: Capture[] = [];
+  // Squares holding a piece promoted in the line: taken, it counts as the pawn it was.
+  const promoted = new Set<number>();
   line.some((uci, index) => {
     const m = legalMove(pos, uci);
     if (!m || !("from" in m)) return true;
     const mover = pos.board.get(m.from)!;
     const target = pos.board.get(m.to);
-    if (target && target.color !== mover.color && PIECES.has(target.role)) {
+    const wasPromoted = promoted.delete(m.to);
+    if (target && target.color !== mover.color && PIECES.has(target.role) && !wasPromoted) {
       (mover.color === side ? won : lost).push({ index, square: uci.slice(2, 4), role: target.role });
     }
+    if (promoted.delete(m.from) || m.promotion) promoted.add(m.to);
     pos.play(m);
     return false;
   });

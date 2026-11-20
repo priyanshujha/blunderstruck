@@ -122,4 +122,13 @@ describe("lostPiece", () => {
     const fen = "2r2bk1/5ppp/8/8/8/P1B5/1P3PPP/6K1 b - - 0 1";
     expect(lineLoss(fen, ["c8c3", "b2c3", "f8a3"], "black")).toEqual({ net: 1, exchange: false });
   });
+
+  it("a promoted piece taken counts as a pawn: ...Re8 b8=Q Rxb8 Rxb8+ is a rook for a pawn", () => {
+    const fen = "1r4k1/1P3pp1/7p/8/8/8/5PPP/1R4K1 b - - 0 1";
+    expect(lineLoss(fen, ["b8e8", "b7b8q", "e8b8", "b1b8"], "black")).toEqual({
+      net: 4,
+      piece: { square: "b8", piece: "rook", color: "black" },
+      exchange: false,
+    });
+  });
 });

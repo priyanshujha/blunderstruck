@@ -1,6 +1,7 @@
 import {
   BAND_RUBRIC,
   BLIND_SPOT_IDS,
+  blindSpotFamilyOf,
   type BlindSpot,
   type BlindSpotId,
   blindSpotTokenValues,
@@ -184,7 +185,7 @@ const SYSTEM = [
   "- Each focus item comes with why code chose it: kind \"new\" (chosen for the first time), \"kept\" (still on the list from earlier reports), \"rose\" (it climbed into the top picks), \"returned\" (worked on before, now back). Score, recentCost and severity are win-percentage points; chronicity is how steadily it came back. Use these to choose what to stress, never to quote.",
   "- Each focus item comes with up to two examples from the player's games, each with its story, computed by the engine: the move played, the punishing line (the opponent's best answer, move by move), the pieces it hit, the piece lost, the better line and why it was better, plus a short fact. An example without a story is given as a FEN position instead, with the move played and the engine's best move. Do not invent positions, moves or facts that are not given.",
   "- The page shows each example's moves as sentences and boards of its own, so do not retell the lines; naming one move to make a point is plenty.",
-  "- Each story separates what the move allowed from what was played. allowed is the engine's line after the move and what it would have cost (wouldCost). inGame is only the next few moves the game really played, not a verdict on how the game went. paid is true only when the game took what the move allowed; then inGame also says what was lost. State a cost as fact (\"it cost your queen\") only for an example whose inGame says paid is true. Otherwise say only what the move allowed or could have cost (\"it allowed Ne4+, which could have cost your queen\"); you may say the opponent did not play the punishing move, but nothing about how the game turned out after it. A story without inGame tells you only what the move allowed, so do not say what happened next in that game.",
+  "- Each story separates what the move allowed from what was played. allowed is the engine's line after the move and what it would have cost (wouldCost). inGame is only the next few moves the game really played, not a verdict on how the game went. paid is true only when the game took what the move allowed; then inGame may also say what was lost, the material given up, and mated when the game ended in the mate the move allowed. State a cost as fact (\"it cost your queen\") only for an example whose inGame says paid is true, and a mate as fact only when it says mated is true. When something is not given, say nothing about it: never \"nothing was lost\". For a missed win (missed-mate, missed-capture, missed-tactic) inGame has no paid: the cost is what the player did not win, given in better. Otherwise say only what the move allowed or could have cost (\"it allowed Ne4+, which could have cost your queen\"); you may say the opponent did not play the punishing move, but nothing about how the game turned out after it. A story without inGame tells you only what the move allowed, so do not say what happened next in that game.",
   "- Earlier focus items may come with a verdict: \"improved\", \"flat\" (no clear change), \"worse\" or \"insufficient-data\" (not enough games yet). Mention an improvement warmly in the summary. Do not call \"flat\" or \"insufficient-data\" a failure.",
   "- Directly under your text, the program prints for each focus item a frequency line (in how many of the player's games it happened, and roughly how often), its goal, and a line with how many recent weeks it came back in (only when at least three weeks were counted). Do not restate them: the why says what happened and why it matters, and the drill says what to do.",
   "- So do not open the why with how many games were affected, and do not restate that count anywhere: the frequency line already says it. Spend the why on what the examples and the blind spots show: the move that let it happen, what it cost, and the thing the occurrences had in common.",
@@ -307,7 +308,7 @@ function costWords(lost: StoryPiece, lostFor: string | undefined, me: MoveDetail
   return `${pieceWords(lost, me)}${lostFor ? `, for their ${lostFor}` : ", for nothing"}`;
 }
 
-/** "3 pawns' worth down", "level", "2 pawns' worth up". */
+/** "3 pawns' worth down"; only called for a loss of a pawn or more. */
 function materialWords(net: number): string {
   const n = Math.round(Math.abs(net));
   if (n === 0) return "level";
@@ -319,7 +320,7 @@ function materialWords(net: number): string {
  * line and what it would cost) apart from the next moves the game really played (`inGame`),
  * which carry a cost only when the game took what the move allowed (`paid`).
  */
-function storyWords(st: ExampleStory): Record<string, unknown> {
+function storyWords(st: ExampleStory, patternId: string): Record<string, unknown> {
   const me = st.played.color;
   const line = (ms: readonly MoveDetail[]) => ms.map((m) => moveWords(m, me)).join(", ");
   const allowed = {
@@ -329,15 +330,19 @@ function storyWords(st: ExampleStory): Record<string, unknown> {
     ...(st.lost ? { wouldCost: costWords(st.lost, st.lostFor, me) } : {}),
   };
   const g = st.inGame;
+  // A missed pattern's cost is the win not taken (`better`), so its next moves carry no paid.
+  const missed = blindSpotFamilyOf(patternId) === "missed";
   // Only a paid example carries what was lost: the next moves alone say nothing about the cost.
-  const paid = g?.paid === true;
+  // Whatever is absent is left out, never printed as "nothing".
+  const paid = !missed && g?.paid === true;
   const inGame = g
     ? {
         moves: g.moves.length > 0 ? line(g.moves) : "none",
-        paid,
-        ...(paid ? { lost: g.lost ? costWords(g.lost, g.lostFor, me) : "no piece" } : {}),
+        ...(missed ? {} : { paid }),
+        ...(paid && g.mated ? { mated: true } : {}),
+        ...(paid && g.lost ? { lost: costWords(g.lost, g.lostFor, me) } : {}),
         ...(paid && g.exchange ? { exchange: "you gave a rook for a knight or bishop" } : {}),
-        ...(paid && g.net !== undefined ? { material: materialWords(g.net) } : {}),
+        ...(paid && g.net !== undefined && Math.round(g.net) >= 1 ? { material: materialWords(g.net) } : {}),
         ...(g.ended ? { gameEnded: true } : {}),
       }
     : undefined;
@@ -353,7 +358,7 @@ function storyWords(st: ExampleStory): Record<string, unknown> {
 /** One example for the prompt: its story when it has one, otherwise its position. */
 function exampleData(e: FocusExample): Record<string, unknown> {
   return {
-    ...(e.story ? storyWords(e.story) : { fen: e.fen, played: e.played, ...(e.best ? { best: e.best } : {}) }),
+    ...(e.story ? storyWords(e.story, e.patternId) : { fen: e.fen, played: e.played, ...(e.best ? { best: e.best } : {}) }),
     ...(e.evidence ? { fact: e.evidence } : {}),
     ...(e.motif ? { motif: e.motif } : {}),
     ...(e.traits && e.traits.length > 0 ? { traits: e.traits } : {}),
