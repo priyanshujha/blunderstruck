@@ -592,8 +592,10 @@ function whyMoveErrors(where: string, why: string, examples: readonly FocusExamp
   return errors;
 }
 
-/** Words that lean on the other item when they end a clause: "this keeps coming back too". */
-const LEANING_END = /\b(too|as well|either)\s*(?=[,.;:!?]|$)/gi;
+/** A clause about the item itself: "This keeps coming back", "Another one", "Here". */
+const ITEM_CLAUSE = /^(?:this|that|another|also|here)\b/i;
+/** Words that lean on the other item: "also" anywhere in such a clause, or these at its end. */
+const LEANING_END = /\b(too|as well|either)\s*$/i;
 const ALSO = /\balso\b/i;
 /** Words that state a loss as fact: checked under an example whose game did not take it. */
 const LOSS = /\b(?:cost(?:s|ing)?|lost|lose|loses|losing|gone|fell|won\s+(?:your|the))\b/gi;
@@ -616,20 +618,21 @@ function hedged(clause: string, at: number, word: string): boolean {
 }
 
 /**
- * Errors for words that refer to the other item in the first sentence of a title or a why
- * ("This keeps coming back too"), which is read before anything else about the item. The rest
- * of the text may use them ("it could hit the king too").
+ * Errors for words that lean on the other item in the why's first sentence: a clause about
+ * the item itself ("This keeps coming back too", "This one also keeps coming back"). Elsewhere,
+ * and in clauses about something else ("a check that could hit it too"), they mean "as well"
+ * within the item and pass.
  */
 function leaningErrors(where: string, text: string): string[] {
   const errors: string[] = [];
-  const first = firstSentence(text);
-  for (const m of first.matchAll(LEANING_END)) {
+  for (const raw of firstSentence(text).split(/[,;:]/)) {
+    const clause = raw.trim().replace(/^\{example\d+\}\s*/, "");
+    if (!ITEM_CLAUSE.test(clause)) continue;
+    const word = ALSO.exec(clause)?.[0] ?? LEANING_END.exec(clause)?.[1];
+    if (!word) continue;
     errors.push(
-      `${where} ends a clause in its first sentence with "${m[1]}", which leans on the other item; each item is read on its own, so open without "${m[1]}".`,
+      `${where}, the clause "${quote(clause)}": "${word}" leans on the other item, but each item is read on its own; say it without "${word}".`,
     );
-  }
-  if (ALSO.test(first)) {
-    errors.push(`${where} says "also" in its first sentence, which leans on the other item; each item is read on its own, so leave it out.`);
   }
   return errors;
 }
@@ -643,7 +646,7 @@ const firstSentence = (text: string): string => sentences(text.replace(/;/g, ","
 /**
  * The rules for a newly written why: its markers (each at most once, in order, only for
  * examples the item has, opening a sentence and followed by a comma), how many moves and squares
- * a segment names, words that lean on the other item in its first sentence, and a cost stated as fact
+ * a segment names, a first sentence that leans on the other item, and a loss stated as fact
  * only for an example whose game took it.
  */
 function whyRules(where: string, why: string, examples: readonly FocusExample[]): string[] {
@@ -895,7 +898,6 @@ export function parseWording(text: string, draft: ReportDraft, only?: string[]):
       errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], WORDING_FOCUS_TOKENS, ctx, opts));
     }
     errors.push(...itemMoveErrors(at, f, allowed, examples, true));
-    errors.push(...leaningErrors(`${at}.title`, f.title));
     errors.push(...whyRules(`${at}.why`, f.why, examples));
     if (item) errors.push(...checkSteps(at, f.steps, item.blindSpots ?? [], withSpots));
   });

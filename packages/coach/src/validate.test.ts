@@ -1165,20 +1165,15 @@ describe("pointing at the examples", () => {
     ]);
   });
 
-  it("rejects words that lean on the other item in the title and the why's first sentence only", () => {
-    expect(whyA("This keeps coming back too.")).toEqual([expect.stringMatching(/why ends a clause in its first sentence with "too"/)]);
-    expect(whyA("Checks hurt as well, mostly after queen moves.")).toEqual([expect.stringMatching(/ends a clause in its first sentence with "as well"/)]);
-    expect(whyA("This one also keeps coming back. Checks hurt.")).toEqual([expect.stringMatching(/says "also" in its first sentence/)]);
-    // Later in the lead they usually mean "as well" within the item.
-    expect(whyA("Checks hurt. The piece you had just moved stood where a check could hit it too.")).toEqual([]);
-    // A ";" does not end the first sentence, and a why that opens with a marker is checked too.
-    expect(whyA("Checks hurt; this one also matters.")).toEqual([expect.stringMatching(/says "also" in its first sentence/)]);
-    expect(whyA("{example1}, the queen was loose too. Checks hurt.")).toEqual([expect.stringMatching(/first sentence with "too"/)]);
-    expect(whyA("{example1}, the queen was loose. Checks hurt too.")).toEqual([]);
-    expect(whyA("Checks hurt. You also moved the queen a lot.")).toEqual([]);
-    expect(whyA(`${LEAD} {example1}, the queen was loose too.`)).toEqual([]);
-    expect(whyA("A loose queen was too much to hope for.")).toEqual([]);
-    expect(storiedErrors(storiedAnswer({ a: { title: "Checks again, too" } }))).toEqual([expect.stringMatching(/title ends a clause in its first sentence with "too"/)]);
+  it("rejects a first sentence that leans on the other item, and nothing else", () => {
+    expect(whyA("This keeps coming back too, and it is usually a plain capture.")).toEqual([
+      'focus[0] (allowed-tactic).why, the clause "This keeps coming back too": "too" leans on the other item, but each item is read on its own; say it without "too".',
+    ]);
+    expect(whyA("This one also keeps coming back.")).toEqual([expect.stringMatching(/the clause "This one also keeps coming back": "also" leans on the other item/)]);
+    expect(whyA("The shot that hurt was a knight check that could hit it too.")).toEqual([]);
+    expect(whyA("A knight check that also hit your queen keeps coming back.")).toEqual([]);
+    // Not checked in the title.
+    expect(storiedErrors(storiedAnswer({ a: { title: "Knight checks that also hit your queen" } }))).toEqual([]);
   });
 
   it("states a cost as fact only for an example whose game took it", () => {
