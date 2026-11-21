@@ -83,6 +83,10 @@ export interface PageStep {
   /** The bar: `count / of`, and the tick at the share of all the player's mistakes. */
   bar?: { share: number; tick?: number; label: string };
   comparison?: string;
+  /** The baseline share alone, `comparison` without its frame: "about 1 in 8", "4 of your 15 mistakes". */
+  baselineShare?: string;
+  /** The rounded share of `count` in `of`: "about 1 in 3", "about 6 in 10", "all". */
+  share?: string;
   refinement?: string;
   text: string;
   /** The example (0-based) "See one on the board" points at, and the link's words. */
@@ -388,6 +392,8 @@ function itemText(r: WeeklyReport, v: Omit<ReportView, "page">, item: FocusView,
           }
         : {}),
       ...(bv?.comparison ? { comparison: bv.comparison } : {}),
+      ...(bv?.baselineShare ? { baselineShare: bv.baselineShare } : {}),
+      ...(bv ? { share: bv.share } : {}),
       ...(bv?.refinement ? { refinement: bv.refinement } : {}),
       text: s.text,
       ...(target !== undefined ? { example: target, exampleLink: raw.examples[target]?.story && boardFenValid(raw.examples[target]!.fen) ? "See one on the board" : "See one in your games" } : {}),

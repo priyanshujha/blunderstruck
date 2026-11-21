@@ -80,6 +80,10 @@ export interface BlindSpotView {
   count: string;
   /** "against about 1 in 8 of your mistakes overall"; absent when there is nothing to compare with. */
   comparison?: string;
+  /** The baseline share alone, `comparison` without its frame: "about 1 in 8", "4 of your 15 mistakes"; absent exactly when `comparison` is. */
+  baselineShare?: string;
+  /** The rounded share of `count`, never the exact form: "about 1 in 3", "about 6 in 10", "all". */
+  share: string;
   /** "9 of them by a knight." */
   refinement?: string;
   /** Label, count and comparison as one sentence. */
@@ -445,16 +449,30 @@ const gamesCount = (s: Pick<PatternStat, "games" | "gamesAffected">): GamesCount
   text: gamesShort(s),
 });
 
-/** "against about 1 in 8 of your mistakes overall": the share of all the player's mistakes with the property. */
-function baselinePhrase(bc: number, bo: number): string | undefined {
-  if (bo <= 0) return undefined;
-  const tail = "of your mistakes overall";
-  if (bc <= 0) return `against none ${tail}`;
-  if (bc >= bo) return `against all ${tail}`;
+/**
+ * The share `n / of` on its own, without a frame: "about 1 in 8", "about 6 in 10", "none",
+ * "all". With `exactSmall`, a total under `SMALL_BASELINE` is given as the exact count of
+ * mistakes instead: "4 of your 15 mistakes".
+ */
+export function bareShare(n: number, of: number, opts: { exactSmall?: boolean } = {}): string {
+  if (n <= 0 || of <= 0) return "none";
+  if (n >= of) return "all";
   // Small numbers are given exactly; "about 1 in 3" of 7 mistakes says more than it knows.
-  if (bo < SMALL_BASELINE) return `against ${count(bc)} of your ${plural(bo, "mistake")} overall`;
-  if (inTenths(bc, bo)) return `against about ${Math.min(9, tenthsOf(bc, bo))} in 10 ${tail}`;
-  return `against about 1 in ${oneIn(bc, bo)} ${tail}`;
+  if (opts.exactSmall && of < SMALL_BASELINE) return `${count(n)} of your ${plural(of, "mistake")}`;
+  if (inTenths(n, of)) return `about ${Math.min(9, tenthsOf(n, of))} in 10`;
+  return `about 1 in ${oneIn(n, of)}`;
+}
+
+/** `bareShare` of all the player's mistakes, as a blind spot's baseline: "about 1 in 8", "4 of your 15 mistakes". */
+const baselineShareOf = (bc: number, bo: number): string | undefined =>
+  bo <= 0 ? undefined : bareShare(bc, bo, { exactSmall: true });
+
+/** "against about 1 in 8 of your mistakes overall": the share of all the player's mistakes with the property. */
+export function baselinePhrase(bc: number, bo: number): string | undefined {
+  const s = baselineShareOf(bc, bo);
+  if (s === undefined) return undefined;
+  const exact = bc > 0 && bc < bo && bo < SMALL_BASELINE;
+  return exact ? `against ${s} overall` : `against ${s} of your mistakes overall`;
 }
 
 /** Below this many mistakes in all, the comparison gives the exact counts. */
@@ -464,6 +482,7 @@ function blindSpotView(spot: BlindSpot): BlindSpotView {
   const label = blindSpotLabel(spot.id);
   const countText = `${count(spot.count)} of your ${count(spot.of)}`;
   const comparison = baselinePhrase(spot.baselineCount, spot.baselineOf);
+  const baselineShare = baselineShareOf(spot.baselineCount, spot.baselineOf);
   const ref = spot.refinement;
   const phrase = ref ? REFINEMENT_PHRASES[ref.id] : undefined;
   return {
@@ -472,6 +491,8 @@ function blindSpotView(spot: BlindSpot): BlindSpotView {
     label,
     count: countText,
     ...(comparison ? { comparison } : {}),
+    ...(baselineShare ? { baselineShare } : {}),
+    share: bareShare(spot.count, spot.of),
     ...(ref && phrase ? { refinement: `${count(ref.count)} of them ${phrase}.` } : {}),
     sentence: `${label}: ${countText}${comparison ? `, ${comparison}` : ""}.`,
   };

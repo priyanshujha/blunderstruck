@@ -432,6 +432,37 @@ describe("focus items in games and words", () => {
     expect(one({ baselineCount: 2, baselineOf: 7 })).toBe("Their best reply gave check: 23 of your 62, against 2 of your 7 mistakes overall.");
   });
 
+  it("gives the bare shares beside the comparison, in the view and on the page", () => {
+    const cases: Partial<BlindSpot>[] = [
+      {},
+      { count: 41, of: 72, baselineCount: 120, baselineOf: 200 },
+      { count: 4, of: 15, baselineCount: 4, baselineOf: 15 },
+      { count: 62, of: 62, baselineCount: 0, baselineOf: 40 },
+      { baselineCount: 0, baselineOf: 0 },
+    ];
+    const got = cases.map((o) => {
+      const v = reportView(report({ focus: [focusItem({ blindSpots: [spot(o)], steps: [{ blindSpot: "answer-check", text: "x" }] })] }));
+      const b = v.body.kind === "focus" ? v.body.items[0]!.blindSpots[0]! : undefined;
+      const step = v.page.items[0]!.steps[0]!;
+      expect(step.share).toBe(b?.share);
+      expect(step.baselineShare).toBe(b?.baselineShare);
+      expect(step.comparison).toBe(b?.comparison);
+      if (b?.comparison === undefined) expect(b && "baselineShare" in b).toBe(false);
+      else {
+        const exact = b.baselineShare!.includes(" of your ");
+        expect(b.comparison).toBe(`against ${b.baselineShare}${exact ? " overall" : " of your mistakes overall"}`);
+      }
+      return [b?.share, b?.baselineShare];
+    });
+    expect(got).toEqual([
+      ["about 1 in 3", "about 1 in 8"],
+      ["about 6 in 10", "about 6 in 10"],
+      ["about 1 in 4", "4 of your 15 mistakes"],
+      ["all", "none"],
+      ["about 1 in 3", undefined],
+    ]);
+  });
+
   it("marks a step whose blind spot is missing and says so in the notes", () => {
     const v = reportView(report({ focus: [focusItem({ steps: [{ blindSpot: "lost-rook", text: "x" }] })] }));
     expect(v.body.kind === "focus" && v.body.items[0]!.steps[0]!.text).toBe(UNSHOWN_WORDING);
