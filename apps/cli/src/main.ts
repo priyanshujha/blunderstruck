@@ -37,6 +37,7 @@ import {
   parsePatternsArgs,
   parseReportArgs,
 } from "./args";
+import { coachLogger } from "./coach-log";
 import { dbPath } from "./db-path";
 import { EnvFileError, loadEnv } from "./env";
 import { formatPatterns } from "./patterns-format";
@@ -337,6 +338,7 @@ async function reportCmd(args: string[]) {
           progress.update(progressText(phase, done, total, etaSeconds, checking), done === total);
         },
         onWarning: (message) => note(`Coach wording fell back to templates: ${message}`),
+        onModelCall: coachLogger(process.env.BLUNDERSTRUCK_COACH_LOG),
         onReport: (report, { pending }) => {
           if (noKey && !warnedNoKey) {
             note(NO_KEY_MESSAGE);

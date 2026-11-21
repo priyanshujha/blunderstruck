@@ -11,7 +11,7 @@ import {
   type Track,
   type WeeklyReport,
 } from "@blunderstruck/contracts";
-import { writeReport } from "@blunderstruck/coach";
+import { type WriteOptions, writeReport } from "@blunderstruck/coach";
 import { FETCH_MAX, MIN_REPORT_GAMES, SAMPLE_GAMES, selectGames } from "@blunderstruck/progress";
 import type { Store } from "@blunderstruck/store";
 import {
@@ -61,6 +61,8 @@ export interface ReportDeps {
   onReport?: (report: WeeklyReport, info: { pending: number }) => void;
   /** Why the report fell back to template wording, when a model call failed. */
   onWarning?: (message: string) => void;
+  /** Called with every model reply and its token usage (see `WriteOptions.onModelCall`). */
+  onModelCall?: WriteOptions["onModelCall"];
 }
 
 export interface ReportOptions {
@@ -290,7 +292,10 @@ export async function runReport(deps: ReportDeps, opts: ReportOptions): Promise<
       firstLook,
     });
     const { draft, pending, carriedFrom } = built;
-    const written = await writeReport(draft, deps.provider, undefined, { onModelError: deps.onWarning });
+    const written = await writeReport(draft, deps.provider, undefined, {
+      onModelError: deps.onWarning,
+      onModelCall: deps.onModelCall,
+    });
     const report = carriedFrom ? carryWording(written, carriedFrom) : written;
     if ((await store.putReport(report)) !== "stored") return lostRace();
     await storeWeekRows(store, report);

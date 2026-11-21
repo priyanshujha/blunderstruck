@@ -169,7 +169,10 @@ export async function completeReport(
     ...(report.cappedGameIds ? { cappedIds: report.cappedGameIds } : {}),
   });
 
-  const written = await writeReport(draft, deps.provider, report, { onModelError: deps.onWarning });
+  const written = await writeReport(draft, deps.provider, report, {
+    onModelError: deps.onWarning,
+    onModelCall: deps.onModelCall,
+  });
   // Text kept from a revision whose call failed is still template text for that reason.
   const madeCall = written.wording.calls > report.wording.calls;
   const next =

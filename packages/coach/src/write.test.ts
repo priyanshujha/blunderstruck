@@ -163,6 +163,24 @@ describe("writeReport", () => {
     expect(r.focus[0]!.title).toBe("fixed title hung-piece");
   });
 
+  it("passes every reply and its usage to onModelCall, numbered by call", async () => {
+    const d = draft(["hung-piece"]);
+    const calls: { attempt: number; text: string; usage: object }[] = [];
+    const p = stub(["not json", good(["hung-piece"])]);
+    await writeReport(d, p, undefined, { onModelCall: (c) => calls.push(c) });
+    expect(calls.map((c) => c.attempt)).toEqual([1, 2]);
+    expect(calls[0]!.text).toBe("not json");
+    expect(calls[1]!.text).toBe(good(["hung-piece"]));
+    expect(calls[0]!.usage).toEqual({ inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 });
+  });
+
+  it("does not call onModelCall for a provider error", async () => {
+    const calls: number[] = [];
+    const p = stub([new HttpError("HTTP 400", 400)]);
+    await writeReport(draft(["hung-piece"]), p, undefined, { onModelCall: (c) => calls.push(c.attempt) });
+    expect(calls).toEqual([]);
+  });
+
   it("uses the repair once, then falls back to the template", async () => {
     const d = draft(["hung-piece"]);
     const p = stub(["not json", "still not json", good(["hung-piece"])]);
@@ -403,6 +421,14 @@ describe("writeReport with blind spots and examples", () => {
     const r = await writeReport(drafted([{ id: "hung-piece", examples: refreshed }], 1), p, first);
     expect(p.requests).toHaveLength(0);
     expect(r.focus[0]!.examples).toEqual(refreshed);
+  });
+
+  it("numbers a reword call after the earlier revision's calls", async () => {
+    const first = await writeReport(drafted([{ id: "hung-piece", examples: [A, B] }]), stub([good(["hung-piece"])]));
+    const next = drafted([{ id: "hung-piece", examples: [A, C] }], 1);
+    const attempts: number[] = [];
+    await writeReport(next, auto(() => next), first, { onModelCall: (c) => attempts.push(c.attempt) });
+    expect(attempts).toEqual([2]);
   });
 
   it("rewords an item whose kept example is gone, in one call for every changed item", async () => {

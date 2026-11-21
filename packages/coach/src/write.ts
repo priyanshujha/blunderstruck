@@ -10,7 +10,7 @@ import type {
 import { HttpError } from "./http";
 import { pickModel } from "./models";
 import { buildPrompt, WORDING_SCHEMA } from "./prompt";
-import { type CoachProvider, ProviderResponseError } from "./provider";
+import { type CoachProvider, type CompleteResult, ProviderResponseError } from "./provider";
 import { templateStep, templateWording } from "./templates";
 import { namesOnlyShown, parseWording, type WordingText } from "./validate";
 
@@ -22,6 +22,18 @@ type ItemText = WordingText["focus"][number];
 export interface WriteOptions {
   /** Told why model wording was not used: the provider's (already redacted) error or the validation failure. */
   onModelError?: (message: string) => void;
+  /**
+   * Called with every model reply, before it is checked: the first, the repair and the reword.
+   * `attempt` is the reply's call number in the period (1 to 3), counting earlier revisions' calls.
+   */
+  onModelCall?: (c: ModelCall) => void;
+}
+
+/** One model reply as `WriteOptions.onModelCall` sees it. */
+export interface ModelCall {
+  attempt: number;
+  text: string;
+  usage: CompleteResult["usage"];
 }
 
 interface Attempt {
@@ -50,6 +62,8 @@ async function ask(
   budget: number,
   repair: boolean,
   onError: (message: string) => void,
+  onCall: (c: ModelCall) => void,
+  priorCalls = 0,
 ): Promise<Attempt> {
   if (budget < 1) return { calls: 0 };
   const { system, user } = buildPrompt(draft, only);
@@ -58,13 +72,16 @@ async function ask(
 
   const call = async (userText: string): Promise<string | undefined> => {
     calls++;
+    let result: CompleteResult;
     try {
-      return (await provider.complete({ system, user: userText, schema: WORDING_SCHEMA, choice })).text;
+      result = await provider.complete({ system, user: userText, schema: WORDING_SCHEMA, choice });
     } catch (e) {
       if (!isProviderFailure(e)) throw e;
       onError(e.message);
       return undefined;
     }
+    onCall({ attempt: priorCalls + calls, text: result.text, usage: result.usage });
+    return result.text;
   };
 
   const answer = await call(user);
@@ -172,6 +189,7 @@ export async function writeReport(
   opts: WriteOptions = {},
 ): Promise<WeeklyReport> {
   const onError = opts.onModelError ?? (() => {});
+  const onCall = opts.onModelCall ?? (() => {});
   const template = templateWording(draft);
   const templateTexts = byId(template.focus);
   let notes = [...draft.notes];
@@ -185,7 +203,7 @@ export async function writeReport(
     if (!needsModel) {
       return assemble(draft, template.summary, templateTexts, { source: "template", wordedFor: [], calls: 0 }, notes);
     }
-    const got = await ask(provider!, draft, undefined, MAX_CALLS, true, onError);
+    const got = await ask(provider!, draft, undefined, MAX_CALLS, true, onError, onCall);
     if (!got.text) {
       return assemble(
         draft,
@@ -251,7 +269,7 @@ export async function writeReport(
   }
 
   // New or stale items: one reword call for them and the summary.
-  const got = needsModel ? await ask(provider!, draft, toWord, MAX_CALLS - priorCalls, false, onError) : { calls: 0 };
+  const got = needsModel ? await ask(provider!, draft, toWord, MAX_CALLS - priorCalls, false, onError, onCall, priorCalls) : { calls: 0 };
   const calls = priorCalls + got.calls;
   if (got.text) {
     for (const f of got.text.focus) {
