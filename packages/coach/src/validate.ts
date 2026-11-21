@@ -599,15 +599,19 @@ const ALSO = /\balso\b/i;
 const HEDGED = /\b(?:could|would|might)\b|\b(?:did\s+not|didn['’]t|never|at\s+no)\s*$/i;
 const COST = /\bcost(?:s|ing)?\b/gi;
 
-/** Errors for words that refer to the other item: in a title or a why's lead each item is read on its own. */
+/**
+ * Errors for words that refer to the other item in the first sentence of a title or a why
+ * ("This keeps coming back too"), which is read before anything else about the item. The rest
+ * of the text may use them ("it could hit the king too").
+ */
 function leaningErrors(where: string, text: string): string[] {
   const errors: string[] = [];
-  for (const m of text.matchAll(LEANING_END)) {
+  const first = sentences(text)[0] ?? "";
+  for (const m of first.matchAll(LEANING_END)) {
     errors.push(
-      `${where} ends a clause with "${m[1]}", which leans on the other item; each item is read on its own, so say it without "${m[1]}".`,
+      `${where} ends a clause in its first sentence with "${m[1]}", which leans on the other item; each item is read on its own, so open without "${m[1]}".`,
     );
   }
-  const first = sentences(text)[0] ?? "";
   if (ALSO.test(first)) {
     errors.push(`${where} says "also" in its first sentence, which leans on the other item; each item is read on its own, so leave it out.`);
   }
@@ -620,7 +624,7 @@ const clauses = (text: string) => text.split(/[,.;:!?]/);
 /**
  * The rules for a newly written why: its markers (each at most once, in order, only for
  * examples the item has, opening a sentence and followed by a comma), how many moves and squares
- * a segment names, words that lean on the other item in the lead, and a cost stated as fact
+ * a segment names, words that lean on the other item in its first sentence, and a cost stated as fact
  * only for an example whose game took it.
  */
 function whyRules(where: string, why: string, examples: readonly FocusExample[]): string[] {
@@ -655,7 +659,7 @@ function whyRules(where: string, why: string, examples: readonly FocusExample[])
   }
   for (const seg of whySegments(why)) {
     if (seg.example === 0) {
-      errors.push(...leaningErrors(`${where}, before the first marker,`, seg.text));
+      errors.push(...leaningErrors(where, seg.text));
       continue;
     }
     const ex = examples[seg.example - 1];

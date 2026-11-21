@@ -1165,14 +1165,16 @@ describe("pointing at the examples", () => {
     ]);
   });
 
-  it("rejects words that lean on the other item in the title and the lead, not after a marker", () => {
-    expect(whyA("This keeps coming back too.")).toEqual([expect.stringMatching(/before the first marker, ends a clause with "too"/)]);
-    expect(whyA("Checks hurt as well, mostly after queen moves.")).toEqual([expect.stringMatching(/ends a clause with "as well"/)]);
+  it("rejects words that lean on the other item in the title and the why's first sentence only", () => {
+    expect(whyA("This keeps coming back too.")).toEqual([expect.stringMatching(/why ends a clause in its first sentence with "too"/)]);
+    expect(whyA("Checks hurt as well, mostly after queen moves.")).toEqual([expect.stringMatching(/ends a clause in its first sentence with "as well"/)]);
     expect(whyA("This one also keeps coming back. Checks hurt.")).toEqual([expect.stringMatching(/says "also" in its first sentence/)]);
+    // Later in the lead they usually mean "as well" within the item.
+    expect(whyA("Checks hurt. The piece you had just moved stood where a check could hit it too.")).toEqual([]);
     expect(whyA("Checks hurt. You also moved the queen a lot.")).toEqual([]);
     expect(whyA(`${LEAD} {example1}, the queen was loose too.`)).toEqual([]);
     expect(whyA("A loose queen was too much to hope for.")).toEqual([]);
-    expect(storiedErrors(storiedAnswer({ a: { title: "Checks again, too" } }))).toEqual([expect.stringMatching(/title ends a clause with "too"/)]);
+    expect(storiedErrors(storiedAnswer({ a: { title: "Checks again, too" } }))).toEqual([expect.stringMatching(/title ends a clause in its first sentence with "too"/)]);
   });
 
   it("states a cost as fact only for an example whose game took it", () => {
