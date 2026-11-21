@@ -604,7 +604,7 @@ const LOSS =
 const NOT_A_LOSS: Readonly<Record<string, RegExp>> = {
   losing: /^\s+(?:move|moves|position|positions|side)\b/i,
   fell: /^\s+back\b/i,
-  gone: /^\s+to\s+[a-h][1-8]\b/i,
+  gone: /^\s+to\b/i,
   lost: /^\s+(?:time|track)\b/i,
 };
 /** How many words before a loss word a hedge may stand: "could have also cost". */
@@ -651,7 +651,7 @@ function leaningErrors(where: string, text: string): string[] {
   }
   for (const part of parts) {
     // ", and this one keeps coming back too": the joining word is not the clause's subject.
-    const clause = part.replace(/^(?:and|but|so)\s+/i, "");
+    const clause = part.replace(/^(?:and|but|so)\s+(?=(?:this|another|here)\b)/i, "");
     if (!ITEM_CLAUSE.test(clause)) continue;
     const word = ALSO.exec(clause)?.[0] ?? LEANING_END.exec(clause)?.[1] ?? /^this\s+(too)\b/i.exec(clause)?.[1];
     if (!word) continue;

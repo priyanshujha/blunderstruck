@@ -1177,6 +1177,8 @@ describe("pointing at the examples", () => {
     expect(whyA("{example1}, this keeps coming back too.")).toEqual([expect.stringMatching(/the clause "this keeps coming back too": "too"/)]);
     expect(whyA("Checks hurt, and this one keeps coming back too.")).toEqual([expect.stringMatching(/the clause "this one keeps coming back too": "too"/)]);
     expect(whyA("Checks hurt, and this one keeps coming back.")).toEqual([]);
+    expect(whyA("Checks hurt, and also when the queen moves.")).toEqual([]);
+    expect(whyA("You hang pieces after castling, and that also leaves your king open.")).toEqual([]);
     // A lone "too" joins its clause, and "This too" leans.
     for (const lean of ["This one keeps coming back, too.", "This, too, keeps coming back.", "This too keeps coming back."]) {
       expect(whyA(lean), lean).toEqual([expect.stringMatching(/"too" leans on the other item/)]);
@@ -1211,12 +1213,12 @@ describe("pointing at the examples", () => {
     for (const ok of ["it did not cost you the queen", "it never really cost you"]) {
       expect(whyA(`${LEAD} {example1}, ${ok}.`), ok).toEqual([]);
     }
-    for (const bad of ["they won a pawn", "they won an exchange", "they won material"]) {
+    for (const bad of ["they won a pawn", "they won an exchange", "they won material", "the queen was gone"]) {
       expect(whyA(`${LEAD} {example1}, ${bad}.`), bad).toHaveLength(1);
     }
     for (const ok of [
       "it was a losing move", "it left a losing position", "the losing side kept pressing", "the knight fell back",
-      "the queen had gone to d2", "the queen was gone to e4 at once", "you lost time there", "you lost track of the knight",
+      "the queen had gone to d2", "the queen was gone to e4 at once", "the queen had gone to the kingside", "you lost time there", "you lost track of the knight",
     ]) {
       expect(whyA(`${LEAD} {example1}, ${ok}.`), ok).toEqual([]);
     }
