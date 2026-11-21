@@ -598,37 +598,64 @@ const ITEM_CLAUSE = /^(?:this|that|another|also|here)\b/i;
 const LEANING_END = /\b(too|as well|either)\s*$/i;
 const ALSO = /\balso\b/i;
 /** Words that state a loss as fact: checked under an example whose game did not take it. */
-const LOSS = /\b(?:cost(?:s|ing)?|lost|lose|loses|losing|gone|fell|won\s+(?:your|the))\b/gi;
-/** How many words before a loss word a hedge or a denial may stand: "could have also cost". */
+const LOSS =
+  /\b(?:cost(?:s|ing)?|lost|lose|loses|losing|gone|fell|won\s+(?:your|the|an?|material)|was\s+(?:taken|captured))\b/gi;
+/** Loss words a missed win may use: its cost is the win not taken ("missing it cost the queen"). */
+const MISSED_WIN_LOSS = /^(?:cost(?:s|ing)?|lost|lose|loses|losing)$/i;
+/** What follows a loss word when it is not a loss: "a losing position", "fell back", "lost time". */
+const NOT_A_LOSS: Readonly<Record<string, RegExp>> = {
+  losing: /^\s+(?:move|moves|position|positions|side)\b/i,
+  fell: /^\s+back\b/i,
+  gone: /^\s+to\s+[a-h][1-8]\b/i,
+  lost: /^\s+(?:time|track)\b/i,
+};
+/** How many words before a loss word a hedge may stand: "could have also cost". */
 export const HEDGE_WINDOW = 4;
-/** Hedges ("could easily have cost") and denials ("did not cost") among the words just before a loss word. */
-const HEDGE_WORDS: ReadonlySet<string> = new Set([
-  "could", "would", "might", "couldn't", "wouldn't", "didn't", "doesn't", "never",
-]);
-const DENIAL_PAIRS: readonly (readonly [string, string])[] = [["did", "not"], ["does", "not"], ["at", "no"]];
+const HEDGE_WORDS: ReadonlySet<string> = new Set(["could", "would", "might", "couldn't", "wouldn't"]);
+/** Denials, right before the loss word (one adverb or "have" may come between): "did not cost", "never really cost". */
+const DENIALS: readonly (readonly string[])[] = [
+  ["didn't"], ["doesn't"], ["never"], ["did", "not"], ["does", "not"], ["at", "no"], ["wouldn't", "have"],
+];
+const ADVERBS: ReadonlySet<string> = new Set(["really", "actually", "even", "quite", "ever", "just", "still", "yet", "have"]);
 /** Right after the loss word: "cost nothing", "cost you nothing". */
 const NOTHING_AFTER = /^\s+(?:you\s+|them\s+)?nothing\b/i;
 
-/** Whether the loss word at `at` in `clause` is hedged or denied in its own clause. */
+/** Whether the loss word at `at` in `clause` is not a loss, or is hedged or denied in its own clause. */
 function hedged(clause: string, at: number, word: string): boolean {
-  if (NOTHING_AFTER.test(clause.slice(at + word.length))) return true;
-  const before = clause.slice(0, at).replace(/’/g, "'").toLowerCase().split(/\s+/).filter(Boolean).slice(-HEDGE_WINDOW);
-  if (before.some((w) => HEDGE_WORDS.has(w))) return true;
-  return before.some((w, i) => DENIAL_PAIRS.some(([a, b]) => w === a && before[i + 1] === b));
+  const after = clause.slice(at + word.length);
+  if (NOTHING_AFTER.test(after)) return true;
+  const kind = word.toLowerCase();
+  if (NOT_A_LOSS[kind]?.test(after)) return true;
+  const words = clause.slice(0, at).replace(/’/g, "'").toLowerCase().split(/\s+/).filter(Boolean);
+  // "the queen had gone to d2": where a piece went, not a loss.
+  if (kind === "gone" && words.at(-1) === "had" && /^\s+to\b/i.test(after)) return true;
+  if (words.slice(-HEDGE_WINDOW).some((w) => HEDGE_WORDS.has(w))) return true;
+  const ends = (ws: readonly string[]) => DENIALS.some((d) => d.every((w, i) => ws[ws.length - d.length + i] === w));
+  if (ends(words)) return true;
+  const last = words.at(-1) ?? "";
+  return (ADVERBS.has(last) || /^\p{L}+ly$/u.test(last)) && ends(words.slice(0, -1));
 }
+
+/** A clause that is only "too", "as well" or "either": "This one keeps coming back, too." */
+const LONE_LEANING = /^(?:too|as well|either)$/i;
 
 /**
  * Errors for words that lean on the other item in the why's first sentence: a clause about
- * the item itself ("This keeps coming back too", "This one also keeps coming back"). Elsewhere,
- * and in clauses about something else ("a check that could hit it too"), they mean "as well"
- * within the item and pass.
+ * the item itself ("This keeps coming back too", "This one also keeps coming back", "This too
+ * keeps coming back"). Elsewhere, and in clauses about something else ("a check that could hit
+ * it too"), they mean "as well" within the item and pass. A lone "too" joins the clause before it.
  */
 function leaningErrors(where: string, text: string): string[] {
   const errors: string[] = [];
+  const parts: string[] = [];
   for (const raw of firstSentence(text).split(/[,;:]/)) {
-    const clause = raw.trim().replace(/^\{example\d+\}\s*/, "");
+    const part = raw.trim();
+    if (LONE_LEANING.test(part) && parts.length > 0) parts[parts.length - 1] += ` ${part}`;
+    else parts.push(part);
+  }
+  for (const clause of parts) {
     if (!ITEM_CLAUSE.test(clause)) continue;
-    const word = ALSO.exec(clause)?.[0] ?? LEANING_END.exec(clause)?.[1];
+    const word = ALSO.exec(clause)?.[0] ?? LEANING_END.exec(clause)?.[1] ?? /^this\s+(too)\b/i.exec(clause)?.[1];
     if (!word) continue;
     errors.push(
       `${where}, the clause "${quote(clause)}": "${word}" leans on the other item, but each item is read on its own; say it without "${word}".`,
@@ -692,9 +719,10 @@ function whyRules(where: string, why: string, examples: readonly FocusExample[])
       );
     }
     const missed = blindSpotFamilyOf(ex.patternId) === "missed";
-    if (!missed && ex.story?.inGame?.paid !== true) {
+    if (missed || ex.story?.inGame?.paid !== true) {
       for (const clause of clauses(seg.text)) {
         for (const c of clause.matchAll(LOSS)) {
+          if (missed && MISSED_WIN_LOSS.test(c[0])) continue;
           if (hedged(clause, c.index, c[0])) continue;
           errors.push(
             `${where} says "${c[0]}" after {example${seg.example}}, but in that game nothing was taken (paid is not true). Say what the move allowed or could have cost ("which could have cost your knight"); never that a piece was lost, gone or won.`,
