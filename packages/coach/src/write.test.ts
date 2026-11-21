@@ -165,10 +165,11 @@ describe("writeReport", () => {
 
   it("passes every reply and its usage to onModelCall, numbered by call", async () => {
     const d = draft(["hung-piece"]);
-    const calls: { attempt: number; text: string; usage: object }[] = [];
+    const calls: { attempt: number; text: string; usage: object; errors: string[] }[] = [];
     const p = stub(["not json", good(["hung-piece"])]);
     await writeReport(d, p, undefined, { onModelCall: (c) => calls.push(c) });
     expect(calls.map((c) => c.attempt)).toEqual([1, 2]);
+    expect(calls.map((c) => c.errors)).toEqual([["the answer is not valid JSON"], []]);
     expect(calls[0]!.text).toBe("not json");
     expect(calls[1]!.text).toBe(good(["hung-piece"]));
     expect(calls[0]!.usage).toEqual({ inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 });

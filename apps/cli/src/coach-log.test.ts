@@ -22,12 +22,12 @@ describe("coachLogger", () => {
     const file = join(dir, "calls.ndjson");
     const log = coachLogger(file)!;
     const usage = { inputTokens: 1200, outputTokens: 300, cachedInputTokens: 900 };
-    log({ attempt: 1, text: '{"summary":"a"}', usage });
-    log({ attempt: 2, text: '{"summary":"b"}', usage });
+    log({ attempt: 1, text: '{"summary":"a"}', usage, errors: ["focus must be an array"] });
+    log({ attempt: 2, text: '{"summary":"b"}', usage, errors: [] });
     const lines = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toMatchObject({ attempt: 1, usage, text: '{"summary":"a"}' });
-    expect(lines[1].attempt).toBe(2);
+    expect(lines[0]).toMatchObject({ attempt: 1, usage, errors: ["focus must be an array"], text: '{"summary":"a"}' });
+    expect(lines[1]).toMatchObject({ attempt: 2, errors: [] });
     expect(typeof lines[0].at).toBe("string");
   });
 
@@ -35,8 +35,8 @@ describe("coachLogger", () => {
     const warnings: string[] = [];
     const log = coachLogger(join(dir, "missing", "calls.ndjson"), (m) => warnings.push(m))!;
     const usage = { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 };
-    expect(() => log({ attempt: 1, text: "{}", usage })).not.toThrow();
-    expect(() => log({ attempt: 2, text: "{}", usage })).not.toThrow();
+    expect(() => log({ attempt: 1, text: "{}", usage, errors: [] })).not.toThrow();
+    expect(() => log({ attempt: 2, text: "{}", usage, errors: [] })).not.toThrow();
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatch(/could not write to .*calls\.ndjson \(ENOENT\); the report goes on without the log\./);
   });

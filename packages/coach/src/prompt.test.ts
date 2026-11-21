@@ -209,7 +209,14 @@ describe("buildPrompt", () => {
     expect(system).toContain("No percentages, fractions of their games or rates, in any field.");
     expect(system).toContain("Numbers that describe a position, a clock or what to practise are fine as they are");
     expect(system).toContain("The report prints the frequency, goal and weeks lines itself, and shows rates only in its details, so leave those out entirely.");
-    expect(system).toContain("the why's first sentence names the pattern and how many games it was in, with its token");
+    expect(system).toContain("the why is at most four sentences");
+    expect(system).toContain("Nothing after the last example's sentence");
+    expect(system).toContain("each marker reads as about 40 characters");
+    // The worked example has that shape: a lead, a bridge, one sentence per example, nothing after.
+    for (const f of JSON.parse(example!).focus as { why: string }[]) {
+      expect(f.why.split(/(?<=\.) /)).toHaveLength(3);
+      expect(f.why.split(/(?<=\.) /)[2]).toMatch(/^\{example1\}, /);
+    }
     expect(system).toContain('"Two of those games show it."');
     expect(JSON.parse(example!).focus.every((f: { why: string }) => /^[^.]*\{gamesAffected\} of your games/.test(f.why))).toBe(true);
     expect(system).toContain('State the player\'s overall level with {mistakesPerGame} only');

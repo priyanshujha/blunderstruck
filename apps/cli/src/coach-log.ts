@@ -3,7 +3,7 @@ import type { ModelCall } from "@blunderstruck/coach";
 
 /**
  * A `onModelCall` handler that appends one JSON line per model reply (call number, token usage,
- * reply text) to `file`, or undefined when no file is named. The line holds the reply only,
+ * the wording check's errors, reply text) to `file`, or undefined when no file is named. The line holds the reply only,
  * never the prompt or a key. A file that cannot be written is reported once through `warn`
  * (stderr by default) and never stops the report.
  */
@@ -14,7 +14,7 @@ export function coachLogger(
   if (!file) return undefined;
   let warned = false;
   return (c) => {
-    const line = { at: new Date().toISOString(), attempt: c.attempt, usage: c.usage, text: c.text };
+    const line = { at: new Date().toISOString(), attempt: c.attempt, usage: c.usage, errors: c.errors, text: c.text };
     try {
       appendFileSync(file, `${JSON.stringify(line)}\n`);
     } catch (e) {

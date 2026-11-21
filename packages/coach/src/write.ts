@@ -12,7 +12,7 @@ import { pickModel } from "./models";
 import { buildPrompt, WORDING_SCHEMA } from "./prompt";
 import { type CoachProvider, type CompleteResult, ProviderResponseError } from "./provider";
 import { templateStep, templateWording } from "./templates";
-import { namesOnlyShown, parseWording, type WordingText } from "./validate";
+import { namesOnlyShown, parseWording, type WordingResult, type WordingText } from "./validate";
 
 /** Model calls allowed for one period: the plan, one repair and one reword. */
 const MAX_CALLS = 3;
@@ -23,7 +23,7 @@ export interface WriteOptions {
   /** Told why model wording was not used: the provider's (already redacted) error or the validation failure. */
   onModelError?: (message: string) => void;
   /**
-   * Called with every model reply, before it is checked: the first, the repair and the reword.
+   * Called with every model reply once it is checked: the first, the repair and the reword.
    * `attempt` is the reply's call number in the period (1 to 3), counting earlier revisions' calls.
    * An error it throws is ignored.
    */
@@ -35,6 +35,8 @@ export interface ModelCall {
   attempt: number;
   text: string;
   usage: CompleteResult["usage"];
+  /** The wording check's errors for this reply; empty when it passed. */
+  errors: string[];
 }
 
 interface Attempt {
@@ -71,27 +73,30 @@ async function ask(
   const choice = choiceFor(provider);
   let calls = 0;
 
-  const call = async (userText: string): Promise<string | undefined> => {
+  /** One call and the check of its reply, told to `onCall`. */
+  const call = async (userText: string): Promise<{ text: string; result: WordingResult } | undefined> => {
     calls++;
-    let result: CompleteResult;
+    let reply: CompleteResult;
     try {
-      result = await provider.complete({ system, user: userText, schema: WORDING_SCHEMA, choice });
+      reply = await provider.complete({ system, user: userText, schema: WORDING_SCHEMA, choice });
     } catch (e) {
       if (!isProviderFailure(e)) throw e;
       onError(e.message);
       return undefined;
     }
+    const result = parseWording(reply.text, draft, only);
     try {
-      onCall({ attempt: priorCalls + calls, text: result.text, usage: result.usage });
+      onCall({ attempt: priorCalls + calls, text: reply.text, usage: reply.usage, errors: result.ok ? [] : result.errors });
     } catch {
       // A failing observer never changes the wording.
     }
-    return result.text;
+    return { text: reply.text, result };
   };
 
-  const answer = await call(user);
-  if (answer === undefined) return { calls };
-  const first = parseWording(answer, draft, only);
+  const got = await call(user);
+  if (got === undefined) return { calls };
+  const answer = got.text;
+  const first = got.result;
   if (first.ok) return { text: first.value, calls };
   if (!repair || budget < 2) {
     onError(`the reply failed validation: ${first.errors[0]}`);
@@ -111,7 +116,7 @@ async function ask(
   ].join("\n");
   const second = await call(repairUser);
   if (second === undefined) return { calls };
-  const parsed = parseWording(second, draft, only);
+  const parsed = second.result;
   if (parsed.ok) return { text: parsed.value, calls };
   onError(`the reply failed validation twice: ${parsed.errors[0]}`);
   return { calls };
