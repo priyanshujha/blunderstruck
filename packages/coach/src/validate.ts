@@ -595,9 +595,25 @@ function whyMoveErrors(where: string, why: string, examples: readonly FocusExamp
 /** Words that lean on the other item when they end a clause: "this keeps coming back too". */
 const LEANING_END = /\b(too|as well|either)\s*(?=[,.;:!?]|$)/gi;
 const ALSO = /\balso\b/i;
-/** Earlier in the clause, a hedge ("could easily have cost") or a denial ("did not cost", "at no cost"): not a cost stated as fact. */
-const HEDGED = /\b(?:could|would|might)\b|\b(?:did\s+not|didn['’]t|never|at\s+no)\s*$/i;
-const COST = /\bcost(?:s|ing)?\b/gi;
+/** Words that state a loss as fact: checked under an example whose game did not take it. */
+const LOSS = /\b(?:cost(?:s|ing)?|lost|lose|loses|losing|gone|fell|won\s+(?:your|the))\b/gi;
+/** How many words before a loss word a hedge or a denial may stand: "could have also cost". */
+export const HEDGE_WINDOW = 4;
+/** Hedges ("could easily have cost") and denials ("did not cost") among the words just before a loss word. */
+const HEDGE_WORDS: ReadonlySet<string> = new Set([
+  "could", "would", "might", "couldn't", "wouldn't", "didn't", "doesn't", "never",
+]);
+const DENIAL_PAIRS: readonly (readonly [string, string])[] = [["did", "not"], ["does", "not"], ["at", "no"]];
+/** Right after the loss word: "cost nothing", "cost you nothing". */
+const NOTHING_AFTER = /^\s+(?:you\s+|them\s+)?nothing\b/i;
+
+/** Whether the loss word at `at` in `clause` is hedged or denied in its own clause. */
+function hedged(clause: string, at: number, word: string): boolean {
+  if (NOTHING_AFTER.test(clause.slice(at + word.length))) return true;
+  const before = clause.slice(0, at).replace(/’/g, "'").toLowerCase().split(/\s+/).filter(Boolean).slice(-HEDGE_WINDOW);
+  if (before.some((w) => HEDGE_WORDS.has(w))) return true;
+  return before.some((w, i) => DENIAL_PAIRS.some(([a, b]) => w === a && before[i + 1] === b));
+}
 
 /**
  * Errors for words that refer to the other item in the first sentence of a title or a why
@@ -606,7 +622,7 @@ const COST = /\bcost(?:s|ing)?\b/gi;
  */
 function leaningErrors(where: string, text: string): string[] {
   const errors: string[] = [];
-  const first = sentences(text)[0] ?? "";
+  const first = firstSentence(text);
   for (const m of first.matchAll(LEANING_END)) {
     errors.push(
       `${where} ends a clause in its first sentence with "${m[1]}", which leans on the other item; each item is read on its own, so open without "${m[1]}".`,
@@ -620,6 +636,9 @@ function leaningErrors(where: string, text: string): string[] {
 
 /** Clauses of a text, split on , . ; : ! ? */
 const clauses = (text: string) => text.split(/[,.;:!?]/);
+
+/** The first sentence of a text, ending only at ".", "!" or "?" (a ";" does not end it). */
+const firstSentence = (text: string): string => sentences(text.replace(/;/g, ","))[0] ?? "";
 
 /**
  * The rules for a newly written why: its markers (each at most once, in order, only for
@@ -657,11 +676,9 @@ function whyRules(where: string, why: string, examples: readonly FocusExample[])
       errors.push(`${where}: ${token} must be followed by a comma, as in "${token}, pawn to b3 opened the long diagonal".`);
     }
   }
+  errors.push(...leaningErrors(where, why));
   for (const seg of whySegments(why)) {
-    if (seg.example === 0) {
-      errors.push(...leaningErrors(where, seg.text));
-      continue;
-    }
+    if (seg.example === 0) continue;
     const ex = examples[seg.example - 1];
     if (!ex) continue;
     const { moves, squares } = namedMoves(seg.text);
@@ -674,10 +691,10 @@ function whyRules(where: string, why: string, examples: readonly FocusExample[])
     const missed = blindSpotFamilyOf(ex.patternId) === "missed";
     if (!missed && ex.story?.inGame?.paid !== true) {
       for (const clause of clauses(seg.text)) {
-        for (const c of clause.matchAll(COST)) {
-          if (HEDGED.test(clause.slice(0, c.index))) continue;
+        for (const c of clause.matchAll(LOSS)) {
+          if (hedged(clause, c.index, c[0])) continue;
           errors.push(
-            `${where} says "${c[0]}" after {example${seg.example}}, but in that game the cost was not taken (paid is not true). Say what it could have cost ("which could have cost your knight"), or leave the cost out.`,
+            `${where} says "${c[0]}" after {example${seg.example}}, but in that game nothing was taken (paid is not true). Say what the move allowed or could have cost ("which could have cost your knight"); never that a piece was lost, gone or won.`,
           );
         }
       }

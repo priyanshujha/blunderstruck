@@ -858,7 +858,7 @@ describe("the move rule", () => {
     expect(storiedErrors(storiedAnswer())).toEqual([]);
     // Capture marks and disambiguation name the same move; check signs may be left off.
     expect(storiedErrors(storiedAnswer({ a: { why: "Checks hurt. {example1}, Ne4 forked king and queen, then Nd2 took the queen." } }))).toEqual([]);
-    expect(storiedErrors(storiedAnswer({ a: { why: "Checks hurt. {example2}, Bb5 would have held; Nxe5 lost the knight on e5." } }))).toEqual([]);
+    expect(storiedErrors(storiedAnswer({ a: { why: "Checks hurt. {example2}, Bb5 would have held; Nxe5 left the knight on e5 to be taken." } }))).toEqual([]);
   });
 
   it("rejects a move that is not in the item's examples, naming it and the moves shown", () => {
@@ -1120,7 +1120,7 @@ describe("pointing at the examples", () => {
   });
 
   it("rejects a move under the wrong example", () => {
-    expect(whyA(`${LEAD} {example1}, Nxe5 lost the knight.`)).toEqual([
+    expect(whyA(`${LEAD} {example1}, Nxe5 left the knight loose.`)).toEqual([
       expect.stringMatching(/why names Nxe5 after \{example1\}, but it is not a move of your first example \(its moves: Qd2, /),
     ]);
     expect(whyA(`${LEAD} {example2}, the queen on d2 was loose.`)).toEqual([
@@ -1171,6 +1171,10 @@ describe("pointing at the examples", () => {
     expect(whyA("This one also keeps coming back. Checks hurt.")).toEqual([expect.stringMatching(/says "also" in its first sentence/)]);
     // Later in the lead they usually mean "as well" within the item.
     expect(whyA("Checks hurt. The piece you had just moved stood where a check could hit it too.")).toEqual([]);
+    // A ";" does not end the first sentence, and a why that opens with a marker is checked too.
+    expect(whyA("Checks hurt; this one also matters.")).toEqual([expect.stringMatching(/says "also" in its first sentence/)]);
+    expect(whyA("{example1}, the queen was loose too. Checks hurt.")).toEqual([expect.stringMatching(/first sentence with "too"/)]);
+    expect(whyA("{example1}, the queen was loose. Checks hurt too.")).toEqual([]);
     expect(whyA("Checks hurt. You also moved the queen a lot.")).toEqual([]);
     expect(whyA(`${LEAD} {example1}, the queen was loose too.`)).toEqual([]);
     expect(whyA("A loose queen was too much to hope for.")).toEqual([]);
@@ -1179,14 +1183,27 @@ describe("pointing at the examples", () => {
 
   it("states a cost as fact only for an example whose game took it", () => {
     expect(whyA(`${LEAD} {example1}, the knight check on e4 cost the queen.`)).toEqual([
-      expect.stringMatching(/says "cost" after \{example1\}, but in that game the cost was not taken/),
+      expect.stringMatching(/says "cost" after \{example1\}, but in that game nothing was taken/),
     ]);
     expect(whyA(`${LEAD} {example1}, the knight check on e4 could have cost the queen.`)).toEqual([]);
-    for (const hedged of ["could easily have cost the queen", "would probably have cost the queen", "did not cost the queen", "didn't cost the queen", "came at no cost"]) {
-      expect(whyA(`${LEAD} {example1}, the knight check on e4 ${hedged}.`), hedged).toEqual([]);
+    for (const ok of [
+      "could easily have cost the queen", "would probably have lost the queen", "could have also cost the queen",
+      "couldn't have cost more", "did not cost the queen", "didn't cost the queen", "does not cost the queen",
+      "doesn't lose the queen", "never cost the queen", "wouldn't have lost the queen", "cost nothing",
+      "cost you nothing", "came at no cost",
+    ]) {
+      expect(whyA(`${LEAD} {example1}, the knight check on e4 ${ok}.`), ok).toEqual([]);
     }
-    // A hedge in another clause does not cover this one.
+    for (const bad of [
+      "cost the queen", "lost the queen", "made you lose the queen", "left the queen gone", "won your queen",
+      "won the queen", "and the queen fell",
+    ]) {
+      expect(whyA(`${LEAD} {example1}, the knight check on e4 ${bad}.`), bad).toEqual([expect.stringMatching(/after \{example1\}, but in that game nothing was taken/)]);
+    }
+    // A hedge counts only in the same clause and at most four words before the loss word.
     expect(whyA(`${LEAD} {example1}, it could have been worse, but the check on e4 cost the queen.`)).toHaveLength(1);
+    expect(whyA(`${LEAD} {example1}, it could be said the check on e4 cost the queen.`)).toHaveLength(1);
+    expect(whyA(`${LEAD} {example1}, they did not play it, but the queen was gone.`)).toHaveLength(1);
     const item = allowedItem();
     const [f1, f2] = item.examples as [FocusExample, FocusExample];
     const paid: FocusExample = { ...f1, story: { ...f1.story!, inGame: { moves: f1.story!.punish, ended: false, paid: true } } };

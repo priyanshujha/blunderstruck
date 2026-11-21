@@ -209,6 +209,7 @@ const SYSTEM = [
   "- Start with the pattern in plain words: no move and no square before the first marker.",
   "- To cite a move, begin the sentence with that example's marker and a comma: \"{example1}, pawn to b3 opened the long diagonal.\" Each example comes with its marker and readsAs, what the reader sees in the marker's place. Use each marker at most once, in example order; an item with no examples uses none.",
   "- After a marker, cite only that example's moves, at most two squares or moves, written in words with the square: \"pawn to b3\", \"their bishop took your rook on a1\".",
+  "- For an example whose paid is not true, say what the move allowed or could have cost; never say the piece was lost, gone or won.",
   "- Each item is read on its own section of the page, so never refer to the other item: no \"too\", \"also\" or \"as well\".",
   "",
   "# Blind spots and steps",

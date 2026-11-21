@@ -450,6 +450,15 @@ describe("few-games weeks", () => {
     // Text from before markers that names a move: not carried onto other examples.
     const old = carryWording(builtIn([{ ...e1, gameId: "lichess:other" }, e2]), withWhy("Qd2 walked into Ne4+."));
     expect(old.focus[0]!.why).toBe("Built-in reason.");
+    // One item carried, one not: only the carried one counts as model-worded.
+    const two = a.focus.length > 1 ? a.focus : [item, { ...item, patternId: "missed-tactic" }];
+    const from: WeeklyReport = { ...a, focus: two.map((f) => ({ ...f, why: "Pieces went missing." })), wording: { ...a.wording, source: "model", wordedFor: two.map((f) => f.patternId) } };
+    const mixed = carryWording(
+      { ...a, focus: two.map((f, i) => ({ ...f, why: "Built-in reason.", examples: i === 0 ? f.examples : [{ ...f.examples[0]!, gameId: "lichess:other" }] })), wording: { source: "template", wordedFor: [], calls: 0 } },
+      from,
+    );
+    expect(mixed.focus.map((f) => f.why)).toEqual(["Pieces went missing.", "Built-in reason."]);
+    expect(mixed.wording).toMatchObject({ source: "model", wordedFor: [two[0]!.patternId] });
     // Same examples, but a move they do not show (the stories here have no Qd2): not carried either.
     expect(carryWording(builtIn([e1, e2]), withWhy("Qd2 walked into Ne4+.")).focus[0]!.why).toBe("Built-in reason.");
   });
