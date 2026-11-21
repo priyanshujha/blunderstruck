@@ -1116,7 +1116,7 @@ describe("pointing at the examples", () => {
 
   it("accepts a reason with no markers and no moves, and one with a move under each example", () => {
     expect(whyA(LEAD)).toEqual([]);
-    expect(whyA(`${LEAD} {example1}, the queen on d2 walked into a knight check. {example2}, the knight took on e5 and could be taken back.`)).toEqual([]);
+    expect(whyA(`${LEAD} {example1}, the queen on d2 walked into a knight check. {example2}, the knight took on e5 and was taken back.`)).toEqual([]);
   });
 
   it("rejects a move under the wrong example", () => {
@@ -1175,6 +1175,8 @@ describe("pointing at the examples", () => {
     // A ";" does not end the first sentence, and a why may open with a marker.
     expect(whyA("Checks hurt; this one also matters.")).toEqual([expect.stringMatching(/the clause "this one also matters": "also"/)]);
     expect(whyA("{example1}, this keeps coming back too.")).toEqual([expect.stringMatching(/the clause "this keeps coming back too": "too"/)]);
+    expect(whyA("Checks hurt, and this one keeps coming back too.")).toEqual([expect.stringMatching(/the clause "this one keeps coming back too": "too"/)]);
+    expect(whyA("Checks hurt, and this one keeps coming back.")).toEqual([]);
     // A lone "too" joins its clause, and "This too" leans.
     for (const lean of ["This one keeps coming back, too.", "This, too, keeps coming back.", "This too keeps coming back."]) {
       expect(whyA(lean), lean).toEqual([expect.stringMatching(/"too" leans on the other item/)]);
@@ -1185,7 +1187,7 @@ describe("pointing at the examples", () => {
 
   it("states a cost as fact only for an example whose game took it", () => {
     expect(whyA(`${LEAD} {example1}, the knight check on e4 cost the queen.`)).toEqual([
-      expect.stringMatching(/says "cost" after \{example1\}, but in that game nothing was taken/),
+      expect.stringMatching(/says "cost" after \{example1\}, but in that game what the move allowed was not taken/),
     ]);
     expect(whyA(`${LEAD} {example1}, the knight check on e4 could have cost the queen.`)).toEqual([]);
     for (const ok of [
@@ -1200,7 +1202,7 @@ describe("pointing at the examples", () => {
       "cost the queen", "lost the queen", "made you lose the queen", "left the queen gone", "won your queen",
       "won the queen", "and the queen fell",
     ]) {
-      expect(whyA(`${LEAD} {example1}, the knight check on e4 ${bad}.`), bad).toEqual([expect.stringMatching(/after \{example1\}, but in that game nothing was taken/)]);
+      expect(whyA(`${LEAD} {example1}, the knight check on e4 ${bad}.`), bad).toEqual([expect.stringMatching(/after \{example1\}, but in that game what the move allowed was not taken/)]);
     }
     // A denial counts only right before the loss word, with at most one adverb or "have" between.
     for (const bad of ["they didn't hesitate and won the queen", "you never noticed and lost the queen", "they didn't wait and it cost the queen"]) {
@@ -1209,7 +1211,7 @@ describe("pointing at the examples", () => {
     for (const ok of ["it did not cost you the queen", "it never really cost you"]) {
       expect(whyA(`${LEAD} {example1}, ${ok}.`), ok).toEqual([]);
     }
-    for (const bad of ["the queen was taken", "the queen was captured", "they won a pawn", "they won an exchange", "they won material"]) {
+    for (const bad of ["they won a pawn", "they won an exchange", "they won material"]) {
       expect(whyA(`${LEAD} {example1}, ${bad}.`), bad).toHaveLength(1);
     }
     for (const ok of [
@@ -1231,12 +1233,23 @@ describe("pointing at the examples", () => {
     expect(whyA(`${LEAD} {example1}, the knight check on e4 cost the queen. {example2}, taking on e5 cost the knight.`, d)).toEqual([
       expect.stringMatching(/says "cost" after \{example2\}/),
     ]);
-    // A missed win's cost is the win not taken: "cost" and "lost" pass there, a win or a capture stated as fact does not.
+    // A missed win's cost is the win not taken: its loss words are not checked.
     const missedWhy = (why: string) => storiedErrors(storiedAnswer({ b: { why: `A check went unplayed. {example1}, ${why}` } }));
-    expect(missedWhy("missing the knight check on e4 cost the queen.")).toEqual([]);
-    expect(missedWhy("pawn to h6 lost the chance.")).toEqual([]);
-    for (const bad of ["the knight check on e4 won the queen.", "their queen was gone.", "their queen fell.", "their queen was taken."]) {
-      expect(missedWhy(bad), bad).toHaveLength(1);
+    for (const ok of [
+      "missing the knight check on e4 cost the queen.", "the chance was gone.", "the moment was gone.",
+      "you played pawn to h6 instead and your knight was taken.",
+    ]) {
+      expect(missedWhy(ok), ok).toEqual([]);
+    }
+    // An unpaid example whose game took something else may say so.
+    const [u1, u2] = allowedItem().examples as [FocusExample, FocusExample];
+    const other: FocusExample = {
+      ...u1,
+      story: { ...u1.story!, inGame: { moves: [u1.story!.punish[1]!, { ...u1.story!.punish[2]!, captured: "knight" }], ended: false, paid: false } },
+    };
+    const unpaid = draft([{ ...allowedItem(), examples: [other, u2] }, missedItem()]);
+    for (const ok of ["they did not play the fork, and a knight was taken instead.", "a pawn was captured instead."]) {
+      expect(whyA(`${LEAD} {example1}, ${ok}`, unpaid), ok).toEqual([]);
     }
   });
 

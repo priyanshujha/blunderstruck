@@ -599,9 +599,7 @@ const LEANING_END = /\b(too|as well|either)\s*$/i;
 const ALSO = /\balso\b/i;
 /** Words that state a loss as fact: checked under an example whose game did not take it. */
 const LOSS =
-  /\b(?:cost(?:s|ing)?|lost|lose|loses|losing|gone|fell|won\s+(?:your|the|an?|material)|was\s+(?:taken|captured))\b/gi;
-/** Loss words a missed win may use: its cost is the win not taken ("missing it cost the queen"). */
-const MISSED_WIN_LOSS = /^(?:cost(?:s|ing)?|lost|lose|loses|losing)$/i;
+  /\b(?:cost(?:s|ing)?|lost|lose|loses|losing|gone|fell|won\s+(?:your|the|an?|material))\b/gi;
 /** What follows a loss word when it is not a loss: "a losing position", "fell back", "lost time". */
 const NOT_A_LOSS: Readonly<Record<string, RegExp>> = {
   losing: /^\s+(?:move|moves|position|positions|side)\b/i,
@@ -627,8 +625,6 @@ function hedged(clause: string, at: number, word: string): boolean {
   const kind = word.toLowerCase();
   if (NOT_A_LOSS[kind]?.test(after)) return true;
   const words = clause.slice(0, at).replace(/’/g, "'").toLowerCase().split(/\s+/).filter(Boolean);
-  // "the queen had gone to d2": where a piece went, not a loss.
-  if (kind === "gone" && words.at(-1) === "had" && /^\s+to\b/i.test(after)) return true;
   if (words.slice(-HEDGE_WINDOW).some((w) => HEDGE_WORDS.has(w))) return true;
   const ends = (ws: readonly string[]) => DENIALS.some((d) => d.every((w, i) => ws[ws.length - d.length + i] === w));
   if (ends(words)) return true;
@@ -653,7 +649,9 @@ function leaningErrors(where: string, text: string): string[] {
     if (LONE_LEANING.test(part) && parts.length > 0) parts[parts.length - 1] += ` ${part}`;
     else parts.push(part);
   }
-  for (const clause of parts) {
+  for (const part of parts) {
+    // ", and this one keeps coming back too": the joining word is not the clause's subject.
+    const clause = part.replace(/^(?:and|but|so)\s+/i, "");
     if (!ITEM_CLAUSE.test(clause)) continue;
     const word = ALSO.exec(clause)?.[0] ?? LEANING_END.exec(clause)?.[1] ?? /^this\s+(too)\b/i.exec(clause)?.[1];
     if (!word) continue;
@@ -719,13 +717,13 @@ function whyRules(where: string, why: string, examples: readonly FocusExample[])
       );
     }
     const missed = blindSpotFamilyOf(ex.patternId) === "missed";
-    if (missed || ex.story?.inGame?.paid !== true) {
+    // A missed win's cost is the win not taken, so its loss words are not checked.
+    if (!missed && ex.story?.inGame?.paid !== true) {
       for (const clause of clauses(seg.text)) {
         for (const c of clause.matchAll(LOSS)) {
-          if (missed && MISSED_WIN_LOSS.test(c[0])) continue;
           if (hedged(clause, c.index, c[0])) continue;
           errors.push(
-            `${where} says "${c[0]}" after {example${seg.example}}, but in that game nothing was taken (paid is not true). Say what the move allowed or could have cost ("which could have cost your knight"); never that a piece was lost, gone or won.`,
+            `${where} says "${c[0]}" after {example${seg.example}}, but in that game what the move allowed was not taken (paid is not true). Say what the move allowed or could have cost ("which could have cost your knight"); never that a piece was lost, gone or won.`,
           );
         }
       }
