@@ -204,8 +204,10 @@ describe("buildPrompt", () => {
     const parsed = JSON.parse(example!) as { summary: string };
     expect(parsed.summary).not.toMatch(/\b(one|two|both|pair|couple)\b/i);
     expect(system).toMatch(/illustrative only: never reuse them/);
-    expect(system).toContain("The why states the games count once, with its token, and restates nothing else from those lines");
     expect(system).toContain("Never write how many examples or games yourself");
+    expect(system).toContain("When gamesAffected is more than 0, the why states the games count once");
+    expect(system).toContain("When the item has examples and gamesAffected is more than 0, the why is at most four sentences");
+    expect(system).toContain("when it is 0, write no count at all");
     expect(system).not.toMatch(/despite that|Two of those games/);
     expect(system).toContain("is written only with its token, never as a number of your own");
     expect(system).toContain("No percentages, fractions of their games or rates, in any field.");

@@ -1279,6 +1279,23 @@ describe("pointing at the examples", () => {
     expect(whyA("Both times the queen was loose. One of them was a rook.")).toEqual([]);
   });
 
+  it("rejects {gamesAffected} for an item that did not come up this period, and accepts it from 1 up", () => {
+    const at = (n: number) => {
+      const d = draft([allowedItem(), missedItem()]);
+      d.current = { ...d.current, stats: d.current.stats.map((st) => (st.patternId === "allowed-tactic" ? { ...st, gamesAffected: n } : st)) };
+      return d;
+    };
+    const why = "Pieces left with no defender, in {gamesAffected} of your games.";
+    expect(whyA(why, at(0))).toEqual([
+      "focus[0] (allowed-tactic).why uses {gamesAffected}, which is 0: this pattern did not come up this period. Say that it stayed away, with no count.",
+    ]);
+    expect(storiedErrors(storiedAnswer({ a: { why: "It stayed away this period.", title: "Down to {gamesAffected}" } }), at(0))).toEqual([
+      expect.stringMatching(/title uses \{gamesAffected\}, which is 0/),
+    ]);
+    expect(whyA("It stayed away this period; keep the habit going.", at(0))).toEqual([]);
+    for (const n of [1, 9]) expect(whyA(why, at(n)), String(n)).toEqual([]);
+  });
+
   it("accepts a move both examples share under either marker", () => {
     const item = allowedItem();
     const f1 = item.examples[0]!;

@@ -950,6 +950,16 @@ export function parseWording(text: string, draft: ReportDraft, only?: string[]):
           : {};
       errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], WORDING_FOCUS_TOKENS, ctx, opts));
     }
+    // A kept item that stayed away this period: "in 0 of your games" is no way to say it.
+    const affected = draft.current.stats.find((st) => st.patternId === f.patternId)?.gamesAffected ?? 0;
+    if (affected === 0) {
+      for (const [field, text] of [["title", f.title], ["why", f.why], ["drill", f.drill]] as const) {
+        if (!text.includes("{gamesAffected}")) continue;
+        errors.push(
+          `${at}.${field} uses {gamesAffected}, which is 0: this pattern did not come up this period. Say that it stayed away, with no count.`,
+        );
+      }
+    }
     errors.push(...itemMoveErrors(at, f, allowed, examples, true));
     errors.push(...whyRules(`${at}.why`, f.why, examples));
     if (item) errors.push(...checkSteps(at, f.steps, item.blindSpots ?? [], withSpots));

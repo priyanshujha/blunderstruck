@@ -471,6 +471,17 @@ describe("writeReport with blind spots and examples", () => {
     expect(r.focus[0]!.examples.map((e) => e.gameId)).toEqual(["g1", "g2"]);
   });
 
+  it("asks for a repair when an item that stayed away is counted with {gamesAffected}", async () => {
+    const d = drafted([{ id: "hung-piece", examples: [A] }]);
+    d.focus[0]!.reason = { ...d.focus[0]!.reason, kind: "kept" };
+    d.current = { ...d.current, stats: d.current.stats.map((st) => (st.patternId === "hung-piece" ? { ...st, gamesAffected: 0 } : st)) };
+    const p = stub([withWhy(d, "Loose pieces, in {gamesAffected} of your games."), withWhy(d, "Loose pieces stayed away this period.")]);
+    const r = await writeReport(d, p);
+    expect(p.requests).toHaveLength(2);
+    expect(p.requests[1]!.user).toContain("why uses {gamesAffected}, which is 0: this pattern did not come up this period.");
+    expect(r.focus[0]!.why).toBe("Loose pieces stayed away this period.");
+  });
+
   it("keeps kept text with its examples in their order, refreshed from the draft, and makes no call", async () => {
     const first = await writeReport(drafted([{ id: "hung-piece", examples: [A, B] }]), stub([good(["hung-piece"])]));
     const fresh = [ex("hung-piece", "g2", 20, 71), ex("hung-piece", "g1", 10, 64)];
