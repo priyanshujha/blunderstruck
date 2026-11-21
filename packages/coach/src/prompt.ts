@@ -131,7 +131,7 @@ const EXAMPLE = {
     {
       patternId: "allowed-tactic",
       title: "Checks you did not see coming",
-      why: "The shot that hurt was usually a check, and this one keeps coming back: the piece you had just moved stood where a knight check could hit it. {example1}, your queen went to d2 and their knight check on e4 hit king and queen at once, with nothing guarding the queen.",
+      why: "Shots you allowed, usually a check, in {gamesAffected} of your games, and this one keeps coming back. One of those games shows it: the piece you had just moved stood where a knight check could hit it. {example1}, your queen went to d2 and their knight check on e4 hit king and queen at once, with nothing guarding the queen.",
       drill:
         "Before you let go of a piece, play the opponent for a moment: what are their checks, captures and attacks now? A short set of defensive puzzles each day, where you spot the threat first.",
       steps: [
@@ -148,7 +148,7 @@ const EXAMPLE = {
     {
       patternId: "missed-tactic",
       title: "Forks that went unplayed",
-      why: "The winning move you passed over was usually a check, and a quiet move let it slip. {example1}, the knight check on e4 would have forked king and queen; pawn to h6 looked safe and let it go.",
+      why: "Winning moves you passed over, usually a check, in {gamesAffected} of your games. One of those games shows it. {example1}, the knight check on e4 would have forked king and queen; pawn to h6 looked safe and let it go.",
       drill:
         "Look at every check, capture and threat before choosing a move, even when the position feels calm. Solve 10 fork puzzles a day, each one two moves deep.",
       steps: [
@@ -191,7 +191,7 @@ const SYSTEM = [
   "- Each story separates what the move allowed from what was played. allowed is the engine's line after the move and what it would have cost (wouldCost). inGame is only the next few moves the game really played, not a verdict on how the game went. paid is true only when the game took what the move allowed; then inGame may also say what was lost, the material given up, and mated when the game ended in the mate the move allowed. State a cost as fact (\"it cost your queen\") only for an example whose inGame says paid is true, and a mate as fact only when it says mated is true. When something is not given, say nothing about it: never \"nothing was lost\". For a missed win (missed-mate, missed-capture, missed-tactic) inGame has no paid: the cost is what the player did not win, given in better. Otherwise say only what the move allowed or could have cost (\"it allowed Ne4+, which could have cost your queen\"); you may say the opponent did not play the punishing move, but nothing about how the game turned out after it. A story without inGame tells you only what the move allowed, so do not say what happened next in that game.",
   "- Earlier focus items may come with a verdict: \"improved\", \"flat\" (no clear change), \"worse\" or \"insufficient-data\" (not enough games yet). Mention an improvement warmly in the summary. Do not call \"flat\" or \"insufficient-data\" a failure.",
   "- Directly under your text, the program prints for each focus item a frequency line (in how many of the player's games it happened, and roughly how often), its goal, and a line with how many recent weeks it came back in (only when at least three weeks were counted). Do not restate them: the why says what happened and why it matters, and the drill says what to do.",
-  "- So do not open the why with how many games were affected, and do not restate that count anywhere: the frequency line already says it. Spend the why on what the examples and the blind spots show: the move that let it happen, what it cost, and the thing the occurrences had in common.",
+  "- When the item has examples, the why's first sentence names the pattern and how many games it was in, with its token (\"Pieces left with no defender, in {gamesAffected} of your games.\"), and the next says, in words, that the examples come from them (\"Two of those games show it.\", \"One of those games shows it.\"); write no other count and not the frequency line's share. Spend the rest on what the examples and the blind spots show: the move that let it happen, what it cost, and the thing the occurrences had in common.",
   "- If you do write a count with gamesAffected despite that, read it first: when it is 1, write the singular (\"in a single game\"); when it equals games, say \"in each of your {games} games\".",
   "- You may mention persistence in words, without numbers (\"this one keeps coming back\"), only when the item's reason has weeksCounted of three or more and weeksRecurred is more than half of weeksCounted. Otherwise say nothing about how often it recurred. Each item is read on its own section of the page, so when both qualify, say it for each as if the other were not there: never \"too\", \"also\" or \"as well\".",
   "- Size each drill to the player's band using the rubric below. One drill per item: a habit or a short daily routine the player can actually do this week.",

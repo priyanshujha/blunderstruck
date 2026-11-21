@@ -288,7 +288,9 @@ export function countsInWords(ws: readonly string[]): boolean {
   return ws.some((w, i) => {
     // "at once" means at the same time, not one time.
     const repeat = (w === "once" && ws[i - 1] !== "at") || w === "twice";
-    const counts = COUNT_WORDS.has(w) || (repeat && REPEAT_BEFORE.has(ws[i + 1] ?? ""));
+    // "fifty-two" counts like "fifty".
+    const compound = w.includes("-") && isNumberWord(w);
+    const counts = COUNT_WORDS.has(w) || compound || (repeat && REPEAT_BEFORE.has(ws[i + 1] ?? ""));
     return counts && !isMateIn(ws, i) && nounAfterFillers(ws, i, 2);
   });
 }
@@ -668,8 +670,35 @@ const clauses = (text: string) => text.split(/[,.;:!?]/);
 /** The first sentence of a text, ending only at ".", "!" or "?" (a ";" does not end it). */
 const firstSentence = (text: string): string => sentences(text.replace(/;/g, ","))[0] ?? "";
 
+/** "Two of those games": how many of the counted games the examples show. */
+const EXAMPLE_COUNT = /(?<![\p{L}\p{N}])([\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*)\s+of\s+(?:those|these)\s+games?\b/giu;
+const EXAMPLE_COUNT_WORDS = ["", "one", "two"];
+
+/** The why with its example count ("Two of those games", when the item has two) set aside, for the count rule. */
+function withoutExampleCount(why: string, examples: number): string {
+  const word = EXAMPLE_COUNT_WORDS[examples];
+  return why.replace(EXAMPLE_COUNT, (m, n: string) => (n.toLowerCase() === word ? "These games" : m));
+}
+
+/** Errors for a number before "of those games" that is not the item's example count, in words. */
+function exampleCountErrors(where: string, why: string, examples: number): string[] {
+  const errors: string[] = [];
+  const word = EXAMPLE_COUNT_WORDS[examples];
+  for (const m of why.matchAll(EXAMPLE_COUNT)) {
+    const n = m[1]!.toLowerCase();
+    if (!isNumber(n) || n === word) continue;
+    errors.push(
+      word
+        ? `${where} says "${m[0]}"; this item shows ${word} example${examples === 1 ? "" : "s"}, so write "${word.charAt(0).toUpperCase()}${word.slice(1)} of those games", in words, and write any other count with its token.`
+        : `${where} says "${m[0]}", but this item has no examples; leave it out.`,
+    );
+  }
+  return errors;
+}
+
 /**
- * The rules for a newly written why: its markers (each at most once, in order, only for
+ * The rules for a newly written why: an example count only as the item's own, in words ("Two
+ * of those games"); its markers (each at most once, in order, only for
  * examples the item has, opening a sentence and followed by a comma), how many moves and squares
  * a segment names, a first sentence that leans on the other item, and a loss stated as fact
  * only for an example whose game took it.
@@ -705,6 +734,7 @@ function whyRules(where: string, why: string, examples: readonly FocusExample[])
     }
   }
   errors.push(...leaningErrors(where, why));
+  errors.push(...exampleCountErrors(where, why, examples.length));
   for (const seg of whySegments(why)) {
     if (seg.example === 0) continue;
     const ex = examples[seg.example - 1];
@@ -834,7 +864,7 @@ function checkField(
   max: number,
   allowed: readonly string[],
   ctx: CountContext,
-  opts: { markers?: boolean; length?: number } = {},
+  opts: { markers?: boolean; length?: number; countText?: string } = {},
 ): string[] {
   const errors: string[] = [];
   const length = opts.length ?? text.length;
@@ -864,7 +894,7 @@ function checkField(
   if (/[{}]/.test(text.replace(/\{[^{}]*\}/g, ""))) errors.push(`${where} has an unmatched brace; braces are only for tokens`);
   // An over-long field is already rejected; scanning it for counts would only cost time.
   if (tooLong) return errors;
-  for (const s of countSentences(text, ctx)) {
+  for (const s of countSentences(opts.countText ?? text, ctx)) {
     errors.push(`${where}, the sentence "${quote(s)}": Write this count with its token (${list}) or leave the number out.`);
   }
   for (const s of sentences(text)) {
@@ -920,7 +950,10 @@ export function parseWording(text: string, draft: ReportDraft, only?: string[]):
     const examples = item?.examples ?? [];
     for (const [field, text] of [["title", f.title], ["why", f.why], ["drill", f.drill]] as const) {
       const ctx = { shown: field === "why" ? withSpots : shown, record: field !== "drill" };
-      const opts = field === "why" ? { markers: true, length: filledWhy(text, examples).length } : {};
+      const opts =
+        field === "why"
+          ? { markers: true, length: filledWhy(text, examples).length, countText: withoutExampleCount(text, examples.length) }
+          : {};
       errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], WORDING_FOCUS_TOKENS, ctx, opts));
     }
     errors.push(...itemMoveErrors(at, f, allowed, examples, true));

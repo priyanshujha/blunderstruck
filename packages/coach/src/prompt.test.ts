@@ -209,9 +209,11 @@ describe("buildPrompt", () => {
     expect(system).toContain("No percentages, fractions of their games or rates, in any field.");
     expect(system).toContain("Numbers that describe a position, a clock or what to practise are fine as they are");
     expect(system).toContain("The report prints the frequency, goal and weeks lines itself, and shows rates only in its details, so leave those out entirely.");
-    expect(system).toContain("do not open the why with how many games were affected");
+    expect(system).toContain("the why's first sentence names the pattern and how many games it was in, with its token");
+    expect(system).toContain('"Two of those games show it."');
+    expect(JSON.parse(example!).focus.every((f: { why: string }) => /^[^.]*\{gamesAffected\} of your games/.test(f.why))).toBe(true);
     expect(system).toContain('State the player\'s overall level with {mistakesPerGame} only');
-    expect(example).not.toMatch(/\{(gamesAffected|mistakeRate)\}|per hundred/);
+    expect(example).not.toMatch(/\{mistakeRate\}|per hundred/);
     expect(system).toContain('never write "{gamesAffected} of" or "0 of" for it');
     expect(system).not.toMatch(/no number words other than|move it into the drill|any digit that counts/);
     expect(system).toContain("weeksCounted of three or more and weeksRecurred is more than half of weeksCounted");

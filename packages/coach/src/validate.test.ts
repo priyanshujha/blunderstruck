@@ -1262,6 +1262,23 @@ describe("pointing at the examples", () => {
     expect(whyA(`${LEAD} {example1}, the rook on A8 was watching.`)).toEqual([expect.stringMatching(/names the square a8 after \{example1\}/)]);
   });
 
+  it("counts the games with a token and the examples in words, and no other count", () => {
+    const one = draft([{ ...allowedItem(), examples: [allowedItem().examples[0]!] }, missedItem()]);
+    const games = "Pieces left with no defender, in {gamesAffected} of your games.";
+    expect(whyA(`${games} Two of those games show it. {example1}, the queen on d2 was loose.`)).toEqual([]);
+    expect(whyA(`${games} Two of those games show what you did. {example1}, the queen on d2 was loose.`)).toEqual([]);
+    expect(whyA(`${games} One of those games shows it. {example1}, the queen on d2 was loose.`, one)).toEqual([]);
+    expect(whyA(`${games} Two of those games show it.`, one)).toEqual([
+      expect.stringMatching(/says "Two of those games"; this item shows one example, so write "One of those games", in words/),
+    ]);
+    expect(whyA(`${games} Three of those games show it.`)).toEqual([expect.stringMatching(/says "Three of those games"; this item shows two examples/)]);
+    expect(whyA(`${games} 2 of those games show it.`)).toEqual([expect.stringMatching(/says "2 of those games"/)]);
+    // The games count is the token's: a number of the model's own, in digits or words, is rejected.
+    for (const bad of ["Pieces left loose, in 9 of your games.", "Pieces left loose, in nine of your games.", "Pieces left loose, in fifty-two of your games."]) {
+      expect(whyA(bad), bad).toEqual([expect.stringMatching(/Write this count with its token/)]);
+    }
+  });
+
   it("accepts a move both examples share under either marker", () => {
     const item = allowedItem();
     const f1 = item.examples[0]!;
