@@ -1,5 +1,8 @@
 import {
   BLIND_SPOT_TOKENS,
+  EXAMPLE_MARKERS,
+  blindSpotFamilyOf,
+  exampleMarkerValues,
   type FocusChoice,
   type FocusExample,
   type MoveDetail,
@@ -25,7 +28,8 @@ export interface WordingText {
 
 export type WordingResult = { ok: true; value: WordingText } | { ok: false; errors: string[] };
 
-const LIMITS = { title: 60, why: 400, drill: 400, summary: 600, step: 200 } as const;
+/** The why's limit is measured with each example marker as the phrase it stands for. */
+const LIMITS = { title: 60, why: 480, drill: 400, summary: 600, step: 200 } as const;
 
 /**
  * Tokens a newly written summary may use. `{mistakeRate}` stays a valid token for stored
@@ -490,6 +494,190 @@ export function namedMoves(text: string): { moves: string[]; squares: string[] }
   return { moves, squares };
 }
 
+/*
+ * Pointing at the examples. A why may hold `{example1}` and `{example2}`, each opening the
+ * sentence about that example; the reader sees "In your first example (move 23, as White)" in
+ * its place. The text before the first marker (the lead) says what the pattern is in plain
+ * words and names no move or square. Each segment, from a marker to the next one or the end,
+ * names only its own example's moves and squares, and only a few of them.
+ */
+
+/** Distinct moves and squares one segment may name. */
+export const MAX_NAMES_PER_EXAMPLE = 3;
+
+/** One part of a why: the lead (`example` 0) or the text from marker `{exampleN}` up to the next marker. */
+export interface WhySegment {
+  example: number;
+  text: string;
+}
+
+const MARKER_IN_TEXT = /\{example(\d+)\}/g;
+
+/** A why cut at its example markers: the lead first (possibly empty), then one segment per marker, marker left out. */
+export function whySegments(why: string): WhySegment[] {
+  const out: WhySegment[] = [];
+  let at = 0;
+  let example = 0;
+  for (const m of why.matchAll(MARKER_IN_TEXT)) {
+    out.push({ example, text: why.slice(at, m.index) });
+    example = Number(m[1]);
+    at = m.index + m[0].length;
+  }
+  out.push({ example, text: why.slice(at) });
+  return out;
+}
+
+/** The why as the reader sees it: each marker the item has an example for as its phrase. */
+function filledWhy(why: string, examples: readonly FocusExample[]): string {
+  const values: Record<string, string> = exampleMarkerValues(examples);
+  return why.replace(MARKER_IN_TEXT, (m, n: string) => values[`example${n}`] ?? m);
+}
+
+const ORDINAL = ["", "first", "second"];
+const exampleName = (n: number, count: number) => (count === 1 ? "the example" : `your ${ORDINAL[n] ?? `#${n}`} example`);
+
+/**
+ * Errors for moves and squares the why names, segment by segment. A segment names only its own
+ * example's moves and squares; a move both examples share passes in either. With `strict`
+ * (new wording), the lead names none; otherwise (kept wording) the lead is checked against all
+ * the item's examples, as text written before markers existed was.
+ */
+function whyMoveErrors(where: string, why: string, examples: readonly FocusExample[], strict: boolean): string[] {
+  const errors: string[] = [];
+  for (const seg of whySegments(why)) {
+    if (seg.example === 0) {
+      if (!strict) {
+        errors.push(...checkMoves(where, seg.text, exampleMoves(examples)));
+        continue;
+      }
+      const { moves, squares } = namedMoves(seg.text);
+      for (const m of new Set([...moves, ...squares])) {
+        errors.push(
+          examples.length === 0
+            ? `${where} names ${m}; this item has no examples, so say it in words without a move or square.`
+            : `${where} names ${m} before any example marker. Open with the pattern in plain words, with no move or square; cite a move only in a sentence that starts with its example's marker (${EXAMPLE_MARKERS.slice(0, examples.length).map((t) => `{${t}}`).join(", ")}) and a comma.`,
+        );
+      }
+      continue;
+    }
+    const ex = examples[seg.example - 1];
+    if (!ex) {
+      // The marker check says what is wrong; kept text with such a marker cannot be shown.
+      if (!strict) errors.push(`${where} uses {example${seg.example}}, but the item has no such example.`);
+      continue;
+    }
+    const own = exampleMoves([ex]);
+    const name = exampleName(seg.example, examples.length);
+    const { moves, squares } = namedMoves(seg.text);
+    const seen = new Set<string>();
+    for (const m of moves) {
+      if (own.keys.has(moveKey(m)) || seen.has(m)) continue;
+      seen.add(m);
+      errors.push(
+        `${where} names ${m} after {example${seg.example}}, but it is not a move of ${name} (its moves: ${own.sans.join(", ") || "none"}). After a marker cite only that example's moves; put it under the right example's marker, or say it in words.`,
+      );
+    }
+    for (const sq of squares) {
+      if (own.squares.has(sq) || seen.has(sq)) continue;
+      seen.add(sq);
+      errors.push(
+        `${where} names the square ${sq} after {example${seg.example}}, but it is not on a move or piece of ${name}. After a marker name only that example's squares, or leave the square out.`,
+      );
+    }
+  }
+  return errors;
+}
+
+/** Words that lean on the other item when they end a clause: "this keeps coming back too". */
+const LEANING_END = /\b(too|as well|either)\s*(?=[,.;:!?]|$)/gi;
+const ALSO = /\balso\b/i;
+/** "could have cost", "would have cost": what a move allowed, not what it cost. */
+const HEDGED = /\b(?:could|would|might)(?:\s+have)?\s*$/i;
+const COST = /\bcost(?:s|ing)?\b/gi;
+
+/** Errors for words that refer to the other item: in a title or a why's lead each item is read on its own. */
+function leaningErrors(where: string, text: string): string[] {
+  const errors: string[] = [];
+  for (const m of text.matchAll(LEANING_END)) {
+    errors.push(
+      `${where} ends a clause with "${m[1]}", which leans on the other item; each item is read on its own, so say it without "${m[1]}".`,
+    );
+  }
+  const first = sentences(text)[0] ?? "";
+  if (ALSO.test(first)) {
+    errors.push(`${where} says "also" in its first sentence, which leans on the other item; each item is read on its own, so leave it out.`);
+  }
+  return errors;
+}
+
+/** Clauses of a text, split on , . ; : ! ? */
+const clauses = (text: string) => text.split(/[,.;:!?]/);
+
+/**
+ * The rules for a newly written why: its markers (each at most once, in order, only for
+ * examples the item has, opening a sentence and followed by a comma), how many moves and squares
+ * a segment names, words that lean on the other item in the lead, and a cost stated as fact
+ * only for an example whose game took it.
+ */
+function whyRules(where: string, why: string, examples: readonly FocusExample[]): string[] {
+  const errors: string[] = [];
+  const found = Array.from(why.matchAll(MARKER_IN_TEXT));
+  const counts = new Map<number, number>();
+  let last = 0;
+  for (const m of found) {
+    const n = Number(m[1]);
+    const token = m[0];
+    counts.set(n, (counts.get(n) ?? 0) + 1);
+    if (examples.length === 0) {
+      errors.push(`${where} uses ${token}, but this item has no examples; say it in plain words with no marker.`);
+      continue;
+    }
+    if (n < 1 || n > examples.length) {
+      if (n <= EXAMPLE_MARKERS.length) {
+        errors.push(`${where} uses ${token}, but this item has only ${examples.length === 1 ? "one example: use {example1}" : `${examples.length} examples`}.`);
+      }
+      continue;
+    }
+    if (counts.get(n) === 2) errors.push(`${where} uses ${token} more than once; use each marker once, opening the sentence about that example.`);
+    if (n < last) errors.push(`${where} uses ${token} after {example${last}}; write about the examples in order, {example1} first.`);
+    last = Math.max(last, n);
+    const before = why.slice(0, m.index).trimEnd();
+    if (before !== "" && !/[.!?]$/.test(before)) {
+      errors.push(`${where}: ${token} must open a sentence (it reads "In your first example (move 23, as White)"); end the sentence before it with a full stop.`);
+    }
+    if (why[m.index + token.length] !== ",") {
+      errors.push(`${where}: ${token} must be followed by a comma, as in "${token}, pawn to b3 opened the long diagonal".`);
+    }
+  }
+  for (const seg of whySegments(why)) {
+    if (seg.example === 0) {
+      errors.push(...leaningErrors(`${where}, before the first marker,`, seg.text));
+      continue;
+    }
+    const ex = examples[seg.example - 1];
+    if (!ex) continue;
+    const { moves, squares } = namedMoves(seg.text);
+    const names = new Set([...moves.map(moveKey), ...squares]);
+    if (names.size > MAX_NAMES_PER_EXAMPLE) {
+      errors.push(
+        `${where} names ${names.size} moves and squares after {example${seg.example}}; name at most two per example, in words ("pawn to b3", "their bishop took your rook on a1").`,
+      );
+    }
+    const missed = blindSpotFamilyOf(ex.patternId) === "missed";
+    if (!missed && ex.story?.inGame?.paid !== true) {
+      for (const clause of clauses(seg.text)) {
+        for (const c of clause.matchAll(COST)) {
+          if (HEDGED.test(clause.slice(0, c.index))) continue;
+          errors.push(
+            `${where} says "${c[0]}" after {example${seg.example}}, but in that game the cost was not taken (paid is not true). Say what it could have cost ("which could have cost your knight"), or leave the cost out.`,
+          );
+        }
+      }
+    }
+  }
+  return errors;
+}
+
 /** Errors for moves and squares a field names: outside the item's examples, or any at all when `allowed` is null (the summary). */
 function checkMoves(where: string, text: string, allowed: ExampleMoves | null): string[] {
   const errors: string[] = [];
@@ -586,14 +774,27 @@ function unfence(text: string): string {
 const quote = (s: string) => (s.length > 120 ? `${s.slice(0, 117)}...` : s);
 
 /** Errors for one field's text: length, tokens and sentences that state a count. */
-function checkField(where: string, text: string, max: number, allowed: readonly string[], ctx: CountContext): string[] {
+function checkField(
+  where: string,
+  text: string,
+  max: number,
+  allowed: readonly string[],
+  ctx: CountContext,
+  opts: { markers?: boolean; length?: number } = {},
+): string[] {
   const errors: string[] = [];
-  const tooLong = text.length > max;
-  if (tooLong) errors.push(`${where} is ${text.length} characters; the limit is ${max}`);
+  const length = opts.length ?? text.length;
+  const tooLong = length > max;
+  if (tooLong) {
+    errors.push(
+      `${where} is ${length} characters${opts.markers ? ", counting each example marker as the phrase it stands for" : ""}; the limit is ${max}`,
+    );
+  }
   const list = allowed.map((t) => `{${t}}`).join(", ");
+  const markers: readonly string[] = opts.markers ? EXAMPLE_MARKERS : [];
   for (const m of text.matchAll(/\{([^{}]*)\}/g)) {
     const name = m[1]!;
-    if (allowed.includes(name)) continue;
+    if (allowed.includes(name) || markers.includes(name)) continue;
     if (name === "mistakeRate" && where === "summary") {
       errors.push(
         `summary uses {mistakeRate}; per-hundred-move figures are shown only in the report's details, so state the overall level with {mistakesPerGame} (mistakes a game) instead (allowed: ${list})`,
@@ -628,7 +829,8 @@ function checkField(where: string, text: string, max: number, allowed: readonly 
 /**
  * Parse and check the model's text against the schema and the draft: pattern ids, lengths,
  * allowed tokens, no counts written by the model, one step per blind spot in order, and moves
- * and squares only from each item's examples (none in the summary). `only` limits the expected ids.
+ * and squares only from each item's examples (none in the summary), in a why each under the
+ * marker of the example it comes from (see `whyRules`). `only` limits the expected ids.
  */
 export function parseWording(text: string, draft: ReportDraft, only?: string[]): WordingResult {
   let json: unknown;
@@ -661,33 +863,48 @@ export function parseWording(text: string, draft: ReportDraft, only?: string[]):
     const item = draft.focus.find((c) => c.patternId === f.patternId);
     const allowed = exampleMoves(item?.examples ?? []);
     const withSpots = shownForItem(draft, item);
+    const examples = item?.examples ?? [];
     for (const [field, text] of [["title", f.title], ["why", f.why], ["drill", f.drill]] as const) {
       const ctx = { shown: field === "why" ? withSpots : shown, record: field !== "drill" };
-      errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], WORDING_FOCUS_TOKENS, ctx));
+      const opts = field === "why" ? { markers: true, length: filledWhy(text, examples).length } : {};
+      errors.push(...checkField(`${at}.${field}`, text, LIMITS[field], WORDING_FOCUS_TOKENS, ctx, opts));
     }
-    errors.push(...itemMoveErrors(at, f, allowed));
+    errors.push(...itemMoveErrors(at, f, allowed, examples, true));
+    errors.push(...leaningErrors(`${at}.title`, f.title));
+    errors.push(...whyRules(`${at}.why`, f.why, examples));
     if (item) errors.push(...checkSteps(at, f.steps, item.blindSpots ?? [], withSpots));
   });
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value };
 }
 
-/** Move-rule errors for an item's title, why, drill and steps against its examples' moves and squares. */
-function itemMoveErrors(at: string, f: WordingText["focus"][number], allowed: ExampleMoves): string[] {
+/**
+ * Move-rule errors for an item's title, drill and steps against its examples' moves and squares,
+ * and for its why segment by segment (`whyMoveErrors`).
+ */
+function itemMoveErrors(
+  at: string,
+  f: WordingText["focus"][number],
+  allowed: ExampleMoves,
+  examples: readonly FocusExample[],
+  strict: boolean,
+): string[] {
   const errors: string[] = [];
-  for (const [field, text] of [["title", f.title], ["why", f.why], ["drill", f.drill]] as const) {
+  for (const [field, text] of [["title", f.title], ["drill", f.drill]] as const) {
     errors.push(...checkMoves(`${at}.${field}`, text, allowed));
   }
+  errors.push(...whyMoveErrors(`${at}.why`, f.why, examples, strict));
   f.steps.forEach((s, j) => errors.push(...checkMoves(`${at}.steps[${j}] (${s.blindSpot})`, s.text, allowed)));
   return errors;
 }
 
 /**
- * Whether kept text still names only moves and squares of the item's current examples. A
- * later revision refreshes a kept example's story (a deeper check can change its lines), so
- * text written for the old story may name a move the page no longer shows.
+ * Whether kept text still names only moves and squares of the item's current examples, each
+ * of its why's example markers for an example the item still has and each segment only its own
+ * example's moves. A later revision refreshes a kept example's story (a deeper check can change
+ * its lines), so text written for the old story may name a move the page no longer shows.
  */
 export function namesOnlyShown(f: WordingText["focus"][number], examples: readonly FocusExample[]): boolean {
-  return itemMoveErrors("", f, exampleMoves(examples)).length === 0;
+  return itemMoveErrors("", f, exampleMoves(examples), examples, false).length === 0;
 }
 
 /**

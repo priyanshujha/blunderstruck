@@ -684,3 +684,20 @@ describe("esc", () => {
   });
 });
 
+
+describe("a reason that points at its examples", () => {
+  it("prints the same filled phrase on the page and in the terminal", async () => {
+    const { report, games } = await fullReport();
+    const item = report.focus[0]!;
+    const markers = item.examples.map((_, i) => `{example${i + 1}}, it came up here.`).join(" ");
+    const r: WeeklyReport = { ...report, focus: [{ ...item, why: `Checks hurt. ${markers}` }, ...report.focus.slice(1)] };
+    const v = view(r);
+    const why = v.body.kind === "focus" ? v.body.items[0]!.why : "";
+    expect(item.examples.length).toBeGreaterThan(0);
+    expect(why).toMatch(/^Checks hurt\. In your (first )?example \(move \d+, as (White|Black)\), it came up here\./);
+    expect(why).not.toContain("{");
+    expect(v.notes.lines).toEqual([]);
+    expect(formatReport(r, { all: true, pending: 0 })).toContain(why);
+    expect(pageText(renderPage(r, CTX, { games }))).toContain(why);
+  });
+});

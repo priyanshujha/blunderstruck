@@ -469,7 +469,7 @@ describe("parseWording", () => {
   });
 
   it("names the sentence and asks for a token, never for a move into the drill", () => {
-    const errors = errorsOf(withWhy("The knight on f6 was loose. It happened 12 times."));
+    const errors = errorsOf(withWhy("The knight was loose. It happened 12 times."));
     expect(errors).toHaveLength(1);
     expect(errors[0]).toBe(
       'focus[0] (hung-piece).why, the sentence "It happened 12 times": Write this count with its token ({games}, {gamesAffected}, {occurrences}) or leave the number out.',
@@ -540,7 +540,8 @@ describe("parseWording", () => {
   it("enforces the length limits", () => {
     expect(errorsOf(answer({ focus: [{ title: "x".repeat(60) }, {}] }))).toEqual([]);
     expect(errorsOf(answer({ focus: [{ title: "x".repeat(61) }, {}] }))[0]).toMatch(/title is 61 characters/);
-    expect(errorsOf(answer({ focus: [{ why: "x".repeat(401) }, {}] }))[0]).toMatch(/why is 401/);
+    expect(errorsOf(answer({ focus: [{ why: "x".repeat(480) }, {}] }))).toEqual([]);
+    expect(errorsOf(answer({ focus: [{ why: "x".repeat(481) }, {}] }))[0]).toMatch(/why is 481/);
     expect(errorsOf(answer({ focus: [{ drill: "x".repeat(401) }, {}] }))[0]).toMatch(/drill is 401/);
     expect(errorsOf(answer({ summary: "x".repeat(601) }))[0]).toMatch(/summary is 601/);
   });
@@ -827,7 +828,7 @@ function storiedAnswer(over: {
       {
         patternId: "allowed-tactic",
         title: "Checks you did not see coming",
-        why: "In {gamesAffected} of your {games} games a move let them in. Qd2 walked into Ne4+, hitting the king on f2 and the queen on d2.",
+        why: "In {gamesAffected} of your {games} games a move let them in. {example1}, Qd2 walked into Ne4+, hitting the king on f2.",
         drill: "Before each move, look for their checks, captures and attacks.",
         steps: [
           { blindSpot: "answer-check", text: STEP_A },
@@ -838,7 +839,7 @@ function storiedAnswer(over: {
       {
         patternId: "missed-tactic",
         title: "Forks that went unplayed",
-        why: "You missed a shot in {gamesAffected} of your {games} games. Ne4+ won the queen; h6 let it go.",
+        why: "You missed a shot in {gamesAffected} of your {games} games. {example1}, Ne4+ won the queen; h6 let it go.",
         drill: "Solve 10 fork puzzles a day.",
         steps: [{ blindSpot: "best-check", text: STEP_C }],
         ...over.b,
@@ -856,14 +857,14 @@ describe("the move rule", () => {
   it("accepts moves and squares from the item's example stories", () => {
     expect(storiedErrors(storiedAnswer())).toEqual([]);
     // Capture marks and disambiguation name the same move; check signs may be left off.
-    expect(storiedErrors(storiedAnswer({ a: { why: "Ne4 forked king and queen, then Nd2 took the queen." } }))).toEqual([]);
-    expect(storiedErrors(storiedAnswer({ a: { why: "Bb5 would have held; Nxe5 lost the knight on e5." } }))).toEqual([]);
+    expect(storiedErrors(storiedAnswer({ a: { why: "Checks hurt. {example1}, Ne4 forked king and queen, then Nd2 took the queen." } }))).toEqual([]);
+    expect(storiedErrors(storiedAnswer({ a: { why: "Checks hurt. {example2}, Bb5 would have held; Nxe5 lost the knight on e5." } }))).toEqual([]);
   });
 
   it("rejects a move that is not in the item's examples, naming it and the moves shown", () => {
-    const errors = storiedErrors(storiedAnswer({ a: { why: "Nc3 would have kept everything safe." } }));
+    const errors = storiedErrors(storiedAnswer({ a: { why: "Checks hurt. {example1}, Nc3 would have kept everything safe." } }));
     expect(errors).toEqual([
-      "focus[0] (allowed-tactic).why names Nc3: this move is not in the examples shown (the moves shown: Qd2, Ne4+, Ke1, Nxd2, Kxd2, Re1, Nxe5, Bb5). Name only those moves, or say it in words without a move.",
+      "focus[0] (allowed-tactic).why names Nc3 after {example1}, but it is not a move of your first example (its moves: Qd2, Ne4+, Ke1, Nxd2, Kxd2, Re1). After a marker cite only that example's moves; put it under the right example's marker, or say it in words.",
     ]);
   });
 
@@ -878,11 +879,11 @@ describe("the move rule", () => {
   });
 
   it("rejects squares outside the stories' moves and pieces", () => {
-    expect(storiedErrors(storiedAnswer({ a: { why: "The rook on a8 was watching." } }))).toEqual([
-      expect.stringMatching(/allowed-tactic\)\.why names the square a8/),
+    expect(storiedErrors(storiedAnswer({ a: { why: "Checks hurt. {example1}, the rook on a8 was watching." } }))).toEqual([
+      expect.stringMatching(/allowed-tactic\)\.why names the square a8 after \{example1\}, but it is not on a move or piece of your first example/),
     ]);
     // e4 is a square of the punishing move and the better reason; f2 holds a piece hit.
-    expect(storiedErrors(storiedAnswer({ a: { why: "The knight landed on e4 with the king on f2." } }))).toEqual([]);
+    expect(storiedErrors(storiedAnswer({ a: { why: "Checks hurt. {example1}, the knight landed on e4 with the king on f2." } }))).toEqual([]);
   });
 
   it("checks steps by the same move rule", () => {
@@ -1032,11 +1033,11 @@ describe("scope of the story allowances and blind-spot values", () => {
     const item = allowedItem();
     item.examples = [{ ...item.examples[0]!, evidence: "allowed Bb4+ Kd1 (fork) on c3" }, item.examples[1]!];
     const d = draft([item, missedItem()]);
-    expect(storiedErrors(storiedAnswer({ a: { why: "Bb4+ was the shot." } }), d)).toEqual([
-      expect.stringMatching(/why names Bb4\+: this move is not in the examples shown/),
+    expect(storiedErrors(storiedAnswer({ a: { why: "Checks hurt. {example1}, Bb4+ was the shot." } }), d)).toEqual([
+      expect.stringMatching(/why names Bb4\+ after \{example1\}, but it is not a move of your first example/),
     ]);
-    expect(storiedErrors(storiedAnswer({ a: { why: "The square c3 mattered." } }), d)).toEqual([
-      expect.stringMatching(/why names the square c3/),
+    expect(storiedErrors(storiedAnswer({ a: { why: "Checks hurt. {example1}, the square c3 mattered." } }), d)).toEqual([
+      expect.stringMatching(/why names the square c3 after \{example1\}/),
     ]);
   });
 
@@ -1106,5 +1107,104 @@ describe("the summary's overall level", () => {
     expect(errorsOf(answer({ summary: "You made {mistakesPerGame} mistakes per hundred moves." }))).toEqual([
       expect.stringMatching(/^summary, the sentence .*leave "per hundred" out and state the overall level with \{mistakesPerGame\} mistakes a game\.$/),
     ]);
+  });
+});
+
+describe("pointing at the examples", () => {
+  const LEAD = "Checks hurt, usually right after a queen move.";
+  const whyA = (why: string, d: ReportDraft = STORIED) => storiedErrors(storiedAnswer({ a: { why } }), d);
+
+  it("accepts a reason with no markers and no moves, and one with a move under each example", () => {
+    expect(whyA(LEAD)).toEqual([]);
+    expect(whyA(`${LEAD} {example1}, the queen on d2 walked into a knight check. {example2}, the knight took on e5 and was taken back.`)).toEqual([]);
+  });
+
+  it("rejects a move under the wrong example", () => {
+    expect(whyA(`${LEAD} {example1}, Nxe5 lost the knight.`)).toEqual([
+      expect.stringMatching(/why names Nxe5 after \{example1\}, but it is not a move of your first example \(its moves: Qd2, /),
+    ]);
+    expect(whyA(`${LEAD} {example2}, the queen on d2 was loose.`)).toEqual([
+      expect.stringMatching(/why names the square d2 after \{example2\}, but it is not on a move or piece of your second example/),
+    ]);
+  });
+
+  it("rejects a move or a square in the lead", () => {
+    expect(whyA("Qd2 walked into a check. {example1}, it was the knight on e4.")).toEqual([
+      expect.stringMatching(/why names Qd2 before any example marker\. Open with the pattern in plain words/),
+    ]);
+    expect(whyA("The square e4 kept coming up.")).toEqual([expect.stringMatching(/why names e4 before any example marker/)]);
+  });
+
+  it("rejects {example2} with one example and any marker with none", () => {
+    const one = { ...allowedItem(), examples: [allowedItem().examples[0]!] };
+    expect(whyA(`${LEAD} {example2}, the queen was loose.`, draft([one, missedItem()]))).toEqual([
+      "focus[0] (allowed-tactic).why uses {example2}, but this item has only one example: use {example1}.",
+    ]);
+    const none = { ...allowedItem(), examples: [] };
+    expect(whyA(`${LEAD} {example1}, the queen was loose.`, draft([none, missedItem()]))).toEqual([
+      "focus[0] (allowed-tactic).why uses {example1}, but this item has no examples; say it in plain words with no marker.",
+    ]);
+  });
+
+  it("rejects markers out of order or repeated, and a marker that does not open a sentence or lacks its comma", () => {
+    expect(whyA(`${LEAD} {example2}, the knight took. {example1}, the queen was loose.`)).toEqual([
+      expect.stringMatching(/uses \{example1\} after \{example2\}; write about the examples in order/),
+    ]);
+    expect(whyA(`${LEAD} {example1}, the queen was loose. {example1}, it was again.`)).toEqual([
+      expect.stringMatching(/uses \{example1\} more than once/),
+    ]);
+    expect(whyA(`${LEAD} As {example1}, the queen was loose.`)).toEqual([expect.stringMatching(/\{example1\} must open a sentence/)]);
+    expect(whyA(`${LEAD} {example1} shows a loose queen.`)).toEqual([expect.stringMatching(/\{example1\} must be followed by a comma/)]);
+    expect(whyA(`{example1}, the queen was loose.`)).toEqual([]);
+  });
+
+  it("allows three moves and squares under an example and rejects four", () => {
+    expect(whyA(`${LEAD} {example1}, Qd2 walked into Ne4+, hitting the king on f2.`)).toEqual([]);
+    expect(whyA(`${LEAD} {example1}, Qd2 walked into Ne4+, hitting the king on f2 and the queen on d2.`)).toEqual([
+      expect.stringMatching(/names 4 moves and squares after \{example1\}; name at most two per example/),
+    ]);
+  });
+
+  it("rejects words that lean on the other item in the title and the lead, not after a marker", () => {
+    expect(whyA("This keeps coming back too.")).toEqual([expect.stringMatching(/before the first marker, ends a clause with "too"/)]);
+    expect(whyA("Checks hurt as well, mostly after queen moves.")).toEqual([expect.stringMatching(/ends a clause with "as well"/)]);
+    expect(whyA("This one also keeps coming back. Checks hurt.")).toEqual([expect.stringMatching(/says "also" in its first sentence/)]);
+    expect(whyA("Checks hurt. You also moved the queen a lot.")).toEqual([]);
+    expect(whyA(`${LEAD} {example1}, the queen was loose too.`)).toEqual([]);
+    expect(whyA("A loose queen was too much to hope for.")).toEqual([]);
+    expect(storiedErrors(storiedAnswer({ a: { title: "Checks again, too" } }))).toEqual([expect.stringMatching(/title ends a clause with "too"/)]);
+  });
+
+  it("states a cost as fact only for an example whose game took it", () => {
+    expect(whyA(`${LEAD} {example1}, the knight check on e4 cost the queen.`)).toEqual([
+      expect.stringMatching(/says "cost" after \{example1\}, but in that game the cost was not taken/),
+    ]);
+    expect(whyA(`${LEAD} {example1}, the knight check on e4 could have cost the queen.`)).toEqual([]);
+    const item = allowedItem();
+    const [f1, f2] = item.examples as [FocusExample, FocusExample];
+    const paid: FocusExample = { ...f1, story: { ...f1.story!, inGame: { moves: f1.story!.punish, ended: false, paid: true } } };
+    const d = draft([{ ...item, examples: [paid, f2] }, missedItem()]);
+    expect(whyA(`${LEAD} {example1}, the knight check on e4 cost the queen.`, d)).toEqual([]);
+    // The paid example's cost does not excuse the other one's.
+    expect(whyA(`${LEAD} {example1}, the knight check on e4 cost the queen. {example2}, taking on e5 cost the knight.`, d)).toEqual([
+      expect.stringMatching(/says "cost" after \{example2\}/),
+    ]);
+    // A missed win's cost is the win not taken.
+    expect(storiedErrors(storiedAnswer({ b: { why: "A check went unplayed. {example1}, missing the knight check on e4 cost the queen." } }))).toEqual([]);
+  });
+
+  it("accepts a move both examples share under either marker", () => {
+    const item = allowedItem();
+    const f1 = item.examples[0]!;
+    const d = draft([{ ...item, examples: [f1, { ...f1, gameId: "g-f1b", ply: 31 }] }, missedItem()]);
+    expect(whyA(`${LEAD} {example1}, Qd2 walked into a check. {example2}, Qd2 did it again.`, d)).toEqual([]);
+  });
+
+  it("measures the why with each marker as its phrase, up to 480 characters", () => {
+    // "In your first example (move 11, as White)" is 41 characters; the marker is 10.
+    const pad = (n: number) => `${LEAD} {example1}, ${"x".repeat(n)}.`;
+    const base = pad(0).length - 10 + 41;
+    expect(whyA(pad(480 - base))).toEqual([]);
+    expect(whyA(pad(481 - base))).toEqual([expect.stringMatching(/why is 481 characters, counting each example marker as the phrase it stands for; the limit is 480/)]);
   });
 });

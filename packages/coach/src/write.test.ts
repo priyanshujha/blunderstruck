@@ -392,14 +392,71 @@ describe("writeReport with blind spots and examples", () => {
     const d = drafted([{ id: "hung-piece", examples: [A], spots: ["undefended", "lost-queen"] }]);
     const bad = JSON.parse(stepped(d, ["hung-piece"]));
     bad.focus[0].steps.reverse();
-    bad.focus[0].why = "Qh5 was the loose move.";
+    bad.focus[0].why = "Loose moves hurt. {example1}, Qh5 was the loose move.";
     const p = stub([JSON.stringify(bad), stepped(d, ["hung-piece"], "fixed")]);
     const r = await writeReport(d, p);
     expect(p.requests).toHaveLength(2);
     const hint = p.requests[1]!.user;
     expect(hint).toContain("steps must hold exactly one step per blind spot, in this order: [undefended, lost-queen]; got [lost-queen, undefended]. Write one step for each, in that order.");
-    expect(hint).toContain("why names Qh5: this move is not in the examples shown (the moves shown: Nf3). Name only those moves, or say it in words without a move.");
+    expect(hint).toContain("why names Qh5 after {example1}, but it is not a move of the example (its moves: Nf3). After a marker cite only that example's moves; put it under the right example's marker, or say it in words.");
     expect(r.focus[0]!.title).toBe("fixed title hung-piece");
+  });
+
+  /** A passing answer for one hung-piece item whose why is `why`. */
+  const withWhy = (d: ReportDraft, why: string) => {
+    const a = JSON.parse(stepped(d, ["hung-piece"]));
+    a.focus[0].why = why;
+    return JSON.stringify(a);
+  };
+  const TWO_MARKERS = "Loose pieces hurt. {example1}, the knight went to f3. {example2}, it went to f3 again.";
+
+  it("stores the example markers in the why, for the view to fill", async () => {
+    const two = drafted([{ id: "hung-piece", examples: [A, B] }]);
+    const r = await writeReport(two, stub([withWhy(two, TWO_MARKERS)]));
+    expect(r.focus[0]!.why).toBe(TWO_MARKERS);
+    expect(r.focus[0]!.examples).toEqual([A, B]);
+    const one = drafted([{ id: "hung-piece", examples: [A] }]);
+    const why = "Loose pieces hurt. {example1}, the knight went to f3.";
+    expect((await writeReport(one, stub([withWhy(one, why)]))).focus[0]!.why).toBe(why);
+  });
+
+  it("repairs a marker for an example the item does not have", async () => {
+    const one = drafted([{ id: "hung-piece", examples: [A] }]);
+    const p = stub([withWhy(one, "Loose pieces hurt. {example2}, the knight went to f3."), withWhy(one, "Loose pieces hurt. {example1}, the knight went to f3.")]);
+    const r = await writeReport(one, p);
+    expect(p.requests).toHaveLength(2);
+    expect(p.requests[1]!.user).toContain("why uses {example2}, but this item has only one example: use {example1}.");
+    expect(r.focus[0]!.why).toBe("Loose pieces hurt. {example1}, the knight went to f3.");
+    expect(r.wording.calls).toBe(2);
+  });
+
+  it("makes at most three calls in a period when markers keep failing", async () => {
+    const d0 = drafted([{ id: "hung-piece", examples: [A, B] }]);
+    const wrong = (d: ReportDraft) => withWhy(d, "Loose pieces hurt. {example2}, the knight. {example1}, again.");
+    const first = await writeReport(d0, stub([wrong(d0), withWhy(d0, TWO_MARKERS)]));
+    expect(first.wording.calls).toBe(2);
+    const d1 = drafted([{ id: "hung-piece", examples: [A, C] }], 1);
+    const p1 = stub([wrong(d1), withWhy(d1, TWO_MARKERS)]);
+    const second = await writeReport(d1, p1, first);
+    expect(p1.requests).toHaveLength(1);
+    expect(second.wording.calls).toBe(3);
+    expect(second.notes).toContain("model-failed");
+    const d2 = drafted([{ id: "hung-piece", examples: [B, C] }], 2);
+    const p2 = stub([withWhy(d2, TWO_MARKERS)]);
+    const third = await writeReport(d2, p2, second);
+    expect(p2.requests).toHaveLength(0);
+    expect(third.wording.calls).toBe(3);
+  });
+
+  it("keeps a why's markers with its examples in their order", async () => {
+    const d0 = drafted([{ id: "hung-piece", examples: [A, B] }]);
+    const first = await writeReport(d0, stub([withWhy(d0, TWO_MARKERS)]));
+    const fresh = [ex("hung-piece", "g2", 20, 71), ex("hung-piece", "g1", 10, 64)];
+    const p = stub([]);
+    const r = await writeReport(drafted([{ id: "hung-piece", examples: fresh }], 1), p, first);
+    expect(p.requests).toHaveLength(0);
+    expect(r.focus[0]!.why).toBe(TWO_MARKERS);
+    expect(r.focus[0]!.examples.map((e) => e.gameId)).toEqual(["g1", "g2"]);
   });
 
   it("keeps kept text with its examples in their order, refreshed from the draft, and makes no call", async () => {
@@ -550,19 +607,19 @@ describe("writeReport when a kept example's story changes", () => {
 
   async function revisionZero() {
     const d0 = drafted([{ id: "allowed-tactic", examples: [before] }]);
-    const first = await writeReport(d0, stub([answer(d0, "Re1 would have kept the queen safe.")]));
+    const first = await writeReport(d0, stub([answer(d0, "Checks hurt. {example1}, Re1 would have kept the queen safe.")]));
     expect(first.wording).toMatchObject({ source: "model", calls: 1 });
     return first;
   }
 
   it("keeps the text while every move it names is still in the refreshed story", async () => {
     const d0 = drafted([{ id: "allowed-tactic", examples: [before] }]);
-    const first = await writeReport(d0, stub([answer(d0, "Qd2 walked into Ne4+.")]));
+    const first = await writeReport(d0, stub([answer(d0, "Checks hurt. {example1}, Qd2 walked into Ne4+.")]));
     const next = drafted([{ id: "allowed-tactic", examples: [after] }], 1);
     const p = stub([]);
     const r = await writeReport(next, p, first);
     expect(p.requests).toHaveLength(0);
-    expect(r.focus[0]!.why).toBe("Qd2 walked into Ne4+.");
+    expect(r.focus[0]!.why).toBe("Checks hurt. {example1}, Qd2 walked into Ne4+.");
     expect(r.focus[0]!.examples).toEqual([after]);
   });
 

@@ -6,6 +6,9 @@ import {
   type BlindSpotId,
   blindSpotTokenValues,
   type BetterReason,
+  EXAMPLE_MARKERS,
+  exampleAnchorPhrase,
+  exampleMoveOf,
   type ExampleStory,
   type FocusExample,
   focusTokenValues,
@@ -128,7 +131,7 @@ const EXAMPLE = {
     {
       patternId: "allowed-tactic",
       title: "Checks you did not see coming",
-      why: "The shot that hurt was usually a check, and this one keeps coming back. In the first example Qd2 walked into Ne4+, a knight check that also hit the queen: the queen had just moved there and nothing guarded it.",
+      why: "The shot that hurt was usually a check, and this one keeps coming back: the piece you had just moved stood where a knight check could hit it. {example1}, your queen went to d2 and their knight check on e4 hit king and queen at once, with nothing guarding the queen.",
       drill:
         "Before you let go of a piece, play the opponent for a moment: what are their checks, captures and attacks now? A short set of defensive puzzles each day, where you spot the threat first.",
       steps: [
@@ -145,7 +148,7 @@ const EXAMPLE = {
     {
       patternId: "missed-tactic",
       title: "Forks that went unplayed",
-      why: "The winning move you passed over was usually a check. In the second example Ne4+ forked king and queen and won the queen; h6 looked safe and let it go.",
+      why: "The winning move you passed over was usually a check, and a quiet move let it slip. {example1}, the knight check on e4 would have forked king and queen; pawn to h6 looked safe and let it go.",
       drill:
         "Look at every check, capture and threat before choosing a move, even when the position feels calm. Solve 10 fork puzzles a day, each one two moves deep.",
       steps: [
@@ -160,8 +163,8 @@ const EXAMPLE = {
 
 /** The input the worked example answers, shortened. */
 const EXAMPLE_INPUT = [
-  "- allowed-tactic, blind spots answer-check then moved-piece-lost. Example: played Qd2 (your queen d1-d2); allowed Ne4+ (their knight f6-e4, check) Ke1 Nxd2 (takes your queen) Kxd2, hitting your king f2 and your queen d2, which would cost your queen d2 for their knight; inGame the same moves were played, paid true, the queen lost for the knight; better Re1, which covers e4.",
-  "- missed-tactic, blind spot best-check. Example: played h6 (your pawn h7-h6); better Ne4+ (your knight f6-e4, check) Ke1 Nxd2 (takes their queen) Kxd2, which wins their queen for your knight.",
+  "- allowed-tactic, blind spots answer-check then moved-piece-lost. Example {example1} (move 11, you had White): played Qd2 (your queen d1-d2); allowed Ne4+ (their knight f6-e4, check) Ke1 Nxd2 (takes your queen) Kxd2, hitting your king f2 and your queen d2, which would cost your queen d2 for their knight; inGame the same moves were played, paid true, the queen lost for the knight; better Re1, which covers e4.",
+  "- missed-tactic, blind spot best-check. Example {example1} (move 11, you had Black): played h6 (your pawn h7-h6); better Ne4+ (your knight f6-e4, check) Ke1 Nxd2 (takes their queen) Kxd2, which wins their queen for your knight.",
 ].join("\n");
 
 function bandLines(): string {
@@ -198,8 +201,15 @@ const SYSTEM = [
   ...PATTERN_IDS.map((id) => `- ${id}: ${GLOSSARY[id]}`),
   "",
   "# Moves and squares",
-  "In a focus item's title, why, drill and steps you may name the moves of that item's own examples: the move played, the moves of the allowed line, the moves played in the game (inGame), the moves of the better line, and, for an example given as a FEN, moves named in its fact. You may name the squares of those moves and of the pieces in the stories (\"the queen on d2\"), and for an example given as a FEN, the squares of its pieces. Name no other move or square: no move of your own, no line you worked out, nothing from another item's examples. Write moves exactly as given (\"Ne4+\", \"Nxd2\").",
+  "In a focus item's title, why, drill and steps you may name the moves of that item's own examples: the move played, the moves of the allowed line, the moves played in the game (inGame), the moves of the better line, and, for an example given as a FEN, moves named in its fact. You may name the squares of those moves and of the pieces in the stories (\"the queen on d2\"), and for an example given as a FEN, the squares of its pieces. Name no other move or square: no move of your own, no line you worked out, nothing from another item's examples. A move written in notation is written exactly as given (\"Ne4+\"), but in the why write moves in words (see below).",
   "The summary is about the whole period: it names no move and no square.",
+  "",
+  "# Pointing at the examples",
+  "The page shows each example as a board labelled with its move number, so the why says which example a move comes from:",
+  "- Start with the pattern in plain words: no move and no square before the first marker.",
+  "- To cite a move, begin the sentence with that example's marker and a comma: \"{example1}, pawn to b3 opened the long diagonal.\" Each example comes with its marker and readsAs, what the reader sees in the marker's place. Use each marker at most once, in example order; an item with no examples uses none.",
+  "- After a marker, cite only that example's moves, at most two squares or moves, written in words with the square: \"pawn to b3\", \"their bishop took your rook on a1\".",
+  "- Each item is read on its own section of the page, so never refer to the other item: no \"too\", \"also\" or \"as well\".",
   "",
   "# Blind spots and steps",
   "Some focus items come with blind spots: something many of the pattern's occurrences had in common, much more often than among the player's mistakes overall. Each blind spot gives:",
@@ -242,7 +252,7 @@ const SYSTEM = [
   "- focus: one entry per focus item you are asked to word, in the order given, each with:",
   "  - patternId: exactly the id given;",
   "  - title: a short headline, at most 60 characters;",
-  "  - why: why this matters for this player, at most 400 characters;",
+  "  - why: why this matters for this player, at most 480 characters, each marker counted as the phrase it stands for;",
   "  - drill: one concrete drill sized to the band, at most 400 characters;",
   "  - steps: one step per blind spot of the item, in the order given (an empty array when it has none).",
   "Sometimes only some focus items are asked for, because the others already have their text; word only those, and still write the summary for the whole report.",
@@ -355,9 +365,13 @@ function storyWords(st: ExampleStory, patternId: string): Record<string, unknown
   };
 }
 
-/** One example for the prompt: its story when it has one, otherwise its position. */
-function exampleData(e: FocusExample): Record<string, unknown> {
+/** One example for the prompt: its label and marker, then its story when it has one, otherwise its position. */
+function exampleData(e: FocusExample, i: number, all: readonly FocusExample[]): Record<string, unknown> {
+  const { move, side } = exampleMoveOf(e);
   return {
+    label: `move ${move}, you had ${side === "white" ? "White" : "Black"}`,
+    marker: `{${EXAMPLE_MARKERS[i]}}`,
+    readsAs: exampleAnchorPhrase(all, i + 1),
     ...(e.story ? storyWords(e.story, e.patternId) : { fen: e.fen, played: e.played, ...(e.best ? { best: e.best } : {}) }),
     ...(e.evidence ? { fact: e.evidence } : {}),
     ...(e.motif ? { motif: e.motif } : {}),
@@ -421,7 +435,7 @@ export function buildPrompt(draft: ReportDraft, only?: string[]): { system: stri
       onListSince: f.since,
       tokens: wordingTokenValues(f, draft),
       blindSpots: (f.blindSpots ?? []).map(blindSpotData),
-      examples: f.examples.map(exampleData),
+      examples: f.examples.map((e, i) => exampleData(e, i, f.examples)),
     })),
     ...(others.length > 0 ? { alreadyWorded: others.map((f) => f.patternId) } : {}),
     earlierFocus: draft.progress.map((p) => ({

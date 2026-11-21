@@ -294,7 +294,7 @@ export type Wording = z.infer<typeof Wording>;
 export const ReportNote = z.enum(["few-games", "no-key", "model-failed", "sample-only", "settings-changed"]);
 export type ReportNote = z.infer<typeof ReportNote>;
 
-/** Tokens a focus item's `title`, `why` and `drill` may use, written `{name}`. */
+/** Tokens a focus item's `title`, `why` and `drill` may use, written `{name}`. A `why` may also hold `EXAMPLE_MARKERS`. */
 export const FOCUS_TOKENS = [
   "games",
   "gamesAffected",
@@ -392,11 +392,66 @@ export const FocusExample = PatternFinding.extend({
 });
 export type FocusExample = z.infer<typeof FocusExample>;
 
+/** What an example's label is made of: the player's move number and the side they had. */
+export interface ExampleMove {
+  /** The move number of the player's move, `ceil(ply / 2)`. */
+  move: number;
+  side: "white" | "black";
+}
+
+/** An example's move number and the side that moved: the story's mover, else the side to move in its position. */
+export function exampleMoveOf(ex: Pick<FocusExample, "ply" | "fen" | "story">): ExampleMove {
+  const side = ex.story?.played.color ?? (ex.fen.split(" ")[1] === "b" ? "black" : "white");
+  return { move: Math.ceil(ex.ply / 2), side };
+}
+
+/**
+ * Markers a focus item's `why` may hold, one per example, in example order: `{example1}` for its
+ * first example, `{example2}` for its second. A marker opens a sentence and is followed by a
+ * comma; it stands for a phrase such as "In your first example (move 23, as White)", built by
+ * `exampleAnchorPhrase`, or for a renderer's own label or link to that example. A reader that does
+ * not know the markers shows its built-in wording for that item.
+ */
+export const EXAMPLE_MARKERS = ["example1", "example2"] as const;
+export type ExampleMarker = (typeof EXAMPLE_MARKERS)[number];
+
+/**
+ * The plain phrase for an example marker (1-based `index`): "In your first example (move 23, as
+ * White)", or "In your example (move 23, as White)" when the item has one example. Undefined when
+ * the item has no such example.
+ */
+export function exampleAnchorPhrase(
+  examples: readonly Pick<FocusExample, "ply" | "fen" | "story">[],
+  index: number,
+): string | undefined {
+  const ex = examples[index - 1];
+  if (!ex || index < 1 || index > EXAMPLE_MARKERS.length) return undefined;
+  const { move, side } = exampleMoveOf(ex);
+  const which = examples.length === 1 ? "your example" : `your ${index === 1 ? "first" : "second"} example`;
+  return `In ${which} (move ${move}, as ${side === "white" ? "White" : "Black"})`;
+}
+
+/** Values for the markers of the examples an item has, for `renderText`; a marker without its example is left out. */
+export function exampleMarkerValues(
+  examples: readonly Pick<FocusExample, "ply" | "fen" | "story">[],
+): Partial<Record<ExampleMarker, string>> {
+  const out: Partial<Record<ExampleMarker, string>> = {};
+  EXAMPLE_MARKERS.forEach((m, i) => {
+    const phrase = exampleAnchorPhrase(examples, i + 1);
+    if (phrase) out[m] = phrase;
+  });
+  return out;
+}
+
 export const FocusItem = z.object({
   patternId: z.string(),
   /** Token template (`FOCUS_TOKENS`). */
   title: z.string(),
-  /** Why this one, in the player's own numbers. Token template. */
+  /**
+   * Why this one, in the player's own numbers. Token template (`FOCUS_TOKENS`); it may also hold
+   * the example markers `{example1}` and `{example2}` (`EXAMPLE_MARKERS`), each only when the item
+   * has that example.
+   */
   why: z.string(),
   /** One concrete habit or drill sized for the player's band. Token template. */
   drill: z.string(),

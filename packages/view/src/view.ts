@@ -11,6 +11,8 @@ import {
   type RetiredFocus,
   type WeeklyReport,
   blindSpotTokenValues,
+  exampleMarkerValues,
+  exampleMoveOf,
   focusTokenValues,
   gameGoalOf,
   meetsGoal,
@@ -91,13 +93,23 @@ export interface StepView {
   text: string;
 }
 
+/**
+ * One piece of a focus item's reason: plain text with its tokens filled, or the place of an
+ * example marker (`{example1}`, `{example2}`), for a renderer that shows its own label or link
+ * there. Joined with `exampleAnchorPhrase` at each marker, the parts read as `FocusView.why`.
+ */
+export type WhyPart = { text: string } | { example: 1 | 2 };
+
 export interface FocusView {
   patternId: string;
   patternName: string;
   /** 1-based. */
   number: number;
   title: string;
+  /** The reason with every token filled, example markers as "In your first example (move 23, as White)". */
   why: string;
+  /** `why` in parts, each example marker apart (a single text part when built-in wording stands in). */
+  whyParts: WhyPart[];
   drill: string;
   /** How often it came back and why it is on the list. */
   reason: string;
@@ -467,8 +479,27 @@ function blindSpotView(spot: BlindSpot): BlindSpotView {
 
 /** "Move 12, you had White", from the ply and the side to move in the position before it. */
 function moveLabel(ex: FocusExample): string {
-  const side = ex.story?.played.color ?? (ex.fen.split(" ")[1] === "b" ? "black" : "white");
-  return `Move ${Math.ceil(ex.ply / 2)}, you had ${side === "white" ? "White" : "Black"}`;
+  const { move, side } = exampleMoveOf(ex);
+  return `Move ${move}, you had ${side === "white" ? "White" : "Black"}`;
+}
+
+const MARKER = /\{example([12])\}/g;
+
+/** A stored reason that rendered, cut at its example markers, the other tokens filled. */
+function whyPartsOf(template: string, values: Record<string, string>): WhyPart[] {
+  const parts: WhyPart[] = [];
+  let at = 0;
+  const text = (end: number) => {
+    const t = renderText(template.slice(at, end), values);
+    if (t) parts.push({ text: t });
+  };
+  for (const m of template.matchAll(MARKER)) {
+    text(m.index);
+    parts.push({ example: m[1] === "1" ? 1 : 2 });
+    at = m.index + m[0].length;
+  }
+  text(template.length);
+  return parts;
 }
 
 function exampleView(ex: FocusExample): ExampleView {
@@ -560,8 +591,15 @@ function focusView(
     delete values.rate;
   }
   const builtIn = fallback?.focus?.find((f) => f.patternId === item.patternId);
-  const text = (field: "title" | "why" | "drill"): string =>
+  const text = (field: "title" | "drill"): string =>
     shownWording(item[field], builtIn?.[field], values, UNSHOWN_WORDING, failed);
+  // A marker renders only when the item has its example; otherwise the built-in wording stands in.
+  let whyShown = true;
+  const why = shownWording(item.why, builtIn?.why, { ...values, ...exampleMarkerValues(item.examples) }, UNSHOWN_WORDING, () => {
+    whyShown = false;
+    failed();
+  });
+  const whyParts = whyShown ? whyPartsOf(item.why, values) : [{ text: why }];
 
   const { weeksRecurred, weeksCounted, kind } = item.reason;
   const bits: string[] = [];
@@ -587,7 +625,8 @@ function focusView(
     patternName: patternName(item.patternId),
     number: index + 1,
     title: text("title"),
-    why: text("why"),
+    why,
+    whyParts,
     drill: text("drill"),
     reason: bits.join(" "),
     since: item.since,

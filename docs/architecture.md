@@ -463,9 +463,16 @@ revision with the same items makes no call. Never a call per move or per game.
   `{mistakeRate}`, still render. `renderText` fills tokens at display time and throws on
   anything else in braces. Counts are written with digit grouping ("1,500").
 - **Wording check** (`parseWording`): the JSON shape, the pattern ids in the draft's order,
-  exactly one step per blind spot in order, lengths (title 60, why and drill 400, step 200,
-  summary 600 characters), only allowed tokens, moves and squares named only when they appear
-  in that item's examples (none in the summary), and the number rules, which differ by field:
+  exactly one step per blind spot in order, lengths (title 60, why 480 counted as shown,
+  drill 400, step 200, summary 600 characters), only allowed tokens, moves and squares named
+  only when they appear in that item's examples (none in the summary), and the number rules,
+  which differ by field. In the why, a cited move sits after the marker of the example it comes
+  from (`{example1}`, `{example2}`, each opening a sentence, followed by a comma, in order, at
+  most three moves or squares each); the text before the first marker names none, and neither
+  it nor the title leans on the other item ("too", "also"). The view fills each marker with
+  "In your first example (move 23, as White)", or "In your example (…)" for an item with one;
+  a reader that does not know the markers shows the built-in wording for that item. The number
+  rules:
   - The summary, title and why describe the player's record and hold no counts at all. Digits
     are allowed only in chess notation (moves in SAN, ranks, "move 12", "mate in 2"); number
     words other than "one" only right before a piece, pawn, move or square ("two rooks",

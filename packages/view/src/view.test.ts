@@ -633,3 +633,46 @@ describe("no per-100 figure in wording for the main screen", () => {
     }
   });
 });
+
+describe("example markers in a reason", () => {
+  const second = { patternId: "allowed-tactic", gameId: "g2", ply: 28, winPctLoss: 40, fen: "8/8/8/8/8/8/8/8 b - - 0 14", played: "Re1+" };
+  const why = "Checks hurt. {example1}, your queen went to d2. {example2}, the rook check was taken.";
+  const builtIn = { focus: [{ patternId: "allowed-tactic", why: "Built-in reason." }] };
+  const itemOf = (v: ReturnType<typeof reportView>) => (v.body.kind === "focus" ? v.body.items[0]! : undefined);
+
+  it("fills each marker with its example's phrase, as in the example's label", () => {
+    const two = focusItem({ why, examples: [focusItem().examples[0], second] });
+    const v = reportView(report({ focus: [two] }), { fallback: builtIn });
+    const item = itemOf(v)!;
+    expect(item.why).toBe(
+      "Checks hurt. In your first example (move 12, as White), your queen went to d2. In your second example (move 14, as Black), the rook check was taken.",
+    );
+    expect(item.examples.map((e) => e.moveLabel)).toEqual(["Move 12, you had White", "Move 14, you had Black"]);
+    expect(v.notes.lines).toEqual([]);
+  });
+
+  it("says \"your example\" when the item has one", () => {
+    const one = focusItem({ why: "Checks hurt. {example1}, your queen went to d2." });
+    expect(itemOf(reportView(report({ focus: [one] })))!.why).toBe("Checks hurt. In your example (move 12, as White), your queen went to d2.");
+  });
+
+  it("gives the reason in parts, the other tokens filled", () => {
+    const two = focusItem({ why: `In {gamesAffected} of {games} games. ${why}`, examples: [focusItem().examples[0], second] });
+    expect(itemOf(reportView(report({ focus: [two] })))!.whyParts).toEqual([
+      { text: "In 1 of 25 games. Checks hurt. " },
+      { example: 1 },
+      { text: ", your queen went to d2. " },
+      { example: 2 },
+      { text: ", the rook check was taken." },
+    ]);
+    expect(itemOf(reportView(report({ focus: [focusItem()] })))!.whyParts).toEqual([{ text: "In 1 of 25 games." }]);
+  });
+
+  it("shows the built-in wording when a marker names an example the item does not have", () => {
+    const v = reportView(report({ focus: [focusItem({ why })] }), { fallback: builtIn });
+    const item = itemOf(v)!;
+    expect(item.why).toBe("Built-in reason.");
+    expect(item.whyParts).toEqual([{ text: "Built-in reason." }]);
+    expect(v.notes.lines).toEqual([UNSHOWN_NOTE]);
+  });
+});

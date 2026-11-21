@@ -14,6 +14,10 @@ import {
   MAX_BLIND_SPOTS,
   MoveDetail,
   blindSpotFamilyOf,
+  EXAMPLE_MARKERS,
+  exampleAnchorPhrase,
+  exampleMarkerValues,
+  exampleMoveOf,
   blindSpotInfo,
   blindSpotTokenValues,
   gameGoalOf,
@@ -667,5 +671,24 @@ describe("reports with blind spots, steps and goals", () => {
         exportedAt: "2026-11-19T00:00:00Z",
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("example labels and markers", () => {
+  const at = (ply: number, side: "w" | "b") => ({ ply, fen: `8/8/8/8/8/8/8/8 ${side} - - 0 1` });
+
+  it("gives the move number and the side that moved", () => {
+    expect(exampleMoveOf(at(23, "w"))).toEqual({ move: 12, side: "white" });
+    expect(exampleMoveOf(at(28, "b"))).toEqual({ move: 14, side: "black" });
+  });
+
+  it("builds the phrase for each marker, and none for an example the item does not have", () => {
+    const two = [at(45, "w"), at(28, "b")];
+    expect(exampleAnchorPhrase(two, 1)).toBe("In your first example (move 23, as White)");
+    expect(exampleAnchorPhrase(two, 2)).toBe("In your second example (move 14, as Black)");
+    expect(exampleAnchorPhrase([at(45, "w")], 1)).toBe("In your example (move 23, as White)");
+    expect(exampleAnchorPhrase([at(45, "w")], 2)).toBeUndefined();
+    expect(exampleMarkerValues([at(45, "w")])).toEqual({ example1: "In your example (move 23, as White)" });
+    expect(EXAMPLE_MARKERS).toEqual(["example1", "example2"]);
   });
 });

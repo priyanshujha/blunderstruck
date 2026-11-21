@@ -62,7 +62,8 @@ Then set `ANTHROPIC_API_KEY` (Claude) or `GEMINI_API_KEY` (Gemini) in `.env`. If
 Claude is used; `--provider anthropic|gemini|none` chooses. `pnpm -s cli models` prints which
 model each provider uses. The model never chooses anything and never writes your numbers: it
 writes placeholders that code fills in, and any move it names must be in your examples. A
-report makes at most three model calls. Keys are read only from the environment or `.env`
+move it cites comes after a marker for the example it is from, which the report shows as "In
+your first example (move 23, as White)". A report makes at most three model calls. Keys are read only from the environment or `.env`
 (`--env <path>` reads another file). Keep `.env` out of folders that sync to other people.
 
 Other optional settings are listed in `.env.example`: `BLUNDERSTRUCK_CONTACT` (sent to

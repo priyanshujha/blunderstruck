@@ -218,6 +218,21 @@ describe("buildPrompt", () => {
     expect(example).not.toMatch(/\{(weeksRecurred|weeksCounted|rate|target)\}/);
   });
 
+  it("gives each example its label, marker and phrase in the user part, and explains markers once in the prefix", () => {
+    const d = storiedDraft("x", WORKED);
+    const two = d.focus[0]!;
+    two.examples = [two.examples[0]!, { ...two.examples[0]!, gameId: "g-2", ply: 30, story: undefined, fen: "8/8/8/8/8/8/8/8 b - - 0 15" }];
+    const { system, user } = buildPrompt(d);
+    expect(user).toContain('"label": "move 11, you had White"');
+    expect(user).toContain('"marker": "{example1}"');
+    expect(user).toContain('"readsAs": "In your first example (move 11, as White)"');
+    expect(user).toContain('"readsAs": "In your second example (move 15, as Black)"');
+    expect(user).toContain('"readsAs": "In your example (move 11, as Black)"');
+    expect(system).toContain("# Pointing at the examples");
+    expect(system).not.toMatch(/"label"|"readsAs"|In your (first |second )?example \(move/);
+    expect(system).toBe(buildPrompt(draft({ username: "y", focus: [] })).system);
+  });
+
   it("puts the band, reasons, targets and example positions in the user part, not the username", () => {
     const { user } = buildPrompt(draft({ username: "alpha-invented", band: "beginner", focus: ["hung-piece", "missed-tactic"] }));
     expect(user).toContain('"band": "beginner"');
@@ -311,6 +326,9 @@ describe("buildPrompt", () => {
     expect(buildPrompt(d).system).not.toContain("other mistakes");
     // F1 here has no inGame (older data): it is labelled as what the move allowed, and nothing more.
     expect(a.examples[0]).toEqual({
+      label: "move 11, you had White",
+      marker: "{example1}",
+      readsAs: "In your example (move 11, as White)",
       played: "Qd2 (your queen d1-d2)",
       allowed: {
         line: "Ne4+ (their knight f6-e4, check), Ke1 (your king f2-e1), Nxd2 (their knight e4-d2, takes your queen), Kxd2 (your king e1-d2, takes their knight)",
@@ -401,8 +419,8 @@ describe("buildPrompt", () => {
           { patternId: "missed-tactic", title: "Checks", why: "A check went unplayed.", drill: "Look at your checks.", steps: [{ blindSpot: "best-check", text: "Look at your checks first." }] },
         ],
       });
-    expect(parseWording(answer("Qc1 allowed Ne2+ and Nxc1, which could have cost your queen; they played Rad8 instead."), d)).toMatchObject({ ok: true });
-    expect(parseWording(answer("After Qc1 they played Rd7."), d).ok).toBe(false);
+    expect(parseWording(answer("A check came first. {example1}, Qc1 allowed Ne2+, which could have cost your queen; they played Rad8 instead."), d)).toMatchObject({ ok: true });
+    expect(parseWording(answer("A check came first. {example1}, after Qc1 they played Rd7."), d).ok).toBe(false);
   });
 
   it("says which piece was really lost when a different move took it", () => {
