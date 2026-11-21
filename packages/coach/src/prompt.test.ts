@@ -204,7 +204,9 @@ describe("buildPrompt", () => {
     const parsed = JSON.parse(example!) as { summary: string };
     expect(parsed.summary).not.toMatch(/\b(one|two|both|pair|couple)\b/i);
     expect(system).toMatch(/illustrative only: never reuse them/);
-    expect(system).toContain("Do not restate them");
+    expect(system).toContain("The why states the games count once, with its token, and restates nothing else from those lines");
+    expect(system).toContain("Never write how many examples or games yourself");
+    expect(system).not.toMatch(/despite that|Two of those games/);
     expect(system).toContain("is written only with its token, never as a number of your own");
     expect(system).toContain("No percentages, fractions of their games or rates, in any field.");
     expect(system).toContain("Numbers that describe a position, a clock or what to practise are fine as they are");
@@ -217,7 +219,6 @@ describe("buildPrompt", () => {
       expect(f.why.split(/(?<=\.) /)).toHaveLength(3);
       expect(f.why.split(/(?<=\.) /)[2]).toMatch(/^\{example1\}, /);
     }
-    expect(system).toContain('"Two of those games show it."');
     expect(JSON.parse(example!).focus.every((f: { why: string }) => /^[^.]*\{gamesAffected\} of your games/.test(f.why))).toBe(true);
     expect(system).toContain('State the player\'s overall level with {mistakesPerGame} only');
     expect(example).not.toMatch(/\{mistakeRate\}|per hundred/);
