@@ -1,11 +1,11 @@
-import { settingsKey, trackKey, WeeklyReport, type GameRecord, type Track } from "@blunderstruck/contracts";
+import { settingsKey, trackKey, WeeklyReport, type FocusExample, type GameRecord, type Track } from "@blunderstruck/contracts";
 import { templateWording, type CoachProvider } from "@blunderstruck/coach";
 import { analyzeGame } from "@blunderstruck/engine";
 import { selectGames } from "@blunderstruck/progress";
 import type { Store } from "@blunderstruck/store";
 import { describe, expect, it } from "vitest";
 import { AnalysisAborted } from "./analyse";
-import { buildDraft } from "./assemble";
+import { buildDraft, carryWording } from "./assemble";
 import { completeReport } from "./complete";
 import { runReport, type ReportDeps } from "./run";
 import {
@@ -406,8 +406,11 @@ describe("few-games weeks", () => {
       a.focus.map((f) => [f.patternId, "kept", f.since, f.target]),
     );
     expect(b.focus.map((f) => f.baseline)).toEqual(a.focus.map((f) => f.baseline));
-    expect(b.focus.map((f) => [f.title, f.why, f.drill])).toEqual(a.focus.map((f) => [f.title, f.why, f.drill]));
-    expect(b.wording).toMatchObject({ source: "model", calls: 0, wordedFor: a.wording.wordedFor });
+    // The kept items show examples from this week's games, so the text written for last week's
+    // examples is not carried: each item gets the built-in wording.
+    expect(b.focus.every((f, i) => f.examples[0]?.gameId !== a.focus[i]!.examples[0]?.gameId)).toBe(true);
+    expect(b.focus.map((f) => f.why)).toEqual(templateWording(b).focus.map((f) => f.why));
+    expect(b.wording).toEqual({ source: "template", calls: 0, wordedFor: [] });
     expect(b.progress.map((p) => [p.patternId, p.verdict])).toEqual(a.focus.map((f) => [f.patternId, "insufficient-data"]));
     expect(() => WeeklyReport.parse(b)).not.toThrow();
 
@@ -418,6 +421,37 @@ describe("few-games weeks", () => {
       const kept = c.focus.find((f) => f.patternId === item.patternId)!;
       expect(kept).toMatchObject({ since: item.since, baseline: item.baseline, target: item.target, reason: { kind: "kept" } });
     }
+  });
+
+  it("carries text only for the examples it was written for, and only while it names what they show", async () => {
+    const h = harness(games(20, 0.5, 29));
+    const a = (await runReport(h.deps({ provider: wordingProvider() }), opts())).report!;
+    const item = a.focus[0]!;
+    expect(item.examples.length).toBe(2);
+    const withWhy = (why: string): WeeklyReport => ({ ...a, focus: [{ ...item, why }] });
+    const builtIn = (examples: FocusExample[]): WeeklyReport => ({
+      ...a,
+      focus: [{ ...item, examples, title: "Built-in title", why: "Built-in reason.", drill: "Built-in drill." }],
+      wording: { source: "template", wordedFor: [], calls: 0 },
+    });
+    const marked = "Pieces went missing. {example1}, it came up here. {example2}, and here.";
+    const [e1, e2] = item.examples as [FocusExample, FocusExample];
+
+    const same = carryWording(builtIn([e1, e2]), withWhy(marked));
+    expect(same.focus[0]!.why).toBe(marked);
+    expect(same.wording).toMatchObject({ source: "model", wordedFor: [item.patternId] });
+
+    for (const examples of [[e2, e1], [e1, { ...e2, gameId: "lichess:other" }], [e1]]) {
+      const r = carryWording(builtIn(examples), withWhy(marked));
+      expect(r.focus[0]).toMatchObject({ title: "Built-in title", why: "Built-in reason.", drill: "Built-in drill." });
+      expect(r.focus[0]!.why).not.toContain("{example");
+      expect(r.wording).toEqual({ source: "template", wordedFor: [], calls: 0 });
+    }
+    // Text from before markers that names a move: not carried onto other examples.
+    const old = carryWording(builtIn([{ ...e1, gameId: "lichess:other" }, e2]), withWhy("Qd2 walked into Ne4+."));
+    expect(old.focus[0]!.why).toBe("Built-in reason.");
+    // Same examples, but a move they do not show (the stories here have no Qd2): not carried either.
+    expect(carryWording(builtIn([e1, e2]), withWhy("Qd2 walked into Ne4+.")).focus[0]!.why).toBe("Built-in reason.");
   });
 
   it("a first report under 10 games still has no focus", async () => {

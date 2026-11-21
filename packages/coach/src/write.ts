@@ -25,6 +25,7 @@ export interface WriteOptions {
   /**
    * Called with every model reply, before it is checked: the first, the repair and the reword.
    * `attempt` is the reply's call number in the period (1 to 3), counting earlier revisions' calls.
+   * An error it throws is ignored.
    */
   onModelCall?: (c: ModelCall) => void;
 }
@@ -80,7 +81,11 @@ async function ask(
       onError(e.message);
       return undefined;
     }
-    onCall({ attempt: priorCalls + calls, text: result.text, usage: result.usage });
+    try {
+      onCall({ attempt: priorCalls + calls, text: result.text, usage: result.usage });
+    } catch {
+      // A failing observer never changes the wording.
+    }
     return result.text;
   };
 

@@ -174,6 +174,17 @@ describe("writeReport", () => {
     expect(calls[0]!.usage).toEqual({ inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 });
   });
 
+  it("ignores an onModelCall that throws", async () => {
+    const d = draft(["hung-piece"]);
+    const r = await writeReport(d, stub([good(["hung-piece"])]), undefined, {
+      onModelCall: () => {
+        throw new Error("log failed");
+      },
+    });
+    expect(r.wording).toMatchObject({ source: "model", calls: 1 });
+    expect(r.focus[0]!.title).toBe("model title hung-piece");
+  });
+
   it("does not call onModelCall for a provider error", async () => {
     const calls: number[] = [];
     const p = stub([new HttpError("HTTP 400", 400)]);

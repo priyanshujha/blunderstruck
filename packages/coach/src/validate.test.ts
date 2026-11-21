@@ -1161,7 +1161,7 @@ describe("pointing at the examples", () => {
   it("allows three moves and squares under an example and rejects four", () => {
     expect(whyA(`${LEAD} {example1}, Qd2 walked into Ne4+, hitting the king on f2.`)).toEqual([]);
     expect(whyA(`${LEAD} {example1}, Qd2 walked into Ne4+, hitting the king on f2 and the queen on d2.`)).toEqual([
-      expect.stringMatching(/names 4 moves and squares after \{example1\}; name at most two per example/),
+      expect.stringMatching(/names 4 moves and squares after \{example1\}; name at most 3 per example/),
     ]);
   });
 
@@ -1180,6 +1180,11 @@ describe("pointing at the examples", () => {
       expect.stringMatching(/says "cost" after \{example1\}, but in that game the cost was not taken/),
     ]);
     expect(whyA(`${LEAD} {example1}, the knight check on e4 could have cost the queen.`)).toEqual([]);
+    for (const hedged of ["could easily have cost the queen", "would probably have cost the queen", "did not cost the queen", "didn't cost the queen", "came at no cost"]) {
+      expect(whyA(`${LEAD} {example1}, the knight check on e4 ${hedged}.`), hedged).toEqual([]);
+    }
+    // A hedge in another clause does not cover this one.
+    expect(whyA(`${LEAD} {example1}, it could have been worse, but the check on e4 cost the queen.`)).toHaveLength(1);
     const item = allowedItem();
     const [f1, f2] = item.examples as [FocusExample, FocusExample];
     const paid: FocusExample = { ...f1, story: { ...f1.story!, inGame: { moves: f1.story!.punish, ended: false, paid: true } } };
@@ -1191,6 +1196,13 @@ describe("pointing at the examples", () => {
     ]);
     // A missed win's cost is the win not taken.
     expect(storiedErrors(storiedAnswer({ b: { why: "A check went unplayed. {example1}, missing the knight check on e4 cost the queen." } }))).toEqual([]);
+  });
+
+  it("reads an upper-case square and a lower-case piece capture as notation", () => {
+    expect(namedMoves("The knight took on E5 with nxe5, and bxc6 followed.")).toEqual({ moves: ["Nxe5", "bxc6"], squares: ["e5"] });
+    expect(namedMoves("A Bishop, a King and Black played on.")).toEqual({ moves: [], squares: [] });
+    expect(whyA(`${LEAD} {example1}, the queen on D2 was loose.`)).toEqual([]);
+    expect(whyA(`${LEAD} {example1}, the rook on A8 was watching.`)).toEqual([expect.stringMatching(/names the square a8 after \{example1\}/)]);
   });
 
   it("accepts a move both examples share under either marker", () => {

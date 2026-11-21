@@ -30,4 +30,14 @@ describe("coachLogger", () => {
     expect(lines[1].attempt).toBe(2);
     expect(typeof lines[0].at).toBe("string");
   });
+
+  it("warns once and goes on when the file cannot be written", () => {
+    const warnings: string[] = [];
+    const log = coachLogger(join(dir, "missing", "calls.ndjson"), (m) => warnings.push(m))!;
+    const usage = { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 };
+    expect(() => log({ attempt: 1, text: "{}", usage })).not.toThrow();
+    expect(() => log({ attempt: 2, text: "{}", usage })).not.toThrow();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/could not write to .*calls\.ndjson \(ENOENT\); the report goes on without the log\./);
+  });
 });

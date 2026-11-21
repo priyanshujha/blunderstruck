@@ -487,7 +487,11 @@ export function exampleMoves(examples: readonly FocusExample[]): ExampleMoves {
 
 /** The moves and the squares (outside those moves) a text names, in order, tokens left out. */
 export function namedMoves(text: string): { moves: string[]; squares: string[] } {
-  const plain = text.replace(/\{[^{}]*\}/g, " ");
+  const plain = text
+    .replace(/\{[^{}]*\}/g, " ")
+    // "nxe5" is a knight capture written in lower case ("bxe5" stays a pawn capture); "E5" is the square e5.
+    .replace(/(?<![\p{L}\p{N}])([kqrn])x([a-h][1-8])/gu, (_, p: string, sq: string) => `${p.toUpperCase()}x${sq}`)
+    .replace(/(?<![\p{L}\p{N}])([A-H])([1-8])(?![\p{L}\p{N}])/gu, (_, f: string, r: string) => `${f.toLowerCase()}${r}`);
   const moves = Array.from(plain.matchAll(SAN_IN_TEXT), (m) => m[0]);
   const rest = plain.replace(SAN_IN_TEXT, " ");
   const squares = Array.from(rest.matchAll(SQUARE_IN_TEXT), (m) => m[0]);
@@ -591,8 +595,8 @@ function whyMoveErrors(where: string, why: string, examples: readonly FocusExamp
 /** Words that lean on the other item when they end a clause: "this keeps coming back too". */
 const LEANING_END = /\b(too|as well|either)\s*(?=[,.;:!?]|$)/gi;
 const ALSO = /\balso\b/i;
-/** "could have cost", "would have cost": what a move allowed, not what it cost. */
-const HEDGED = /\b(?:could|would|might)(?:\s+have)?\s*$/i;
+/** Earlier in the clause, a hedge ("could easily have cost") or a denial ("did not cost", "at no cost"): not a cost stated as fact. */
+const HEDGED = /\b(?:could|would|might)\b|\b(?:did\s+not|didn['’]t|never|at\s+no)\s*$/i;
 const COST = /\bcost(?:s|ing)?\b/gi;
 
 /** Errors for words that refer to the other item: in a title or a why's lead each item is read on its own. */
@@ -660,7 +664,7 @@ function whyRules(where: string, why: string, examples: readonly FocusExample[])
     const names = new Set([...moves.map(moveKey), ...squares]);
     if (names.size > MAX_NAMES_PER_EXAMPLE) {
       errors.push(
-        `${where} names ${names.size} moves and squares after {example${seg.example}}; name at most two per example, in words ("pawn to b3", "their bishop took your rook on a1").`,
+        `${where} names ${names.size} moves and squares after {example${seg.example}}; name at most ${MAX_NAMES_PER_EXAMPLE} per example, in words ("pawn to b3", "their bishop took your rook on a1").`,
       );
     }
     const missed = blindSpotFamilyOf(ex.patternId) === "missed";

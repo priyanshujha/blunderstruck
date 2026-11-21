@@ -1,4 +1,5 @@
 import {
+  type FocusExample,
   bandFromRatings,
   medianRating,
   PATTERN_IDS,
@@ -19,6 +20,7 @@ import {
   type Track,
   type WeeklyReport,
 } from "@blunderstruck/contracts";
+import { namesOnlyShown } from "@blunderstruck/coach";
 import { summarize, toPlayerGame, type PlayerGame } from "@blunderstruck/patterns";
 import {
   chooseFocus,
@@ -443,19 +445,31 @@ function carryForward(from: WeeklyReport, decided: readonly FocusChoice[]): Focu
   });
 }
 
+/** Whether two example lists name the same games and plies, in the same order. */
+const sameRefs = (a: readonly FocusExample[], b: readonly FocusExample[]): boolean =>
+  a.length === b.length && a.every((e, i) => e.gameId === b[i]!.gameId && e.ply === b[i]!.ply);
+
 /**
- * A few-games report's wording: each item carried from `from` keeps its text there. Which
- * items count as model-worded follows `from`; the summary stays the report's own (template).
- * No model call is made for it.
+ * A few-games report's wording: each item carried from `from` keeps its title, why and drill
+ * there, but only when its examples are the ones that text was written for (same games and
+ * plies, in order) and every move, square and example marker it names is still shown by them.
+ * Otherwise the item keeps the report's own built-in wording, so a reason never points at a
+ * different game. Which items count as model-worded follows `from` and the items carried; the
+ * summary stays the report's own (template). No model call is made for it.
  */
 export function carryWording(report: WeeklyReport, from: WeeklyReport): WeeklyReport {
   const texts = new Map(from.focus.map((f) => [f.patternId, f]));
+  const carried = new Set<string>();
   const focus = report.focus.map((f) => {
     const t = texts.get(f.patternId);
-    return t ? { ...f, title: t.title, why: t.why, drill: t.drill } : f;
+    if (!t || !sameRefs(t.examples, f.examples)) return f;
+    const text = { patternId: f.patternId, title: t.title, why: t.why, drill: t.drill, steps: f.steps ?? [] };
+    if (!namesOnlyShown(text, f.examples)) return f;
+    carried.add(f.patternId);
+    return { ...f, title: t.title, why: t.why, drill: t.drill };
   });
   const modelIds = from.wording.source === "model" ? from.wording.wordedFor : [];
-  const wordedFor = focus.map((f) => f.patternId).filter((id) => modelIds.includes(id));
+  const wordedFor = focus.map((f) => f.patternId).filter((id) => modelIds.includes(id) && carried.has(id));
   const meta = from.wording.provider
     ? { provider: from.wording.provider, ...(from.wording.model ? { model: from.wording.model } : {}) }
     : {};
