@@ -40,6 +40,7 @@ import {
 import { coachLogger } from "./coach-log";
 import { dbPath } from "./db-path";
 import { EnvFileError, loadEnv } from "./env";
+import { formatEvalLines } from "./eval-format";
 import { formatPatterns } from "./patterns-format";
 import { formatReport } from "./report-format";
 import { type StopCounts, stopMessage } from "./stop";
@@ -94,17 +95,22 @@ const USAGE = `blunderstruck <command>
   db import <file> [--db <path>] [--env <path>]
       Read an export into the database; importing the same file twice changes nothing.
 
-  eval "<fen>" [--depth 16]
-      Ask Stockfish about one position (score is for the side to move).
+  eval "<fen>" [--depth 16] [--lines 1]
+      Ask Stockfish about one position (score is for the side to move). With --lines N > 1,
+      prints the best N moves, one row each: rank, move, score, win chance, start of the line.
 
   models
       Print which model handles which coaching task.
 `;
 
 async function evalCmd(args: string[]) {
-  const { fen, depth } = parseEvalArgs(args);
+  const { fen, depth, lines } = parseEvalArgs(args);
   const engine = await UciEngine.start();
   try {
+    if (lines > 1) {
+      console.log(formatEvalLines(engine.name, fen, await engine.evaluateMulti(fen, depth, lines)));
+      return;
+    }
     const r = await engine.evaluate(fen, depth);
     console.log(JSON.stringify({ engine: engine.name, ...r }));
   } finally {

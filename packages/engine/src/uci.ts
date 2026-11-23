@@ -47,6 +47,51 @@ export function parseInfoLine(line: string): InfoLine | undefined {
   return info;
 }
 
+/**
+ * Collects a MultiPV search: the deepest exact info line for each line number, until
+ * `bestmove`. Pure, so it can be fed captured engine output.
+ */
+export class MultiPvCollector {
+  private readonly byLine = new Map<number, InfoLine>();
+  private bestMove: string | undefined;
+
+  constructor(private readonly lines: number) {}
+
+  /** Feeds one line of engine output; returns true on `bestmove`, which ends the search. */
+  push(line: string): boolean {
+    if (line.startsWith("bestmove")) {
+      const mv = line.split(" ")[1];
+      this.bestMove = mv && mv !== "(none)" ? mv : undefined;
+      return true;
+    }
+    const info = parseInfoLine(line);
+    if (!info) return false;
+    // A position with no legal moves reports "info depth 0 score ..." without a line number.
+    const n = Number(/\bmultipv (\d+)\b/.exec(line)?.[1] ?? 1);
+    if (n < 1 || n > this.lines) return false;
+    const seen = this.byLine.get(n);
+    if (!seen || info.depth >= seen.depth) this.byLine.set(n, info);
+    return false;
+  }
+
+  /**
+   * Best line first. Fewer than `lines` when the position has fewer legal moves; a single
+   * result without `bestMove` when it has none (checkmate or stalemate, as in `evaluate`).
+   */
+  results(): EvalResult[] {
+    const out: EvalResult[] = [];
+    for (const n of [...this.byLine.keys()].sort((a, b) => a - b)) {
+      const info = this.byLine.get(n)!;
+      const r: EvalResult = { score: info.score, depth: info.depth };
+      const move = n === 1 && this.bestMove ? this.bestMove : info.pv?.[0];
+      if (move) r.bestMove = move;
+      if (info.pv) r.pv = info.pv;
+      out.push(r);
+    }
+    return out;
+  }
+}
+
 /** The engine process ended while a call was waiting for it, or before the call was made. */
 export class EngineExitedError extends Error {
   constructor(message: string) {
@@ -148,6 +193,25 @@ export class UciEngine {
       return false;
     });
     return { score, depth: seenDepth, bestMove, pv };
+  }
+
+  /**
+   * The best `lines` moves, best first, each searched to `depth` (Stockfish's MultiPV).
+   * Clears the hash first, so the answer does not depend on earlier searches, and always
+   * sets MultiPV back to 1 so later `evaluate` calls are unaffected.
+   */
+  async evaluateMulti(fen: string, depth: number, lines: number): Promise<EvalResult[]> {
+    if (!Number.isInteger(lines) || lines < 1) throw new RangeError(`lines must be a positive integer, got ${lines}`);
+    const collector = new MultiPvCollector(lines);
+    try {
+      this.send(`setoption name MultiPV value ${lines}`);
+      await this.newGame();
+      this.send(`position fen ${fen}`);
+      await this.until(`go depth ${depth}`, (l) => collector.push(l));
+    } finally {
+      if (!this.exited) this.send("setoption name MultiPV value 1");
+    }
+    return collector.results();
   }
 
   async quit(): Promise<void> {

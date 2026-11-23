@@ -144,20 +144,29 @@ export function parseDbArgs(args: string[]): DbArgs {
 export interface EvalArgs {
   fen: string;
   depth: number;
+  /** How many of the best moves to show; 1 keeps the single-line JSON output. */
+  lines: number;
 }
 
-/** Parse `eval "<fen>" [--depth 16]`. */
+/** The most lines `eval --lines` asks for. */
+export const MAX_EVAL_LINES = 20;
+
+/** Parse `eval "<fen>" [--depth 16] [--lines 1]`. */
 export function parseEvalArgs(args: string[]): EvalArgs {
   return asConfigError(() => {
     const { values, positionals } = parseArgs({
       args,
       allowPositionals: true,
       strict: true,
-      options: { depth: { type: "string" } },
+      options: { depth: { type: "string" }, lines: { type: "string" } },
     });
     const [fen, ...extra] = positionals;
-    if (!fen || extra.length > 0) throw new ConfigError('usage: eval "<fen>" [--depth 16]');
-    return { fen, depth: intOption("depth", values.depth, 16, 1, MAX_DEPTH) };
+    if (!fen || extra.length > 0) throw new ConfigError('usage: eval "<fen>" [--depth 16] [--lines 1]');
+    return {
+      fen,
+      depth: intOption("depth", values.depth, 16, 1, MAX_DEPTH),
+      lines: intOption("lines", values.lines, 1, 1, MAX_EVAL_LINES),
+    };
   });
 }
 

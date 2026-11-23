@@ -182,8 +182,10 @@ describe("the other commands", () => {
     expect(parseEvalArgs(["8/8/8/8/8/8/8/K6k w - - 0 1", "--depth", "10"])).toEqual({
       fen: "8/8/8/8/8/8/8/K6k w - - 0 1",
       depth: 10,
+      lines: 1,
     });
     expect(parseEvalArgs(["fen"]).depth).toBe(16);
+    expect(parseEvalArgs(["fen", "--lines", "5"]).lines).toBe(5);
     expect(parseFetchArgs(["lichess", "someone", "--max", "5", "--since", "2026-11-01", "--out", "x.json"])).toEqual({
       platform: "lichess",
       username: "someone",
@@ -213,6 +215,8 @@ describe("the other commands", () => {
     ["eval bad depth", () => parseEvalArgs(["fen", "--depth", "1e3"])],
     ["eval depth too deep", () => parseEvalArgs(["fen", "--depth", "31"])],
     ["eval missing fen", () => parseEvalArgs([])],
+    ["eval zero lines", () => parseEvalArgs(["fen", "--lines", "0"])],
+    ["eval too many lines", () => parseEvalArgs(["fen", "--lines", "21"])],
     ["fetch unknown flag", () => parseFetchArgs(["lichess", "someone", "--bogus"])],
     ["fetch bad platform", () => parseFetchArgs(["chess24", "someone"])],
     ["fetch bad max", () => parseFetchArgs(["lichess", "someone", "--max", "0x10"])],

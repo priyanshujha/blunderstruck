@@ -15,6 +15,8 @@ import type { EvalResult } from "./uci";
 export interface Evaluator {
   name: string;
   evaluate(fen: string, depth: number): Promise<EvalResult>;
+  /** The best `lines` moves, best first; engines that cannot search several lines leave it out. */
+  evaluateMulti?(fen: string, depth: number, lines: number): Promise<EvalResult[]>;
   /** Forget earlier searches, so a game's analysis does not depend on what ran before it. */
   newGame?(): Promise<void>;
 }
