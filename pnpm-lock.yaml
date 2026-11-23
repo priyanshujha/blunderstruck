@@ -115,6 +115,18 @@ importers:
         specifier: workspace:*
         version: link:../patterns
 
+  packages/puzzles:
+    dependencies:
+      '@blunderstruck/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@blunderstruck/engine':
+        specifier: workspace:*
+        version: link:../engine
+      chessops:
+        specifier: ^0.15.1
+        version: 0.15.1
+
   packages/report:
     dependencies:
       '@blunderstruck/coach':
