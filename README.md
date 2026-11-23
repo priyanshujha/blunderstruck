@@ -4,6 +4,9 @@ Blunderstruck finds the chess mistakes you keep making across your games. It pic
 of them to work on, sized for your rating. Each later report shows whether they got rarer in
 the games you played since.
 
+Rather not run it yourself? [blunderstruck.com](https://blunderstruck.com) runs it for you
+every week, with daily puzzles built around your habits.
+
 ![The report page](docs/report.png)
 
 ([The same page in dark mode](docs/report-dark.png).)
