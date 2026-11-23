@@ -25,7 +25,8 @@ import { UciEngine, analyzeGame } from "@blunderstruck/engine";
 import { fetchGames } from "@blunderstruck/ingest";
 import { summarize, toPlayerGame, type PlayerGame } from "@blunderstruck/patterns";
 import { DEFAULT_DEPTH, MAX_LOOKBACK_DAYS, MIN_REPORT_GAMES } from "@blunderstruck/progress";
-import { DEFAULT_CHECK_DEPTH, ReportInputError, runReport } from "@blunderstruck/report";
+import { buildPuzzleCandidates } from "@blunderstruck/puzzles";
+import { DEFAULT_CHECK_DEPTH, ReportInputError, analysisKey, reportAnalyses, runReport } from "@blunderstruck/report";
 import { exportStore, importStore, openSqliteStore } from "@blunderstruck/store";
 import { defaultCachePath, loadCache, mergeCache, needsEngine, planCache, saveCache } from "./analysis-cache";
 import {
@@ -35,6 +36,7 @@ import {
   parseEvalArgs,
   parseFetchArgs,
   parsePatternsArgs,
+  parsePuzzlesArgs,
   parseReportArgs,
 } from "./args";
 import { coachLogger } from "./coach-log";
@@ -42,6 +44,7 @@ import { dbPath } from "./db-path";
 import { EnvFileError, loadEnv } from "./env";
 import { formatEvalLines } from "./eval-format";
 import { formatPatterns } from "./patterns-format";
+import { formatPuzzles } from "./puzzles-format";
 import { formatReport } from "./report-format";
 import { type StopCounts, stopMessage } from "./stop";
 
@@ -94,6 +97,15 @@ const USAGE = `blunderstruck <command>
 
   db import <file> [--db <path>] [--env <path>]
       Read an export into the database; importing the same file twice changes nothing.
+
+  puzzles <lichess|chesscom> <username> [--max 12] [--depth 18] [--db <path>] [--time-class <class>]
+      Turn the player's stored, analysed games into single-move practice positions for
+      self-study: a "do-over" (find what you should have played) or "punish it" (find the
+      move that makes the opponent's mistake pay), each with the moves that solve it and an
+      "Analyse on Lichess" link, then Lichess training themes for your focus items.
+      Run report first: this reads the latest report's games and analyses from the database.
+      --max N        print at most N puzzles
+      --depth D      search depth for the solving moves
 
   eval "<fen>" [--depth 16] [--lines 1]
       Ask Stockfish about one position (score is for the side to move). With --lines N > 1,
@@ -426,6 +438,72 @@ async function reportCmd(args: string[]) {
   }
 }
 
+/** The most Stockfish processes `puzzles` runs side by side. */
+const PUZZLE_ENGINES = 4;
+
+async function puzzlesCmd(args: string[]) {
+  const a = parsePuzzlesArgs(args);
+  if (!existsSync(dbPath(a.db))) throw new ConfigError(`no database at ${dbPath(a.db)}; run \`report\` first`);
+  const store = await openSqliteStore(dbPath(a.db), { readOnly: true });
+  const engines: UciEngine[] = [];
+  try {
+    const wanted = a.username.toLowerCase();
+    const tracks = (await store.tracks()).filter(
+      (t) => t.platform === a.platform && t.username.toLowerCase() === wanted && (!a.timeClass || t.timeClass === a.timeClass),
+    );
+    const latest = (await Promise.all(tracks.map((t) => store.latestReport(t)))).filter((r): r is WeeklyReport => r !== undefined);
+    // With several tracks, the one reported on most recently.
+    const report = latest.sort((x, y) => Date.parse(y.periodEnd) - Date.parse(x.periodEnd))[0];
+    if (!report) {
+      throw new ConfigError(
+        `no report for ${a.username} on ${a.platform}${a.timeClass ? ` (${a.timeClass})` : ""} in ${dbPath(a.db)}; ` +
+          "run `report` first so there are analysed games",
+      );
+    }
+    const player = report.player;
+    const byId = await store.gamesById(report.cappedGameIds ?? report.gameIds);
+    const records = [...byId.values()];
+    const analyses = await reportAnalyses(store, player, records, analysisKey(report.settings));
+    const playerGames: PlayerGame[] = [];
+    for (const g of records) {
+      const an = analyses.get(g.id);
+      const pg = an ? toPlayerGame(g, an, player) : null;
+      if (pg) playerGames.push(pg);
+    }
+    if (playerGames.length === 0) throw new ConfigError(`none of the report's games has a stored analysis in ${dbPath(a.db)}`);
+    const summary = summarize(player, playerGames);
+    say(`${playerGames.length} analysed games, ${summary.findings.length} findings (${report.track.timeClass} track)`);
+
+    const started = Date.now();
+    for (let i = 0; i < PUZZLE_ENGINES; i++) engines.push(await UciEngine.start());
+    const skipped = new Map<string, number>();
+    const candidates = await buildPuzzleCandidates({
+      games: playerGames.map((g) => g.analysis),
+      findings: summary.findings,
+      evaluator: engines,
+      depth: a.depth,
+      concurrency: PUZZLE_ENGINES,
+      playedAt: Object.fromEntries(records.map((g) => [g.id, g.playedAt])),
+      onSkip: (_p, reason) => skipped.set(reason, (skipped.get(reason) ?? 0) + 1),
+    });
+    const skips = [...skipped].map(([reason, n]) => `${n} ${reason}`).join("; ");
+    say(`${candidates.length} puzzles in ${((Date.now() - started) / 1000).toFixed(1)}s${skips ? `; left out: ${skips}` : ""}`);
+
+    const focus = report.focus.map((f) => f.patternId);
+    const found = focus.length > 0 ? focus : [...new Set(summary.findings.map((f) => f.patternId))];
+    console.log(
+      formatPuzzles(player, candidates, {
+        max: a.max,
+        patterns: found,
+        patternsLabel: focus.length > 0 ? "your focus items" : "the patterns found",
+      }),
+    );
+  } finally {
+    await Promise.all(engines.map((e) => e.quit().catch(() => {})));
+    await store.close();
+  }
+}
+
 async function dbCmd(args: string[]) {
   const a = parseDbArgs(args);
   loadEnv(a.envFile === undefined ? {} : { file: a.envFile });
@@ -507,6 +585,7 @@ try {
   else if (command === "patterns") await patternsCmd(rest);
   else if (command === "report") await reportCmd(rest);
   else if (command === "db") await dbCmd(rest);
+  else if (command === "puzzles") await puzzlesCmd(rest);
   else if (command === "eval") await evalCmd(rest);
   else if (command === "models") console.table(COACH_ROUTES);
   else {

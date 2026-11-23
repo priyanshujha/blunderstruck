@@ -68,8 +68,14 @@ analyses takes seconds. `--check-depth 0` turns the check off.
   and revisions.
 - `view`: every sentence and table a report shows, including the example stories, shared by
   both front ends.
-- `cli`: `report`, `db export`, `db import`, `models`, and the file-based `fetch`, `analyze`,
-  `patterns`, `eval`.
+- `puzzles`: single-move practice positions cut from a player's own analysed games, for
+  self-study. A mistake becomes a "do-over" (the position before it: find what should have
+  been played) or a "punish it" (the position after it: find the move that makes it pay).
+  Each position is searched with several lines, and it is kept only when the moves within a
+  few win% points of the best form a closed set that suits the kind. `src/rules.ts` holds
+  every number.
+- `cli`: `report`, `puzzles`, `db export`, `db import`, `models`, and the file-based `fetch`,
+  `analyze`, `patterns`, `eval`.
 - `web`: a local read-only report page for one track, with boards that play each example, and
   `@blunderstruck/web/render` to build the same page without the server.
 

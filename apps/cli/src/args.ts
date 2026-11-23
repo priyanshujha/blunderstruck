@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import { ConfigError } from "@blunderstruck/coach";
 import { Platform, RatingBand, ReportTimeClass } from "@blunderstruck/contracts";
+import { MAX_PER_RUN, PUZZLE_DEPTH } from "@blunderstruck/puzzles";
 import { DEFAULT_DEPTH } from "@blunderstruck/progress";
 import { DEFAULT_CHECK_DEPTH, type ReportOptions } from "@blunderstruck/report";
 
@@ -284,6 +285,43 @@ export function parsePatternsArgs(args: string[]): PatternsArgs {
       json: values.json === true,
       ...(values.max !== undefined ? { max: intOption("max", values.max, 0, 1) } : {}),
       ...(values.analyses !== undefined ? { analyses: values.analyses } : {}),
+    };
+  });
+}
+
+export interface PuzzlesArgs {
+  platform: Platform;
+  username: string;
+  /** Most puzzles to print. */
+  max: number;
+  /** Search depth for the accepted moves. */
+  depth: number;
+  db?: string;
+  timeClass?: ReportTimeClass;
+}
+
+/** Parse `puzzles <platform> <username> [--max N] [--depth D] [--db <path>] [--time-class <class>]`. */
+export function parsePuzzlesArgs(args: string[]): PuzzlesArgs {
+  return asConfigError(() => {
+    const { values, positionals } = parseArgs({
+      args,
+      allowPositionals: true,
+      strict: true,
+      options: { max: { type: "string" }, depth: { type: "string" }, db: { type: "string" }, "time-class": { type: "string" } },
+    });
+    const [platformArg, username, ...extra] = positionals;
+    const platform = Platform.safeParse(platformArg);
+    if (!platform.success || !username || extra.length > 0) {
+      throw new ConfigError("usage: puzzles <lichess|chesscom> <username> [--max N] [--depth D] [--db <path>] [--time-class <class>]");
+    }
+    const timeClass = pick("time-class", values["time-class"], ReportTimeClass.options);
+    return {
+      platform: platform.data,
+      username,
+      max: intOption("max", values.max, MAX_PER_RUN, 1),
+      depth: intOption("depth", values.depth, PUZZLE_DEPTH, 1, MAX_DEPTH),
+      ...(values.db !== undefined ? { db: values.db } : {}),
+      ...(timeClass ? { timeClass } : {}),
     };
   });
 }

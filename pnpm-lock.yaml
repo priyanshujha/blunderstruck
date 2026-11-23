@@ -41,6 +41,9 @@ importers:
       '@blunderstruck/progress':
         specifier: workspace:*
         version: link:../../packages/progress
+      '@blunderstruck/puzzles':
+        specifier: workspace:*
+        version: link:../../packages/puzzles
       '@blunderstruck/report':
         specifier: workspace:*
         version: link:../../packages/report

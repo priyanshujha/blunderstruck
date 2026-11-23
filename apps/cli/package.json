@@ -6,5 +6,5 @@
   "type": "module",
   "exports": { ".": "./src/main.ts" },
   "scripts": { "typecheck": "tsc --noEmit -p ." },
-  "dependencies": { "@blunderstruck/contracts": "workspace:*", "@blunderstruck/ingest": "workspace:*", "@blunderstruck/engine": "workspace:*", "@blunderstruck/coach": "workspace:*", "@blunderstruck/patterns": "workspace:*", "@blunderstruck/progress": "workspace:*", "@blunderstruck/report": "workspace:*", "@blunderstruck/store": "workspace:*", "@blunderstruck/view": "workspace:*" }
+  "dependencies": { "@blunderstruck/contracts": "workspace:*", "@blunderstruck/ingest": "workspace:*", "@blunderstruck/engine": "workspace:*", "@blunderstruck/coach": "workspace:*", "@blunderstruck/patterns": "workspace:*", "@blunderstruck/progress": "workspace:*", "@blunderstruck/puzzles": "workspace:*", "@blunderstruck/report": "workspace:*", "@blunderstruck/store": "workspace:*", "@blunderstruck/view": "workspace:*" }
 }

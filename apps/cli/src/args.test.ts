@@ -8,6 +8,7 @@ import {
   parseEvalArgs,
   parseFetchArgs,
   parsePatternsArgs,
+  parsePuzzlesArgs,
   parseReportArgs,
 } from "./args";
 
@@ -229,6 +230,34 @@ describe("the other commands", () => {
     ["patterns too many examples", () => parsePatternsArgs(["g.json", "--player", "p", "--examples", "3"])],
     ["patterns missing value", () => parsePatternsArgs(["g.json", "--player"])],
   ])("refuse %s", (_name, fn) => {
+    configError(fn);
+  });
+});
+
+describe("parsePuzzlesArgs", () => {
+  it("defaults to a dozen puzzles at the puzzle depth", () => {
+    expect(parsePuzzlesArgs(["lichess", "alice"])).toEqual({ platform: "lichess", username: "alice", max: 12, depth: 18 });
+  });
+
+  it("reads every flag", () => {
+    expect(parsePuzzlesArgs(["chesscom", "alice", "--max", "5", "--depth", "14", "--db", "x.db", "--time-class", "rapid"])).toEqual({
+      platform: "chesscom",
+      username: "alice",
+      max: 5,
+      depth: 14,
+      db: "x.db",
+      timeClass: "rapid",
+    });
+  });
+
+  it.each([
+    ["no user", () => parsePuzzlesArgs(["lichess"])],
+    ["a bad platform", () => parsePuzzlesArgs(["fics", "alice"])],
+    ["max 0", () => parsePuzzlesArgs(["lichess", "alice", "--max", "0"])],
+    ["depth over the limit", () => parsePuzzlesArgs(["lichess", "alice", "--depth", "99"])],
+    ["a bad time class", () => parsePuzzlesArgs(["lichess", "alice", "--time-class", "daily"])],
+    ["an unknown flag", () => parsePuzzlesArgs(["lichess", "alice", "--all"])],
+  ])("refuses %s", (_name, fn) => {
     configError(fn);
   });
 });

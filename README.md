@@ -132,6 +132,7 @@ All commands run from the repository root. `pnpm -s cli --help` prints every com
 pnpm cli report <lichess|chesscom> <user> [--time-class <class>] [--depth 12] [--check-depth 18]
          [--db <path>] [--provider anthropic|gemini|none] [--env <path>] [--band <band>]
          [--as-of <ISO date>] [--now] [--sample-only] [--max-games N] [--json] [--all]
+pnpm cli puzzles <lichess|chesscom> <user> [--max 12] [--depth 18] [--db <path>] [--time-class <class>]
 pnpm cli db export <file> [--db <path>] [--force] [--env <path>]
 pnpm cli db import <file> [--db <path>] [--env <path>]
 pnpm cli models
@@ -150,6 +151,11 @@ The most useful `report` flags:
 | `--max-games N` | analyse at most N of the period's games |
 | `--json` | print the stored report as JSON |
 | `--all` | also print the week-by-week table and every pattern's trend |
+
+`puzzles` reads the games and analyses your last `report` stored and prints single-move practice
+positions from your own mistakes (find what you should have played, or the move that punishes the
+opponent's mistake), each with the accepted moves, a link to the Lichess analysis board, and
+Lichess training themes for your focus items. Searching each position takes Stockfish a few seconds.
 
 Lower-level commands work on a JSON file of games instead of the database: `fetch`, `analyze`,
 `patterns` and `eval`. See `pnpm -s cli --help`.
