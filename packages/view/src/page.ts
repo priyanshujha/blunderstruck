@@ -479,7 +479,7 @@ function lede(r: WeeklyReport, v: Omit<ReportView, "page">, stage: PageStage, k:
   if (stage === "analysing") {
     if (c.analysed <= 0) {
       if (c.total === 1) return { lede: [{ text: `Your one ${tc} game has not been analysed yet.` }] };
-      return { lede: [{ text: "None of your " }, { text: count(c.total), strong: true }, { text: ` ${tc} games has been analysed yet.` }] };
+      return { lede: [{ text: "Your " }, { text: count(c.total), strong: true }, { text: ` ${tc} games have not been analysed yet.` }] };
     }
     if (c.analysed === 1) return { lede: [{ text: `From the first of your ${count(c.total)} ${tc} games. The rest are in the queue.` }] };
     return { lede: [{ text: "From the first " }, { text: count(c.analysed), strong: true }, { text: ` of your ${count(c.total)} ${tc} games. The rest are in the queue.` }] };

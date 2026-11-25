@@ -137,7 +137,7 @@ const EXAMPLE = {
       steps: [
         {
           blindSpot: "answer-check",
-          text: "Before every move, list each check your opponent will have after it, knight checks first, and make sure none of them also hits one of your pieces.",
+          text: "Before every move, list each check your opponent will have after it, knight checks first, and make sure not one of them also hits one of your pieces.",
         },
         {
           blindSpot: "moved-piece-lost",
@@ -182,6 +182,7 @@ const SYSTEM = [
   "",
   "# Voice",
   "Write like a friend who plays: dry, kind, a little self-deprecating. Humour is welcome, but the joke is always on the blunder, never on the player. No scolding, no hype, no exclamation marks in a row, no emoji. Speak to the player as \"you\". Keep it short and concrete; one good sentence beats three vague ones.",
+  "Never use the word \"none\"; rewrite the sentence instead (\"no blunders at all\", \"not one of them\").",
   "",
   "# What you decide and what you do not",
   "- The focus items, their order and their reasons are fixed. Do not add, drop, merge, reorder or rename them, and do not suggest that a different pattern matters more.",
@@ -207,7 +208,7 @@ const SYSTEM = [
   "# Pointing at the examples",
   "The page shows each example as a board labelled with its move number, so the why says which example a move comes from:",
   "- Start with the pattern in plain words: no move and no square before the first marker.",
-  "- To cite a move, begin the sentence with that example's marker and a comma: \"{example1}, pawn to b3 opened the long diagonal.\" Each example comes with its marker and readsAs, what the reader sees in the marker's place. Use each marker at most once, in example order; an item with no examples uses none.",
+  "- To cite a move, begin the sentence with that example's marker and a comma: \"{example1}, pawn to b3 opened the long diagonal.\" Each example comes with its marker and readsAs, what the reader sees in the marker's place. Use each marker at most once, in example order; an item with no examples uses no marker.",
   "- After a marker, cite only that example's moves, at most two squares or moves, written in words with the square: \"pawn to b3\", \"their bishop took your rook on a1\".",
   "- For an example whose paid is not true, say what the move allowed or could have cost; never say the piece was lost, gone or won.",
   "",
@@ -222,7 +223,7 @@ const SYSTEM = [
   "For each blind spot write exactly one step, in the order the blind spots are given:",
   "- blindSpot: exactly its id;",
   "- text: at most 200 characters, one thing to do at the board during a game that would have caught this blind spot. A good step is specific (what to look at, and when), checkable (the player can tell afterwards whether they did it) and tied to its blind spot, not to the pattern in general. Study routines and puzzle sets belong in the drill, not in a step.",
-  "Good step for \"the opponent's punishing move was a check\": \"Before every move, list each check your opponent will have after it, and make sure none of them also hits one of your pieces.\" Bad steps: \"Be more careful.\", \"Do more puzzles.\", \"Remember the example.\"",
+  "Good step for \"the opponent's punishing move was a check\": \"Before every move, list each check your opponent will have after it, and make sure not one of them also hits one of your pieces.\" Bad steps: \"Be more careful.\", \"Do more puzzles.\", \"Remember the example.\"",
   "An item with no blind spots gets \"steps\": []. Never write a step for a blind spot that is not given.",
   "",
   "# Rating bands",
@@ -254,7 +255,7 @@ const SYSTEM = [
   "  - title: a short headline, at most 60 characters;",
   "  - why: why this matters for this player, at most 480 characters as read; each marker reads as about 40 characters;",
   "  - drill: one concrete drill sized to the band, at most 400 characters;",
-  "  - steps: one step per blind spot of the item, in the order given (an empty array when it has none).",
+  "  - steps: one step per blind spot of the item, in the order given (an empty array when it has no blind spots).",
   "Sometimes only some focus items are asked for, because the others already have their text; word only those, and still write the summary for the whole report.",
   "",
   "Example of a good answer for a club player whose focus items, shortened, were:",
@@ -387,7 +388,7 @@ function exampleData(e: FocusExample, i: number, all: readonly FocusExample[]): 
  */
 function overallShare(b: BlindSpot): string {
   if (b.baselineCount === b.count) return "rare elsewhere";
-  if (b.baselineOf <= 0 || b.baselineCount <= 0) return "none of the mistakes overall";
+  if (b.baselineOf <= 0 || b.baselineCount <= 0) return "not one of the mistakes overall";
   const n = Math.round(b.baselineOf / b.baselineCount);
   return n <= 1 ? "nearly all of the mistakes overall" : `about 1 in ${n} of the mistakes overall`;
 }

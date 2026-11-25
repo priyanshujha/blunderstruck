@@ -341,7 +341,7 @@ export const TEMPLATE_STEPS: Record<BlindSpotId, string> = {
   "left-after-attack":
     "When the opponent attacks one of your pieces, answer that first: move it, defend it or trade it before you play your own idea.",
   undefended:
-    "Before every move, find each of your pieces that nothing defends, and make sure none of them can be attacked and won next move.",
+    "Before every move, find each of your pieces that nothing defends, and make sure not one of them can be attacked and won next move.",
   "lost-knight":
     "Before every move, check your knights: can a pawn or a piece attack one, and does it have a defender or a safe square to go to?",
   "lost-bishop":

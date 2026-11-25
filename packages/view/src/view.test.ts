@@ -119,11 +119,11 @@ describe("reportView", () => {
       sampled: analysed, analysed, total, complete: false, sampleOnly: false, ...o,
     });
     const cases: [string, Record<string, unknown>, number | undefined, string | undefined, number][] = [
-      ["nothing analysed", cov(0, 412), undefined, "None of your 412 games has been analysed yet.", 412],
+      ["nothing analysed", cov(0, 412), undefined, "Your 412 games have not been analysed yet.", 412],
       ["nothing analysed, one game", cov(0, 1), undefined, "Your one game has not been analysed yet.", 1],
       ["sample analysed, no check", cov(150, 412), undefined, "Based on 150 of your 412 games; the other 262 are still being analysed.", 262],
       ["sample analysed, one left", cov(411, 412), undefined, "Based on 411 of your 412 games; the other one is still being analysed.", 1],
-      ["sample analysed, first look", cov(150, 412, { checked: 0 }), undefined, "Based on a first look at 150 of your 412 games; none are fully checked so far.", 412],
+      ["sample analysed, first look", cov(150, 412, { checked: 0 }), undefined, "Based on a first look at 150 of your 412 games; no game is fully checked yet.", 412],
       ["sample analysed, some checked", cov(150, 412, { checked: 0 }), 374, "Based on a first look at 150 of your 412 games; 38 are fully checked so far.", 374],
       ["sample analysed, one checked", cov(150, 412, { checked: 0 }), 411, "Based on a first look at 150 of your 412 games; 1 is fully checked so far.", 411],
       ["sample analysed and checked", cov(150, 412, { checked: 150 }), undefined, "Based on 150 of your 412 games; the other 262 are still being analysed.", 262],
@@ -281,7 +281,7 @@ describe("plain-language numbers", () => {
       "In these 162 games that means 40 or fewer; you are at 40, inside the goal.",
     );
     expect(standingSentence({ games: 0, gamesAffected: 0 }, goal)).toBe("No games this period to measure it against.");
-    expect(standingSentence({ games: 20, gamesAffected: 3 }, { per: 0, of: 1 })).toBe("In these 20 games that means none; you are at 3.");
+    expect(standingSentence({ games: 20, gamesAffected: 3 }, { per: 0, of: 1 })).toBe("In these 20 games that means zero; you are at 3.");
 
     // 12 of 31 against one game in three: the limit is 10, and the words must not match the goal's.
     const third = { per: 1, of: 3 };
@@ -425,7 +425,7 @@ describe("focus items in games and words", () => {
       const v = reportView(report({ focus: [focusItem({ blindSpots: [spot(o)], steps: [] })] }));
       return v.body.kind === "focus" ? v.body.items[0]!.blindSpots[0]!.sentence : "";
     };
-    expect(one({ baselineCount: 0, baselineOf: 40 })).toBe("Their best reply gave check: 23 of your 62, against none of your mistakes overall.");
+    expect(one({ baselineCount: 0, baselineOf: 40 })).toBe("Their best reply gave check: 23 of your 62, against not one of your mistakes overall.");
     expect(one({ baselineCount: 0, baselineOf: 0 })).toBe("Their best reply gave check: 23 of your 62.");
     expect(one({ baselineCount: 120, baselineOf: 200 })).toBe("Their best reply gave check: 23 of your 62, against about 6 in 10 of your mistakes overall.");
     expect(one({ baselineCount: 1, baselineOf: 1 })).toBe("Their best reply gave check: 23 of your 62, against all of your mistakes overall.");
@@ -458,7 +458,7 @@ describe("focus items in games and words", () => {
       ["about 1 in 3", "about 1 in 8"],
       ["about 6 in 10", "about 6 in 10"],
       ["about 1 in 4", "4 of your 15 mistakes"],
-      ["all", "none"],
+      ["all", "not one"],
       ["about 1 in 3", undefined],
     ]);
   });

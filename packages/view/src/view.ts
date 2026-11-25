@@ -433,7 +433,7 @@ export function frequencyParts(
 export function standingSentence(stat: Pick<PatternStat, "games" | "gamesAffected"> | undefined, goal: GameGoal): string {
   if (!stat || stat.games <= 0) return "No games this period to measure it against.";
   const allowed = Math.floor((goal.per * stat.games) / goal.of);
-  const limit = allowed === 0 ? "none" : `${count(allowed)} or fewer`;
+  const limit = allowed === 0 ? "zero" : `${count(allowed)} or fewer`;
   const games = stat.games === 1 ? "In your one game" : `In these ${count(stat.games)} games`;
   const inside = meetsGoal(stat, goal) ? ", inside the goal" : "";
   return `${games} that means ${limit}; you are at ${count(stat.gamesAffected)}${inside}.`;
@@ -450,12 +450,12 @@ const gamesCount = (s: Pick<PatternStat, "games" | "gamesAffected">): GamesCount
 });
 
 /**
- * The share `n / of` on its own, without a frame: "about 1 in 8", "about 6 in 10", "none",
+ * The share `n / of` on its own, without a frame: "about 1 in 8", "about 6 in 10", "not one",
  * "all". With `exactSmall`, a total under `SMALL_BASELINE` is given as the exact count of
  * mistakes instead: "4 of your 15 mistakes".
  */
 export function bareShare(n: number, of: number, opts: { exactSmall?: boolean } = {}): string {
-  if (n <= 0 || of <= 0) return "none";
+  if (n <= 0 || of <= 0) return "not one";
   if (n >= of) return "all";
   // Small numbers are given exactly; "about 1 in 3" of 7 mistakes says more than it knows.
   if (opts.exactSmall && of < SMALL_BASELINE) return `${count(n)} of your ${plural(of, "mistake")}`;
@@ -792,14 +792,14 @@ function coverageSentence(c: WeeklyReport["coverage"], pending: number, checkDep
   const { analysed, total, sampleOnly } = c;
   if (sampleOnly) return `Based on a sample of ${count(analysed)} of ${count(total)} games; run report again to analyse the rest.`;
   if (analysed < total) {
-    if (analysed <= 0) return total === 1 ? "Your one game has not been analysed yet." : `None of your ${count(total)} games has been analysed yet.`;
+    if (analysed <= 0) return total === 1 ? "Your one game has not been analysed yet." : `Your ${count(total)} games have not been analysed yet.`;
     const fully = Math.max(0, Math.min(analysed, total - pending));
     if (fully >= analysed) {
       const rest = total - analysed;
       return `Based on ${count(analysed)} of your ${count(total)} games; ${rest === 1 ? "the other one is" : `the other ${count(rest)} are`} still being analysed.`;
     }
-    const done = fully === 0 ? "none are" : fully === 1 ? "1 is" : `${count(fully)} are`;
-    return `Based on a first look at ${count(analysed)} of your ${count(total)} games; ${done} fully checked so far.`;
+    const done = fully === 0 ? "no game is fully checked yet" : `${fully === 1 ? "1 is" : `${count(fully)} are`} fully checked so far`;
+    return `Based on a first look at ${count(analysed)} of your ${count(total)} games; ${done}.`;
   }
   // Games are still to check only when a check is set: by the settings, or by a stored count of checked games.
   if (pending > 0 && (checkDepth > 0 || c.checked !== undefined)) {
